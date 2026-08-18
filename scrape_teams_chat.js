@@ -264,34 +264,70 @@ async function scrapeVisibleAndHistoricalMessages(chatContainer, limit) {
 }
 
 async function scrollToNewestMessages(chatContainer) {
+    const MAX_WAIT_MS = 30000;
+    const MIN_SETTLE_MS = 5000;
+    const POLL_WAIT_MS = 500;
+    const REQUIRED_STABLE_PASSES = 4;
+
+    const startedAt = Date.now();
     let stablePasses = 0;
-    let previousScrollTop = -1;
-    let previousScrollHeight = -1;
+    let previousState = null;
+    let currentState = getBottomState(chatContainer);
 
-    for (let i = 0; i < 8; i++) {
+    while (Date.now() - startedAt < MAX_WAIT_MS) {
         chatContainer.scrollTop = chatContainer.scrollHeight;
-        await sleep(300);
+        await sleep(POLL_WAIT_MS);
 
-        const scrollTop = Math.round(chatContainer.scrollTop);
-        const scrollHeight = chatContainer.scrollHeight;
-        const isStable = Math.abs(scrollTop - previousScrollTop) < 5 && Math.abs(scrollHeight - previousScrollHeight) < 5;
+        currentState = getBottomState(chatContainer);
+        const isStable = previousState &&
+            Math.abs(currentState.scrollTop - previousState.scrollTop) < 5 &&
+            Math.abs(currentState.scrollHeight - previousState.scrollHeight) < 5 &&
+            currentState.newestMessageId === previousState.newestMessageId;
 
-        if (isStable && isNearBottom(chatContainer)) {
+        if (isStable && currentState.atBottom) {
             stablePasses++;
-            if (stablePasses >= 2) break;
         } else {
             stablePasses = 0;
         }
 
-        previousScrollTop = scrollTop;
-        previousScrollHeight = scrollHeight;
+        previousState = currentState;
+
+        if (
+            Date.now() - startedAt >= MIN_SETTLE_MS &&
+            stablePasses >= REQUIRED_STABLE_PASSES
+        ) {
+            console.info("Starting scrape from newest loaded messages:", currentState);
+            return;
+        }
     }
 
-    console.info("Starting scrape from newest loaded messages:", {
+    currentState = getBottomState(chatContainer);
+    if (!currentState.atBottom) {
+        throw new TeamsScrapeError(
+            "Teams did not reach the newest messages before the startup timeout.",
+            {
+                waitedMs: Date.now() - startedAt,
+                ...currentState,
+                likelyFix: "Wait for the chat to finish loading, click a recent message, and run the scraper again."
+            }
+        );
+    }
+
+    console.warn("The newest-message pane did not fully stabilize before the startup timeout; continuing from the bottom-most loaded message.", currentState);
+}
+
+function getBottomState(chatContainer) {
+    const messageBlocks = chatContainer.querySelectorAll('[data-tid="chat-pane-message"]');
+    const newestBlock = messageBlocks[messageBlocks.length - 1];
+
+    return {
         scrollTop: Math.round(chatContainer.scrollTop),
         scrollHeight: chatContainer.scrollHeight,
-        clientHeight: chatContainer.clientHeight
-    });
+        clientHeight: chatContainer.clientHeight,
+        atBottom: isNearBottom(chatContainer),
+        visibleMessages: messageBlocks.length,
+        newestMessageId: newestBlock?.getAttribute("data-mid") || null
+    };
 }
 
 function scrollUpOnePage(chatContainer) {
@@ -308,7 +344,14 @@ function isNearBottom(chatContainer) {
 }
 
 function collectVisibleMessages(chatContainer, collectedMessages, limit) {
-    const messageBlocks = chatContainer.querySelectorAll('[data-tid="chat-pane-message"]');
+    // Teams keeps a virtualized window of messages mounted in chronological
+    // DOM order. Walk that window backwards so a limit means "latest N"
+    // instead of "the first N currently mounted". The old ordering could,
+    // for example, keep 57 nodes mounted and make a limit of 50 omit the
+    // seven newest messages.
+    const messageBlocks = Array.from(
+        chatContainer.querySelectorAll('[data-tid="chat-pane-message"]')
+    ).reverse();
 
     messageBlocks.forEach(block => {
         if (limit > 0 && collectedMessages.size >= limit) return;
