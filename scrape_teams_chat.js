@@ -5,10 +5,18 @@
  * Click inside a visible message first, then run scrapeTeamsByID(50) or scrapeTeamsByID().
  */
 async function scrapeTeamsByID(limit = 0) {
+    if (globalThis.__teamsScrapeRun) {
+        console.warn("A Teams chat scrape is already running. Use stop() to finish it first.");
+        return { ok: false, message: "A Teams chat scrape is already running." };
+    }
+
+    const run = { stopped: false, wake: null, phase: "scraping", previousStop: globalThis.stop, stopHandler: stopTeamsChatScrape };
+    globalThis.__teamsScrapeRun = run;
+    globalThis.stop = run.stopHandler;
     console.clear();
 
     try {
-        return await runTeamsChatScrape(limit);
+        return await runTeamsChatScrape(limit, run);
     } catch (error) {
         reportFailure(error);
         return {
@@ -16,7 +24,27 @@ async function scrapeTeamsByID(limit = 0) {
             message: error?.message || String(error),
             details: error?.details || {}
         };
+    } finally {
+        if (globalThis.__teamsScrapeRun === run) {
+            delete globalThis.__teamsScrapeRun;
+        }
+        if (globalThis.stop === run.stopHandler) {
+            globalThis.stop = run.previousStop;
+        }
     }
+}
+
+function stopTeamsChatScrape() {
+    const run = globalThis.__teamsScrapeRun;
+    if (!run || run.phase !== "scraping") {
+        console.info("No Teams chat extraction is running.");
+        return false;
+    }
+
+    run.stopped = true;
+    run.wake?.();
+    console.info("Stopping Teams chat extraction; collected messages will be available to export shortly.");
+    return true;
 }
 
 class TeamsScrapeError extends Error {
@@ -27,7 +55,7 @@ class TeamsScrapeError extends Error {
     }
 }
 
-async function runTeamsChatScrape(limit) {
+async function runTeamsChatScrape(limit, run) {
     const normalizedLimit = normalizeLimit(limit);
     console.log(`STARTED: Scraping chat... (Limit: ${normalizedLimit === 0 ? "None" : normalizedLimit})`);
 
@@ -73,11 +101,15 @@ async function runTeamsChatScrape(limit) {
     chatContainer.style.border = "4px solid #0078D4";
 
     try {
-        await scrollToNewestMessages(chatContainer);
-        const result = await scrapeVisibleAndHistoricalMessages(chatContainer, normalizedLimit);
+        await scrollToNewestMessages(chatContainer, run);
+        const result = await scrapeVisibleAndHistoricalMessages(chatContainer, normalizedLimit, run);
         const finalText = buildFinalText(result.collectedMessages);
 
         if (!finalText) {
+            if (run.stopped) {
+                console.info("Stopped before any readable messages were collected.");
+                return { ok: true, count: 0, delivery: "nothing to export", stoppedBecause: "stopped by user", text: "" };
+            }
             throw new TeamsScrapeError(
                 "Scraping finished, but no readable message text was collected.",
                 {
@@ -88,6 +120,7 @@ async function runTeamsChatScrape(limit) {
             );
         }
 
+        run.phase = "delivery";
         const delivery = await copyOrDownload(finalText, result.collectedMessages.size);
         console.info("DONE:", {
             collectedMessages: result.collectedMessages.size,
@@ -187,15 +220,15 @@ function toElement(node) {
     return node.parentElement || null;
 }
 
-async function scrapeVisibleAndHistoricalMessages(chatContainer, limit) {
+async function scrapeVisibleAndHistoricalMessages(chatContainer, limit, run) {
     const collectedMessages = new Map();
     let consecutiveNoLoad = 0;
     let stopReason = "unknown";
     let pass = 0;
 
-    const MAX_RETRIES = 4;
+    const MAX_RETRIES = 20;
     const LOAD_WAIT_MS = 900;
-    const STEP_WAIT_MS = 350;
+    const STEP_WAIT_MS = 200;
     const WIGGLE_WAIT_MS = 200;
 
     while (true) {
@@ -211,9 +244,21 @@ async function scrapeVisibleAndHistoricalMessages(chatContainer, limit) {
         const addedCount = collectedMessages.size - beforeCount;
         const atTop = isNearTop(chatContainer);
 
-        console.log(
-            `Pass ${pass}: visible=${visibleMessages}, added=${addedCount}, total=${collectedMessages.size}, scrollTop=${Math.round(chatContainer.scrollTop)}, scrollHeight=${chatContainer.scrollHeight}, atTop=${atTop}`
-        );
+        if (pass === 1 || pass % 10 === 0 || atTop) {
+            console.log(
+                `Pass ${pass}: visible=${visibleMessages}, added=${addedCount}, total=${collectedMessages.size}, scrollTop=${Math.round(chatContainer.scrollTop)}, scrollHeight=${chatContainer.scrollHeight}, atTop=${atTop}`
+            );
+        }
+
+        if (run.stopped) {
+            stopReason = "stopped by user";
+            break;
+        }
+
+        if (limit > 0 && collectedMessages.size >= limit) {
+            stopReason = `limit reached (${limit})`;
+            break;
+        }
 
         if (visibleMessages === 0) {
             throw new TeamsScrapeError(
@@ -230,29 +275,52 @@ async function scrapeVisibleAndHistoricalMessages(chatContainer, limit) {
         if (!atTop) {
             consecutiveNoLoad = 0;
             scrollUpOnePage(chatContainer);
-            await sleep(STEP_WAIT_MS);
+            await sleep(STEP_WAIT_MS, run);
             continue;
         }
 
         const prevScrollHeight = chatContainer.scrollHeight;
         const prevScrollTop = chatContainer.scrollTop;
+        const prevOldestMessageId = getOldestMessageId(chatContainer);
         chatContainer.scrollTop = 0;
-        await sleep(LOAD_WAIT_MS);
+        await sleep(LOAD_WAIT_MS, run);
+        if (run.stopped) {
+            stopReason = "stopped by user";
+            break;
+        }
 
         const scrollHeightDelta = Math.abs(chatContainer.scrollHeight - prevScrollHeight);
         const scrollTopDelta = Math.abs(chatContainer.scrollTop - prevScrollTop);
+        const oldestMessageChanged = getOldestMessageId(chatContainer) !== prevOldestMessageId;
 
-        if (scrollHeightDelta < 10 && scrollTopDelta < 10 && addedCount === 0) {
+        if (scrollHeightDelta < 10 && scrollTopDelta < 10 && !oldestMessageChanged && addedCount === 0) {
             consecutiveNoLoad++;
-            console.info(`No new scroll height detected (${consecutiveNoLoad}/${MAX_RETRIES}). Trying a small scroll wiggle.`);
+            console.info(`No older messages detected (${consecutiveNoLoad}/${MAX_RETRIES}). Trying a small scroll wiggle.`);
 
             chatContainer.scrollTop = 50;
-            await sleep(WIGGLE_WAIT_MS);
+            await sleep(WIGGLE_WAIT_MS, run);
+            if (run.stopped) {
+                stopReason = "stopped by user";
+                break;
+            }
             chatContainer.scrollTop = 0;
-            await sleep(WIGGLE_WAIT_MS);
+            await sleep(WIGGLE_WAIT_MS, run);
+            if (run.stopped) {
+                stopReason = "stopped by user";
+                break;
+            }
+
+            // Teams can finish loading during the wiggle, including on the
+            // final retry. Check again before deciding history has ended.
+            if (Math.abs(chatContainer.scrollHeight - prevScrollHeight) >= 10 ||
+                Math.abs(chatContainer.scrollTop - prevScrollTop) >= 10 ||
+                getOldestMessageId(chatContainer) !== prevOldestMessageId) {
+                consecutiveNoLoad = 0;
+                continue;
+            }
 
             if (consecutiveNoLoad >= MAX_RETRIES) {
-                stopReason = "top reached or Teams did not lazy-load more messages";
+                stopReason = `no older messages loaded after ${MAX_RETRIES} retries`;
                 break;
             }
         } else {
@@ -263,11 +331,15 @@ async function scrapeVisibleAndHistoricalMessages(chatContainer, limit) {
     return { collectedMessages, stopReason };
 }
 
-async function scrollToNewestMessages(chatContainer) {
+function getOldestMessageId(chatContainer) {
+    return chatContainer.querySelector('[data-tid="chat-pane-message"]')?.getAttribute("data-mid") || null;
+}
+
+async function scrollToNewestMessages(chatContainer, run) {
     const MAX_WAIT_MS = 30000;
-    const MIN_SETTLE_MS = 5000;
-    const POLL_WAIT_MS = 500;
-    const REQUIRED_STABLE_PASSES = 4;
+    const MIN_SETTLE_MS = 1200;
+    const POLL_WAIT_MS = 200;
+    const REQUIRED_STABLE_PASSES = 3;
 
     const startedAt = Date.now();
     let stablePasses = 0;
@@ -275,8 +347,10 @@ async function scrollToNewestMessages(chatContainer) {
     let currentState = getBottomState(chatContainer);
 
     while (Date.now() - startedAt < MAX_WAIT_MS) {
+        if (run.stopped) return;
         chatContainer.scrollTop = chatContainer.scrollHeight;
-        await sleep(POLL_WAIT_MS);
+        await sleep(POLL_WAIT_MS, run);
+        if (run.stopped) return;
 
         currentState = getBottomState(chatContainer);
         const isStable = previousState &&
@@ -632,11 +706,22 @@ function reportFailure(error) {
     alert(`Teams chat scrape failed:\n\n${message}\n\nOpen the console for details.`);
 }
 
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+function sleep(ms, run) {
+    if (run.stopped) return Promise.resolve();
+
+    return new Promise(resolve => {
+        const finish = () => {
+            clearTimeout(timer);
+            if (run.wake === finish) run.wake = null;
+            resolve();
+        };
+        const timer = setTimeout(finish, ms);
+        run.wake = finish;
+    });
 }
 
 // USAGE:
 //   scrapeTeamsByID();     // scrape as much as Teams will lazy-load
 //   scrapeTeamsByID(50);   // stop after 50 messages
+//   stop();                 // stop promptly and export messages collected so far
 scrapeTeamsByID();
