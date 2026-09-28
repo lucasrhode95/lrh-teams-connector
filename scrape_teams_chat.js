@@ -225,6 +225,7 @@ async function scrapeVisibleAndHistoricalMessages(chatContainer, limit, run) {
     let consecutiveNoLoad = 0;
     let stopReason = "unknown";
     let pass = 0;
+    let lastLoggedTotal = 0;
 
     const MAX_RETRIES = 20;
     const LOAD_WAIT_MS = 900;
@@ -245,9 +246,11 @@ async function scrapeVisibleAndHistoricalMessages(chatContainer, limit, run) {
         const atTop = isNearTop(chatContainer);
 
         if (pass === 1 || pass % 10 === 0 || atTop) {
+            const addedSinceLastLog = collectedMessages.size - lastLoggedTotal;
             console.log(
-                `Pass ${pass}: visible=${visibleMessages}, added=${addedCount}, total=${collectedMessages.size}, scrollTop=${Math.round(chatContainer.scrollTop)}, scrollHeight=${chatContainer.scrollHeight}, atTop=${atTop}`
+                `Pass ${pass}: visible=${visibleMessages}, added=${addedSinceLastLog} since last log, total=${collectedMessages.size}, scrollTop=${Math.round(chatContainer.scrollTop)}, scrollHeight=${chatContainer.scrollHeight}, atTop=${atTop}`
             );
+            lastLoggedTotal = collectedMessages.size;
         }
 
         if (run.stopped) {

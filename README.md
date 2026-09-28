@@ -44,6 +44,8 @@ stop();
 
 The export panel appears after the current collection pass. `stop()` also interrupts the script's waits, including the initial move to the newest messages. If you stop before any readable messages are collected, there is nothing to export. A second scrape cannot start until the first export panel is closed or used.
 
+Console progress shows `added` since the previous printed line and `total` collected so far. The script prints every tenth pass while scrolling, so `added` includes messages collected in the intervening passes.
+
 ## Tips and caveats
 
 - Start from the actual target chat before running the script. It scrapes the currently open chat.
