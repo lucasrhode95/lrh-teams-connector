@@ -1,1 +1,79 @@
+# Teams / authentication
+.teams_token_cache*
+*.token_cache
+*.token-cache
+tokens.json
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.pyright/
+.ruff_cache/
+.hypothesis/
+.tox/
+.nox/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Packaging / build outputs
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDEs / editors
 .idea/
+.vscode/
+*.iml
+*.code-workspace
+.history/
+
+# AI coding agents / assistants
+.codex/
+.claude/
+.cursor/
+.continue/
+.windsurf/
+.aider*
+.roo/
+.cline/
+
+# Logs / temporary files
+*.log
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+~$*
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
