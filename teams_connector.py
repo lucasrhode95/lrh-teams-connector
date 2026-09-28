@@ -131,6 +131,46 @@ class TeamsConnector:
             "region_gtms": self._authz_response.get("regionGtms"),
         }
 
+    def list_conversations(self, limit: int = 15) -> list[dict[str, Any]]:
+        """
+        Return the most recently active Teams conversations.
+
+        The private Teams conversations endpoint does not appear to expose a
+        dependable page-size parameter, so the connector retrieves the
+        conversation index, sorts it by the best available activity timestamp,
+        and applies the limit locally.
+        """
+        self._require_connected()
+
+        if limit <= 0:
+            raise ValueError("limit must be greater than zero")
+
+        chat_service = (self._authz_response.get("regionGtms") or {}).get(
+            "chatService"
+        )
+        if not chat_service:
+            raise RuntimeError(
+                "Teams authz response did not contain regionGtms.chatService."
+            )
+
+        payload = self._request_json(
+            f"{chat_service.rstrip('/')}/v1/users/ME/conversations"
+        )
+
+        conversations = payload.get("conversations")
+        if not isinstance(conversations, list):
+            raise RuntimeError(
+                "Unexpected conversations response. "
+                f"Top-level keys: {', '.join(sorted(payload.keys()))}"
+            )
+
+        conversations.sort(
+            key=self._conversation_activity_timestamp,
+            reverse=True,
+        )
+
+        return conversations[:limit]
+
     def _load_token_cache(self) -> msal.SerializableTokenCache:
         cache = msal.SerializableTokenCache()
 
@@ -209,6 +249,90 @@ class TeamsConnector:
 
         return app.acquire_token_by_device_flow(flow)
 
+    def _request_json(self, url: str) -> dict[str, Any]:
+        """Make an authenticated request to the native Teams messaging API."""
+        self._require_connected()
+
+        request = urllib.request.Request(
+            url,
+            method="GET",
+            headers={
+                "Authorization": f"Bearer {self._access_token}",
+                "Authentication": f"skypetoken={self._skype_token}",
+                "Accept": "application/json",
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "MicrosoftTeams/1.0"
+                ),
+            },
+        )
+
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                payload = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"Teams request failed with HTTP {exc.code} for {url}:\n{body}"
+            ) from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(
+                f"Teams request failed for {url}: {exc}"
+            ) from exc
+
+        try:
+            return json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"Teams returned a non-JSON response for {url}:\n"
+                + payload[:1000]
+            ) from exc
+
+    @staticmethod
+    def _conversation_activity_timestamp(
+        conversation: dict[str, Any],
+    ) -> float:
+        """
+        Extract a sortable activity timestamp from a native conversation object.
+
+        Teams has used a few representations here over time, so prefer the
+        last-message timestamps and fall back to the conversation version.
+        """
+        last_message = conversation.get("lastMessage") or {}
+
+        candidates = (
+            last_message.get("originalarrivaltime"),
+            last_message.get("originalArrivalTime"),
+            last_message.get("composetime"),
+            last_message.get("composeTime"),
+            conversation.get("version"),
+        )
+
+        for value in candidates:
+            if value is None:
+                continue
+
+            if isinstance(value, (int, float)):
+                return float(value)
+
+            if isinstance(value, str):
+                stripped = value.strip()
+
+                try:
+                    return float(stripped)
+                except ValueError:
+                    pass
+
+                try:
+                    return datetime.fromisoformat(
+                        stripped.replace("Z", "+00:00")
+                    ).timestamp()
+                except ValueError:
+                    pass
+
+        return 0.0
+
     def _request_teams_authz(self, access_token: str) -> dict[str, Any]:
         request = urllib.request.Request(
             self.AUTHZ_URL,
@@ -275,8 +399,41 @@ if __name__ == "__main__":
 
     print("\nConnected.")
 
-    print("\nUser metadata:")
-    print(json.dumps(connector.get_user_metadata(), indent=2))
+    conversations = connector.list_conversations(limit=15)
 
-    print("\nConnection metadata:")
-    print(json.dumps(connector.get_connection_metadata(), indent=2))
+    print(f"\nLatest {len(conversations)} conversations:")
+
+    for number, conversation in enumerate(conversations, start=1):
+        last_message = conversation.get("lastMessage") or {}
+        properties = conversation.get("properties") or {}
+
+        title = (
+            conversation.get("title")
+            or conversation.get("displayName")
+            or properties.get("topic")
+            or properties.get("subject")
+            or "(no title)"
+        )
+
+        last_sender = (
+            last_message.get("imdisplayname")
+            or last_message.get("imDisplayName")
+            or last_message.get("from")
+            or "unknown"
+        )
+
+        last_time = (
+            last_message.get("originalarrivaltime")
+            or last_message.get("originalArrivalTime")
+            or last_message.get("composetime")
+            or last_message.get("composeTime")
+            or conversation.get("version")
+            or "unknown"
+        )
+
+        print(
+            f"{number:>2}. {title}\n"
+            f"    id: {conversation.get('id')}\n"
+            f"    last sender: {last_sender}\n"
+            f"    last activity: {last_time}"
+        )
