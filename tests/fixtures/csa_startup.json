@@ -1,0 +1,50 @@
+{
+  "teams": [],
+  "chats": [
+    {
+      "id": "19:alpha@thread.v2",
+      "title": "Alpha discussion",
+      "chatType": "group",
+      "isRead": true,
+      "lastMessage": {
+        "content": "Earlier chat item",
+        "originalArrivalTime": "2026-09-28T11:00:00Z"
+      }
+    },
+    {
+      "id": "19:zeta@thread.v2",
+      "title": "Zeta discussion",
+      "chatType": "group",
+      "isRead": false,
+      "lastMessage": {
+        "content": "Newest chat item",
+        "originalArrivalTime": "2026-09-28T12:00:00Z",
+        "imDisplayName": "A. Sender"
+      }
+    },
+    {
+      "id": "19:beta@thread.v2",
+      "title": "Beta discussion",
+      "chatType": "chat",
+      "isRead": true,
+      "lastMessage": {
+        "content": "Same timestamp",
+        "originalArrivalTime": "2026-09-28T12:00:00Z"
+      }
+    },
+    {
+      "id": "19:untitled@thread.v2",
+      "isOneOnOne": true,
+      "members": [
+        { "objectId": "self-guid", "mri": "8:orgid:self-guid", "role": "User" },
+        { "objectId": "peer-guid", "mri": "8:orgid:peer-guid", "role": "User" }
+      ],
+      "lastMessage": {}
+    }
+  ],
+  "metadata": {
+    "syncToken": "sanitized-fixture-token",
+    "isPartialData": false,
+    "hasMoreChats": false
+  }
+}

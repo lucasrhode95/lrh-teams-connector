@@ -1,49 +1,74 @@
-from datetime import datetime, timezone
+import re
+from datetime import datetime
 
-from teams_exporter.teams_connector import TeamsConnector
+from teams_exporter.teams_connector import ChatSummary, TeamsConnector
+from teams_exporter.teams_message_formatter import TeamsMessageFormatter
+
+
+CHAT_LIST_LIMIT = 15
+MESSAGE_LIST_LIMIT = 20
+
+
+def _timestamp_text(value: datetime | None) -> str:
+    if value is None:
+        return "unknown time"
+    return value.isoformat().replace("+00:00", "Z")
+
+
+def _message_author(message: dict[str, object], body: str) -> str:
+    for key in (
+        "imdisplayname",
+        "imDisplayName",
+        "fromDisplayNameInToken",
+        "displayName",
+    ):
+        value = message.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    # The `from` field can be a service URL for system events, not a person name.
+    if body.lstrip().startswith(("<", "{")):
+        return "System"
+    return "Unknown sender"
+
+
+def _one_line(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _print_chat_list(chats: list[ChatSummary]) -> None:
+    shown = chats[:CHAT_LIST_LIMIT]
+    print(f"Latest {len(shown)} of {len(chats)} chats:")
+    for number, chat in enumerate(shown, start=1):
+        chat_type = chat.chat_type or "chat"
+        print(
+            f"{number:>2}. [{_timestamp_text(chat.last_message_at)}] "
+            f"{chat.display_name} ({chat_type})"
+        )
+
 
 connector = TeamsConnector()
-connector.connect()
+connector.login()
 
-print("\nConnected.")
+chats = connector.list_chats()
+_print_chat_list(chats)
 
-conversations = connector.list_chats(limit=15)
-
-print(f"\nLatest {len(conversations)} chats (thread version order):")
-
-for number, conversation in enumerate(conversations, start=1):
-    last_message = conversation.get("lastMessage") or {}
-    thread = conversation.get("threadProperties") or {}
-
-    last_sender = (
-            last_message.get("imdisplayname")
-            or last_message.get("fromDisplayNameInToken")
-            or "unknown"
-    )
-
-    message_timestamp = connector._conversation_activity_timestamp(
-        {"lastMessage": last_message}
-    )
-    last_message_time = (
-        datetime.fromtimestamp(
-            message_timestamp,
-            tz=timezone.utc,
-        ).isoformat()
-        if message_timestamp
-        else "unknown"
-    )
-
-    conversation_type = (
-            thread.get("productThreadType")
-            or thread.get("threadType")
-            or "unknown"
-    )
+if not chats:
+    print("No chats were returned by the CSA catalog.")
+else:
+    chat = chats[0]
+    messages = connector.get_messages(chat.id, limit=MESSAGE_LIST_LIMIT)
+    formatter = TeamsMessageFormatter()
 
     print(
-        f"{number:>2}. {conversation.get('display_name')}\n"
-        f"    type: {conversation_type}\n"
-        f"    id: {conversation.get('id')}\n"
-        f"    last sender: {last_sender}\n"
-        f"    thread version: {conversation.get('version', 'unknown')}\n"
-        f"    last message: {last_message_time}"
+        f"\nLatest {len(messages)} messages in {chat.display_name} "
+        "(oldest to newest):"
     )
+
+    for message in messages:
+        body = _one_line(
+            formatter.format_message(message) or "[No text content]"
+        )
+        author = _message_author(message, body)
+        timestamp_text = _timestamp_text(connector._message_datetime(message))
+        print(f"[{timestamp_text}] {author}: {body}")

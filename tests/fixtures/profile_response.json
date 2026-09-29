@@ -1,0 +1,10 @@
+{
+  "value": [
+    {
+      "objectId": "peer-guid",
+      "mri": "8:orgid:peer-guid",
+      "displayName": "Resolved One-to-one Person",
+      "userPrincipalName": "person@example.test"
+    }
+  ]
+}
