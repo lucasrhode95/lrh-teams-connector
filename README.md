@@ -70,6 +70,52 @@ A key reverse-engineering question is whether the **CSA startup APIs** return ch
 
 Public historical captures strongly suggest CSA is a stateful synchronization API rather than just another paginated list endpoint.
 
+## Credential matrix
+
+Different Teams backend services expect different credential combinations.
+
+| Service / action | Bearer audience | Additional credential | Status in this project |
+|---|---|---|---|
+| Teams AuthZ / service discovery | `https://api.spaces.skype.com` | none | **Working live** |
+| Regional Chat Service — conversations/messages/members | none required by the known request shape | Skype token from AuthZ | **Working live / implemented** |
+| Middle Tier profile resolution | `https://api.spaces.skype.com` | none | **Implemented; endpoint behavior should continue to be verified live** |
+| CSA startup/chat state | `https://chatsvcagg.teams.microsoft.com` | Skype token | **Not yet tested live in this Python connector** |
+| Substrate people/chat search | `https://substrate.office.com` | none | **Not needed yet** |
+| SharePoint/OneDrive attachments | tenant SharePoint/OneDrive audience | none | **Not implemented** |
+| AMS media upload | AMS/IC3 audience | service-specific headers | **Not implemented** |
+| Some AMS image/transcript downloads | none | Skype token in `Authorization: skype_token ...` | **Not implemented** |
+
+The important distinction is:
+
+```text
+api.spaces.skype.com bearer
+        |
+        v
+POST /authz
+        |
+        v
+Skype token
+```
+
+These are **different credentials**.
+
+Likewise, a CSA bearer token is a separate token again:
+
+```text
+Teams public client ID
+        |
+        +--> api.spaces.skype.com bearer
+        |        |
+        |        +--> /authz -> Skype token
+        |
+        +--> chatsvcagg.teams.microsoft.com bearer
+                 |
+                 +--> CSA requests
+                        + Skype token
+```
+
+The Python connector should therefore avoid one universal request helper that blindly sends the same credentials to every Teams service.
+
 ---
 
 # Authentication flow
@@ -584,6 +630,10 @@ Do not add more local conversation-sorting rules until this has been tested.
 
 # Regional Chat Service
 
+The Regional Chat Service is the most useful backend for **raw conversation/message access**.
+
+It should not currently be assumed to be the canonical source for the exact Teams sidebar/chat-picker ordering.
+
 The base URL should come from:
 
 ```python
@@ -608,15 +658,85 @@ Authentication is normally:
 Authentication: skypetoken=<Skype token>
 ```
 
-Some experiments also included the original bearer token. The reverse-engineered `teams-api` implementation uses the Skype-token header for Chat Service calls.
+Some experiments also included the original `api.spaces.skype.com` bearer token. Current reverse-engineered implementations generally show the Skype-token header as the essential Chat Service credential.
+
+The Python connector currently uses this service for:
+- conversation discovery/fallback listing,
+- message retrieval,
+- future member lookups.
+
+---
+
+## Conversation catalog sources: raw feed vs UI state
+
+There are now three distinct concepts that should not be conflated.
+
+### 1. Raw Chat Service conversation feed
+
+```text
+GET {chatService}/v1/users/ME/conversations
+```
+
+Useful for:
+- discovering conversation IDs,
+- obtaining raw metadata,
+- pagination experiments,
+- fallback operation in a pure Python client.
+
+It is **not yet proven to reproduce the visible Teams sidebar ordering**.
+
+### 2. CSA startup/chat state
+
+```text
+/api/csa/api/v1/teams/users/me
+```
+
+This is the strongest current candidate for a pure-Python conversation catalog because public captures show it returning richer UI-oriented state:
+
+```text
+isRead
+isSticky
+hidden
+consumptionHorizon
+lastMessage
+metadata.syncToken
+```
+
+Its exact ordering still needs current live verification.
+
+### 3. Teams Web IndexedDB conversation state
+
+A current open-source Teams Web exporter reports that modern Teams Web maintains conversation state in IndexedDB stores such as:
+
+```text
+Teams:conversation-manager:react-web-client:<tenant>:<user>:<locale>
+Teams:conversation-folder-manager:...
+```
+
+That implementation stopped using `/v1/users/ME/conversations` as the picker/list source because IndexedDB matched the browser UI more faithfully, including meeting-derived and niche conversation types.
+
+This is important **architectural evidence**, but not necessarily something the Python impersonator should reproduce directly.
+
+For this project, the likely preference order is:
+
+```text
+CSA, if live testing shows it matches the UI well
+        |
+        v
+raw Chat Service conversation listing as fallback
+```
+
+Do not keep adding local sorting heuristics merely to emulate browser sidebar order until CSA has been tested.
 
 ---
 
 ## GET `{chatService}/v1/users/ME/conversations`
 
-List conversations.
+List raw service conversations.
 
 **Evidence:** observed live + reverse-engineered implementation.
+
+This endpoint is useful and currently implemented, but should be treated as a **low-level/fallback catalog source** rather than proof of current Teams sidebar order.
 
 ### Query parameters
 
@@ -865,6 +985,10 @@ connector.get_messages(
     since=datetime(...),
 )
 ```
+
+A `conversation_id` should ultimately be sufficient to retrieve messages.
+
+If a loaded conversation object already contains a `messages` URL, the connector may reuse it. That URL should be treated as a convenience/optimization, not a requirement that callers first browse the conversation list.
 
 Retrieval should walk backward only until one of these conditions is reached:
 
@@ -1712,6 +1836,34 @@ MessageDelete
 RichText/Media_CallRecording
 ```
 
+### HTML detection
+
+Teams may represent a normal rich-text message as:
+
+```text
+messagetype = RichText/Html
+contenttype = text
+```
+
+Therefore exporters should **not** detect HTML only from `contenttype`.
+
+A robust check should inspect both variants used by observed payloads:
+
+```text
+messagetype / messageType
+contenttype / contentType
+```
+
+For example:
+
+```python
+is_html = (
+    "html" in str(message.get("messagetype") or message.get("messageType") or "").lower()
+    or
+    "html" in str(message.get("contenttype") or message.get("contentType") or "").lower()
+)
+```
+
 ### Deleted messages
 
 A message may be considered deleted when:
@@ -1793,7 +1945,7 @@ and may use:
 
 # Python connector design
 
-The intended public abstraction is deliberately small.
+The public abstraction should remain deliberately small.
 
 Conceptually:
 
@@ -1803,7 +1955,7 @@ connector.connect()
 
 user = connector.get_user_metadata()
 
-conversations = connector.get_conversations(1, 20)
+chats = connector.list_chats(limit=20)
 
 messages = connector.get_messages(
     conversation_id,
@@ -1818,7 +1970,7 @@ Callers should not need to know about:
 MSAL
 refresh tokens
 Teams client ID
-api.spaces.skype.com
+OAuth audiences
 AuthZ
 Skype tokens
 regionGtms
@@ -1831,11 +1983,101 @@ backwardLink
 
 Those details belong inside `TeamsConnector`.
 
+The connector does **not** need to be split into many classes yet.
+
+A small set of service-specific internal request helpers would be enough:
+
+```python
+_request_chat_service(...)
+_request_middle_tier(...)
+_request_csa(...)
+```
+
+This avoids incorrectly sending one credential combination to every endpoint while keeping the public API simple.
+
+---
+
+# Current implementation status
+
+The current Python code already implements a substantial part of the exporter path.
+
+| Capability | Current state |
+|---|---|
+| Teams first-party MSAL authentication | implemented / working |
+| Persistent `SerializableTokenCache` | implemented / working |
+| Silent auth + device-code fallback | implemented / working |
+| `api.spaces.skype.com` access token | implemented / working |
+| `/authz` exchange | implemented / working |
+| Skype-token extraction | implemented / working |
+| `regionGtms` service discovery | implemented / working |
+| Raw Chat Service conversation pagination | implemented |
+| Local chat filtering | implemented, but should be considered fallback/provisional |
+| Local conversation ordering by thread `version` | implemented, but not authoritative sidebar semantics |
+| Middle Tier profile lookup | implemented |
+| Message-history pagination | implemented |
+| Message count limit | implemented |
+| `since` date cutoff | implemented, but stop semantics should be hardened |
+| Chronological message output | implemented |
+| Plain-text export | implemented |
+| Basic Teams HTML-to-text conversion | implemented |
+| CSA bearer acquisition | not implemented |
+| CSA startup catalog | not implemented |
+| CSA delta synchronization | not implemented |
+| Substrate search | not implemented |
+| Attachments/images/transcripts | not implemented |
+| Small UI | not implemented |
+
+## Known current implementation caveats
+
+### Universal request helper
+
+The current connector sends both:
+
+```text
+Authorization: Bearer <api.spaces token>
+Authentication: skypetoken=<Skype token>
+```
+
+from a general-purpose request method.
+
+That is convenient for experiments but should be replaced with service-specific credential handling before CSA/Substrate/attachments are added.
+
+### Message endpoint dependency
+
+The current `get_messages()` expects the selected conversation to already be present in the connector's in-memory conversation snapshot so it can reuse the returned `messages` URL.
+
+Long term, this should not be required.
+
+Given:
+
+```text
+conversation_id
+regionGtms.chatService
+```
+
+the connector can construct the messages endpoint itself.
+
+### HTML detection
+
+The current text exporter should detect `RichText/Html` from `messagetype` as well as `contenttype`.
+
+### Debug `main.py`
+
+`main.py` is intentionally a debugging/verification tool.
+
+It may:
+- print raw metadata,
+- use private helper methods,
+- expose thread versions,
+- compare ordering behavior.
+
+It does not need to be treated as the final application interface.
+
 ---
 
 # Desired conversation API semantics
 
-Two useful conversation hooks:
+Two useful low-level hooks remain:
 
 ```python
 connector.list_conversations(limit=15)
@@ -1847,23 +2089,39 @@ and:
 connector.get_conversations(start=80, end=120)
 ```
 
+These should represent the **raw Chat Service feed**.
+
 Desired behavior:
 
-- ranges are inclusive
-- indexing is 1-based
-- results are stable within the lifetime of a connector instance
-- pagination should fetch only what is necessary
-- server-provided continuation links should be followed rather than reconstructed
+- ranges are inclusive,
+- indexing is 1-based,
+- results are stable within the lifetime of a connector instance,
+- pagination fetches only what is necessary,
+- server-provided continuation links are followed rather than reconstructed.
 
-However, **conversation ordering is not yet considered solved**.
+A higher-level API such as:
 
-Do not rely on local sorting by guessed timestamp fields until CSA/UI ordering semantics are understood.
+```python
+connector.list_chats(limit=20)
+```
+
+should eventually represent the user-facing chat catalog.
+
+Its preferred source should be:
+
+```text
+CSA, if current live testing validates it
+```
+
+with raw Chat Service listing retained as a fallback.
+
+Local sorting by guessed timestamps or thread versions should not be treated as authoritative Teams UI behavior.
 
 ---
 
 # Desired message retrieval semantics
 
-Eventually:
+The intended API is:
 
 ```python
 connector.get_messages(
@@ -1872,6 +2130,8 @@ connector.get_messages(
     since=datetime(...),
 )
 ```
+
+A `conversation_id` should be enough; callers should not be required to preload the conversation catalog first.
 
 Both filters are optional.
 
@@ -1888,7 +2148,7 @@ Return the latest 500 messages regardless of age.
 
 ```python
 limit=None
-since=datetime(2026, 1, 1)
+since=datetime(2026, 1, 1, tzinfo=...)
 ```
 
 Return all available messages from that date forward.
@@ -1897,7 +2157,7 @@ Return all available messages from that date forward.
 
 ```python
 limit=500
-since=datetime(2026, 1, 1)
+since=datetime(2026, 1, 1, tzinfo=...)
 ```
 
 Stop when either:
@@ -1905,7 +2165,7 @@ Stop when either:
 ```text
 500 messages have been retrieved
 OR
-the history becomes older than 2026-01-01
+history is definitively older than the date cutoff
 ```
 
 ### Unlimited
@@ -1917,6 +2177,20 @@ since=None
 
 Walk backward until Teams stops returning older history.
 
+### Timezone policy
+
+The public connector API should prefer or require **timezone-aware** datetimes.
+
+Avoid silently interpreting:
+
+```python
+datetime(2026, 9, 1)
+```
+
+according to whichever local timezone happens to run the process.
+
+The UI may accept a local date and explicitly convert its boundary to a timezone-aware value before calling the connector.
+
 ### Efficiency
 
 Do not download all history and filter afterward if pagination allows stopping early.
@@ -1924,6 +2198,81 @@ Do not download all history and filter afterward if pagination allows stopping e
 Internally the service naturally works newest -> oldest.
 
 For export, messages should ultimately be returned oldest -> newest.
+
+### Date-cutoff safety
+
+The current implementation stops paging once it encounters messages older than `since`.
+
+That is efficient but relies on the assumption that page/history ordering is monotonic with the chosen message timestamp.
+
+This has not yet been proven for every Teams message/system-event type.
+
+Public captures show page metadata such as:
+
+```text
+lastCompleteSegmentStartTime
+lastCompleteSegmentEndTime
+```
+
+These may offer a more reliable way to determine that an entire continuation segment lies before the requested cutoff.
+
+Until verified live, date-bound stopping should be conservative.
+
+Potential approaches:
+
+```text
+1. use verified segment boundaries, if present;
+2. otherwise stop only when the whole page establishes that older continuations cannot satisfy the cutoff;
+3. or fetch one additional page after first crossing the boundary.
+```
+
+The goal is to avoid silently dropping valid messages because of an ordering assumption.
+
+---
+
+# Testing strategy
+
+At this stage, fixture-driven tests will provide more value than additional abstraction.
+
+Save **sanitized real API responses** such as:
+
+```text
+tests/
+└── fixtures/
+    ├── authz.json
+    ├── conversations_page_1.json
+    ├── conversations_page_2.json
+    ├── messages_page_1.json
+    ├── messages_page_2.json
+    ├── profiles.json
+    └── csa_startup.json          # once captured
+```
+
+Useful tests include:
+
+```text
+conversation pagination
+1-based conversation slicing
+duplicate conversation IDs
+repeated backwardLink detection
+no-progress page detection
+mixed camelCase/lowercase Teams fields
+profile resolution fallback
+message pagination
+duplicate message IDs
+message limit cutoff
+date cutoff
+chronological final ordering
+HTML detection via messagetype
+HTML-to-text conversion
+empty/system messages
+CSA startup parsing
+CSA delta sync-token progression
+```
+
+A small injectable HTTP opener/client is sufficient for testing.
+
+There is no need to introduce a large HTTP/service/repository abstraction solely for tests.
 
 ---
 
@@ -1978,7 +2327,35 @@ TeamsConnector
 
 # Current priorities
 
-## 1. Test CSA authentication and sidebar ordering
+## 1. Separate service-specific authentication/request handling
+
+Before adding more services, stop treating all Teams HTTP calls as though they use the same credentials.
+
+Keep the public class simple, but add internal request paths for:
+
+```text
+Chat Service
+Middle Tier
+CSA
+```
+
+Expected credential model:
+
+```text
+Chat Service:
+    Skype token
+
+Middle Tier:
+    api.spaces.skype.com bearer
+
+CSA:
+    chatsvcagg.teams.microsoft.com bearer
+    + Skype token
+```
+
+---
+
+## 2. Test CSA authentication and catalog ordering
 
 Acquire a token for:
 
@@ -2005,11 +2382,11 @@ x-skypetoken: <Skype token>
 
 Compare `chats[]` directly against the visible Teams sidebar **without local sorting**.
 
-If this matches, use CSA as the conversation-catalog source.
+If it matches well enough, use CSA as the user-facing conversation catalog and keep `/users/ME/conversations` as a raw/fallback source.
 
 ---
 
-## 2. Test CSA delta synchronization
+## 3. Test CSA delta synchronization
 
 Take:
 
@@ -2017,7 +2394,7 @@ Take:
 metadata.syncToken
 ```
 
-from the startup response and test:
+from startup and test:
 
 ```text
 /teams/users/me/updates
@@ -2029,13 +2406,26 @@ with:
 x-ms-synctoken
 ```
 
-Determine whether this can maintain a long-lived local chat index efficiently.
+Determine whether a local catalog can be maintained incrementally.
 
 ---
 
-## 3. Verify message pagination live
+## 4. Harden message retrieval
 
-For one known conversation:
+`get_messages()` already exists.
+
+Next verification work:
+
+```text
+- allow conversation_id retrieval without preloading the catalog
+- verify exact page ordering
+- verify pageSize behavior
+- inspect segment timestamp metadata
+- harden date-cutoff stopping
+- require/normalize timezone-aware since values
+```
+
+A useful live request is:
 
 ```text
 GET {chatService}/v1/users/ME/conversations/{id}/messages
@@ -2046,36 +2436,27 @@ GET {chatService}/v1/users/ME/conversations/{id}/messages
 
 Verify:
 
-- exact response order
-- whether `pageSize=10` is honored exactly
-- `_metadata.backwardLink`
-- `_metadata.syncState`
-- `lastCompleteSegmentStartTime`
-- `lastCompleteSegmentEndTime`
-- oldest/newest direction
-- behavior on subsequent pages
+- exact response order,
+- whether `pageSize=10` is honored exactly,
+- `_metadata.backwardLink`,
+- `_metadata.syncState`,
+- `lastCompleteSegmentStartTime`,
+- `lastCompleteSegmentEndTime`,
+- behavior on subsequent pages.
 
 ---
 
-## 4. Build `get_messages()`
+## 5. Fix/export message rendering details
 
-Only after the live pagination semantics are clear.
+Before building the UI:
 
-Keep the API small:
-
-```python
-connector.get_messages(
-    conversation_id,
-    limit=500,
-    since=None,
-)
+```text
+- detect HTML from messagetype as well as contenttype
+- preserve useful hyperlinks where practical
+- decide representation of non-text/system messages
 ```
 
----
-
-## 5. Export
-
-Initial formats can be minimal:
+Initial export formats can remain:
 
 ```text
 .txt
@@ -2102,6 +2483,26 @@ replies
 attachments
 images
 ```
+
+---
+
+## 6. Add fixture-based tests
+
+Lock down the already-working behavior before adding the UI.
+
+---
+
+## 7. Build the small UI
+
+Only after:
+
+```text
+catalog source is trustworthy enough
+message retrieval is stable
+export behavior is tested
+```
+
+The UI should remain a thin layer over `TeamsConnector`.
 
 ---
 
@@ -2156,6 +2557,39 @@ Older code/captures are most valuable when they independently match:
 - current AuthZ resource names,
 - or behavior observed live in this project.
 
+## Current Teams Web IndexedDB evidence
+
+A current open-source Teams Web exporter documents that the web client keeps its own conversation-manager state in IndexedDB using stores in the family of:
+
+```text
+Teams:conversation-manager:react-web-client:<tenant>:<userUuid>:<locale>
+Teams:conversation-folder-manager:...
+```
+
+That project reports using IndexedDB rather than:
+
+```text
+/v1/users/ME/conversations
+```
+
+for its chat picker because the local Teams state better matches the browser UI and includes conversation types that the raw Chat Service feed may omit.
+
+This does **not** mean the Python impersonator should depend on browser IndexedDB.
+
+It does strengthen the conclusion that:
+
+```text
+raw Chat Service conversation feed != authoritative Teams Web sidebar state
+```
+
+and increases the value of investigating CSA as the pure-Python catalog source.
+
+Public reference:
+
+```text
+https://github.com/gediz/teams-web-chat-exporter
+```
+
 ## Still unresolved after public research
 
 The following remain genuinely open:
@@ -2167,13 +2601,19 @@ whether current CSA chats[] order exactly equals current sidebar order
 
 which CSA headers are mandatory today versus historical client artifacts
 
+whether CSA exposes all conversation types needed by the intended UI
+
 current enterprise behavior of:
     startupgroupchats
     startupnonrecentchats
 
 exact page-size limits/caps for Chat Service conversations/messages
 
-whether segment timestamps can be relied upon for early date-cutoff termination
+whether message pages are strictly monotonic by original-arrival timestamp
+for every relevant message/system-event type
+
+whether lastCompleteSegmentStartTime / lastCompleteSegmentEndTime can be
+relied upon for early date-cutoff termination
 ```
 
 These should be resolved through current Teams Web network captures rather than further guesswork.
@@ -2195,7 +2635,10 @@ Primary sources used while compiling these notes:
    - conversation listing
 3. Source code from the independent reverse-engineered project:
    - https://github.com/Maxim-Mazurok/teams-api
+4. Current Teams Web exporter architecture notes showing browser-side conversation state in IndexedDB:
+   - https://github.com/gediz/teams-web-chat-exporter
+5. The current Python implementation in this repository, used to distinguish already-working behavior from planned/researched behavior.
 
-The third-party project is useful corroboration and implementation reference, but is not treated as a source of truth.
+Third-party projects are useful corroboration and implementation references, but are not treated as authoritative Microsoft API contracts.
 
 When possible, verify uncertain behavior against current Teams Web network traffic.
