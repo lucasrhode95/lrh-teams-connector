@@ -43,6 +43,7 @@ dist/
 *.egg-info/
 .eggs/
 pip-wheel-metadata/
+exports/
 
 # Jupyter
 .ipynb_checkpoints/

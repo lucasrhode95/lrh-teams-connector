@@ -1,7 +1,9 @@
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from teams_exporter.teams_connector import ChatSummary, TeamsConnector
+from teams_exporter.teams_exporter import TeamsExporter
 from teams_exporter.teams_message_formatter import TeamsMessageFormatter
 
 
@@ -72,3 +74,16 @@ else:
         author = _message_author(message, body)
         timestamp_text = _timestamp_text(connector._message_datetime(message))
         print(f"[{timestamp_text}] {author}: {body}")
+
+    export_until = datetime.now(timezone.utc)
+    export_since = export_until - timedelta(days=30)
+    # The lower date bound is sent to Teams as startTime; the upper bound is
+    # checked locally because the server-side endTime behavior is inconsistent.
+    export_path = TeamsExporter(connector, formatter).export_chat(
+        chat,
+        Path("exports") / "latest-chat-last-30-days.txt",
+        limit=None,
+        since=export_since,
+        until=export_until,
+    )
+    print(f"\nExported the last 30 days to: {export_path.resolve()}")
