@@ -138,10 +138,10 @@ class TeamsConnector:
         self._require_logged_in()
         payload = self._request_csa(self.CSA_STARTUP_URL)
         metadata = self._mapping(payload.get("metadata"))
-        if metadata.get("isPartialData") is True or metadata.get("hasMoreChats") is True:
-            raise RuntimeError(
-                "CSA returned a partial chat catalog; additional synchronization is required."
-            )
+        is_partial = (
+            metadata.get("isPartialData") is True
+            or metadata.get("hasMoreChats") is True
+        )
         chats = payload.get("chats")
         if not isinstance(chats, list):
             raise RuntimeError("Unexpected CSA response: 'chats' is not a list.")
@@ -187,6 +187,14 @@ class TeamsConnector:
             normalized,
             payload.get("users"),
         )
+        if is_partial:
+            known_ids = {chat.id for chat in normalized}
+            for row in self._list_chat_service_conversations():
+                conversation_id = row.get("id")
+                if not isinstance(conversation_id, str) or conversation_id in known_ids:
+                    continue
+                normalized.append(self._summarize_chat_service_conversation(row))
+                known_ids.add(conversation_id)
         # The visible Teams chat rows matched descending last-message time in a live
         # comparison better than the raw CSA array. Stable sorting retains the
         # CSA order when two chats have the same timestamp.
@@ -195,6 +203,88 @@ class TeamsConnector:
             normalized,
             key=lambda chat: chat.last_message_at or oldest,
             reverse=True,
+        )
+
+    def _list_chat_service_conversations(self) -> list[dict[str, Any]]:
+        """Follow Chat Service pages to complete a partial CSA catalog."""
+        if not self._chat_service_url:
+            raise RuntimeError("Teams AuthZ did not return a Chat Service URL.")
+
+        endpoint = (
+            f"{self._chat_service_url.rstrip('/')}/v1/users/ME/conversations"
+        )
+        url = self._set_query_parameters(
+            endpoint,
+            view="mychats",
+            pageSize="500",
+        )
+        conversations: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        seen_urls: set[str] = set()
+
+        while url:
+            self._validate_service_url(url, self._chat_service_url, "Chat Service")
+            if url in seen_urls:
+                raise RuntimeError(
+                    "Teams repeated a conversation catalog continuation link."
+                )
+            seen_urls.add(url)
+
+            payload = self._request_chat_service(url)
+            page = payload.get("conversations")
+            if not isinstance(page, list) or any(
+                not isinstance(conversation, dict) for conversation in page
+            ):
+                raise RuntimeError("Unexpected Teams conversation catalog response.")
+
+            for conversation in page:
+                conversation_id = conversation.get("id")
+                if not isinstance(conversation_id, str) or not conversation_id:
+                    continue
+                if conversation_id in seen_ids:
+                    continue
+                conversations.append(conversation)
+                seen_ids.add(conversation_id)
+
+            metadata = self._mapping(payload.get("_metadata"))
+            backward_link = metadata.get("backwardLink")
+            if backward_link is not None and not isinstance(backward_link, str):
+                raise RuntimeError(
+                    "Unexpected Teams conversation catalog continuation link."
+                )
+            url = backward_link or None
+
+        return conversations
+
+    def _summarize_chat_service_conversation(
+        self, conversation: dict[str, Any]
+    ) -> ChatSummary:
+        conversation_id = str(conversation["id"])
+        properties = self._mapping(conversation.get("properties"))
+        thread_properties = self._mapping(conversation.get("threadProperties"))
+        last_message = self._mapping(conversation.get("lastMessage"))
+        title = (
+            thread_properties.get("topic")
+            or properties.get("displayName")
+            or conversation_id
+        )
+        last_message_at = self._message_datetime(last_message) or (
+            self._message_datetime(
+                {"originalArrivalTime": properties.get("lastimreceivedtime")}
+            )
+        )
+        content = last_message.get("content")
+        preview = content.strip()[:240] if isinstance(content, str) else None
+        chat_type = (
+            thread_properties.get("threadType")
+            or thread_properties.get("productThreadType")
+        )
+        return ChatSummary(
+            id=conversation_id,
+            display_name=str(title),
+            last_message_at=last_message_at,
+            last_message_preview=preview,
+            chat_type=chat_type if isinstance(chat_type, str) else None,
         )
 
     def _resolve_untitled_one_to_one_names(
@@ -335,13 +425,16 @@ class TeamsConnector:
         *,
         limit: int | None = None,
         since: datetime | None = None,
+        until: datetime | None = None,
     ) -> list[dict[str, Any]]:
         """Read messages for a chat ID and return them oldest to newest.
 
         The service returns history through opaque ``backwardLink`` URLs. Date
-        filtering is inclusive. Date-bounded requests keep paging to the end of
-        the history unless the requested count is satisfied; segment metadata
-        is not used as a stopping condition until its semantics are verified.
+        bounds are inclusive. ``since`` is also sent as the observed server-side
+        ``startTime`` lower bound; local checks remain authoritative. ``until``
+        is applied locally because ``endTime`` edge behavior is inconsistent.
+        Segment metadata is not used as a stopping condition until its semantics
+        are verified.
         """
         self._require_logged_in()
         if not isinstance(conversation_id, str) or not conversation_id.strip():
@@ -352,20 +445,34 @@ class TeamsConnector:
             raise ValueError("limit must be a positive integer or None.")
         if since is not None and not isinstance(since, datetime):
             raise TypeError("since must be a datetime or None.")
+        if until is not None and not isinstance(until, datetime):
+            raise TypeError("until must be a datetime or None.")
         if since is not None and (
             since.tzinfo is None or since.utcoffset() is None
         ):
             raise ValueError("since must include a timezone.")
+        if until is not None and (
+            until.tzinfo is None or until.utcoffset() is None
+        ):
+            raise ValueError("until must include a timezone.")
         since_utc = since.astimezone(timezone.utc) if since else None
+        until_utc = until.astimezone(timezone.utc) if until else None
+        if since_utc is not None and until_utc is not None and since_utc > until_utc:
+            raise ValueError("since must be earlier than or equal to until.")
 
         endpoint = self._messages_url(conversation_id)
         first_page_size = min(
             self.MESSAGE_PAGE_SIZE,
             limit if limit is not None else self.MESSAGE_PAGE_SIZE,
         )
+        start_time = (
+            str(self._epoch_milliseconds(since_utc))
+            if since_utc is not None
+            else "0"
+        )
         url = self._set_query_parameters(
             endpoint,
-            startTime="0",
+            startTime=start_time,
             pageSize=str(first_page_size),
             view="msnp24Equivalent",
         )
@@ -399,9 +506,12 @@ class TeamsConnector:
                     new_ids_on_page += 1
 
                 timestamp = self._message_datetime(message)
-                if since_utc is not None:
-                    if timestamp is None or timestamp < since_utc:
-                        continue
+                if (since_utc is not None or until_utc is not None) and timestamp is None:
+                    continue
+                if since_utc is not None and timestamp < since_utc:
+                    continue
+                if until_utc is not None and timestamp > until_utc:
+                    continue
                 results.append(message)
 
             if limit is not None and len(results) >= limit:
@@ -684,6 +794,12 @@ class TeamsConnector:
                 parsed = parsed.replace(tzinfo=timezone.utc)
             return parsed.astimezone(timezone.utc)
         return None
+
+    @staticmethod
+    def _epoch_milliseconds(value: datetime) -> int:
+        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        delta = value - epoch
+        return (delta.days * 86_400 + delta.seconds) * 1_000 + delta.microseconds // 1_000
 
     @classmethod
     def _message_order_key(

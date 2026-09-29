@@ -70,12 +70,64 @@ class TeamsConnectorTests(unittest.TestCase):
         self.assertEqual(headers["x-skypetoken"], "skype-test-token")
         self.assertNotIn("Authentication", headers)
 
-    def test_partial_csa_catalog_is_not_returned_as_complete(self):
-        for metadata in ({"isPartialData": True}, {"hasMoreChats": True}):
-            with self.subTest(metadata=metadata):
-                client = StubConnector([{"chats": [], "metadata": metadata}])
-                with self.assertRaisesRegex(RuntimeError, "partial chat catalog"):
-                    client.list_chats()
+    def test_partial_csa_catalog_follows_chat_service_pages_and_preserves_csa_rows(self):
+        next_page = "https://chat.example.test/v1/users/ME/conversations?cursor=next"
+        client = StubConnector([
+            {
+                "chats": [{
+                    "id": "19:rich@thread.v2",
+                    "title": "Rich CSA chat",
+                    "lastMessage": {
+                        "content": "CSA preview",
+                        "originalArrivalTime": "2026-09-28T10:00:00Z",
+                    },
+                    "isRead": False,
+                }],
+                "metadata": {"hasMoreChats": True},
+            },
+            {
+                "conversations": [
+                    {
+                        "id": "19:rich@thread.v2",
+                        "threadProperties": {"topic": "Raw duplicate title"},
+                    },
+                    {
+                        "id": "19:extra@thread.v2",
+                        "threadProperties": {"topic": "Extra chat"},
+                        "properties": {"lastimreceivedtime": 1790590000000},
+                    },
+                ],
+                "_metadata": {"backwardLink": next_page},
+            },
+            {
+                "conversations": [
+                    {"id": "19:extra@thread.v2"},
+                    {"id": "19:last@thread.v2", "threadProperties": {"topic": "Last chat"}},
+                ],
+                "_metadata": {},
+            },
+        ])
+
+        chats = client.list_chats()
+
+        chats_by_id = {chat.id: chat for chat in chats}
+        self.assertEqual(set(chats_by_id), {
+            "19:rich@thread.v2", "19:extra@thread.v2", "19:last@thread.v2"
+        })
+        self.assertEqual(chats_by_id["19:rich@thread.v2"].display_name, "Rich CSA chat")
+        self.assertEqual(
+            chats_by_id["19:rich@thread.v2"].last_message_preview, "CSA preview"
+        )
+        self.assertTrue(chats_by_id["19:rich@thread.v2"].unread)
+        self.assertEqual(chats_by_id["19:extra@thread.v2"].display_name, "Extra chat")
+        self.assertEqual(len(client.requests), 3)
+        self.assertEqual(client.requests[0][0], TeamsConnector.CSA_STARTUP_URL)
+        first_catalog_url = client.requests[1][0]
+        self.assertEqual(
+            parse_qs(urlsplit(first_catalog_url).query),
+            {"view": ["mychats"], "pageSize": ["500"]},
+        )
+        self.assertEqual(client.requests[2][0], next_page)
 
     def test_service_helpers_send_only_their_service_credentials(self):
         client = StubConnector()
@@ -140,6 +192,47 @@ class TeamsConnectorTests(unittest.TestCase):
         self.assertEqual(
             parse_qs(urlsplit(client.requests[0][0]).query)["pageSize"], ["2"]
         )
+        self.assertEqual(
+            parse_qs(urlsplit(client.requests[0][0]).query)["startTime"],
+            [str(TeamsConnector._epoch_milliseconds(cutoff))],
+        )
+        self.assertNotIn("endTime", parse_qs(urlsplit(client.requests[0][0]).query))
+
+    def test_inclusive_date_range_works_with_unlimited_message_count(self):
+        client = StubConnector([
+            fixture("messages_page_1.json"),
+            fixture("messages_page_2.json"),
+        ])
+        since = datetime(2026, 9, 28, 10, 1, tzinfo=timezone.utc)
+        until = datetime(2026, 9, 28, 10, 2, tzinfo=timezone.utc)
+
+        messages = client.get_messages(
+            "19:fixture@thread.v2",
+            limit=None,
+            since=since,
+            until=until,
+        )
+
+        self.assertEqual(
+            [message["id"] for message in messages],
+            ["message-2", "message-3"],
+        )
+        self.assertEqual(len(client.requests), 2)
+
+    def test_until_must_be_timezone_aware_and_not_before_since(self):
+        client = StubConnector()
+        with self.assertRaisesRegex(ValueError, "until must include a timezone"):
+            client.get_messages(
+                "19:fixture@thread.v2",
+                until=datetime(2026, 9, 1),
+            )
+        with self.assertRaisesRegex(ValueError, "earlier than or equal"):
+            client.get_messages(
+                "19:fixture@thread.v2",
+                since=datetime(2026, 9, 2, tzinfo=timezone.utc),
+                until=datetime(2026, 9, 1, tzinfo=timezone.utc),
+            )
+        self.assertEqual(client.requests, [])
 
     def test_date_filter_does_not_stop_on_an_anomalously_old_message(self):
         old = {
@@ -247,6 +340,34 @@ class TeamsMessageFormatterTests(unittest.TestCase):
                 })
                 self.assertEqual(text, "@(Rhode, Lucas), Could you respond?")
 
+    def test_adjacent_fragments_for_same_mention_share_one_delimiter(self):
+        text = self.formatter.format_message({
+            "messageType": "RichText/Html",
+            "content": (
+                "<p><span itemtype='http://schema.skype.com/Mention' "
+                "itemid='8:orgid:juniper'>Parker,</span> "
+                "<span itemtype='http://schema.skype.com/Mention' "
+                "itemid='8:orgid:juniper'>Juniper</span>"
+                " Please review the example plan.</p>"
+            ),
+        })
+        self.assertEqual(
+            text,
+            "@(Parker, Juniper) Please review the example plan.",
+        )
+
+    def test_adjacent_different_mentions_keep_separate_delimiters(self):
+        text = self.formatter.format_message({
+            "messageType": "RichText/Html",
+            "content": (
+                "<span itemtype='http://schema.skype.com/Mention' "
+                "itemid='8:orgid:one'>Parker</span> "
+                "<span itemtype='http://schema.skype.com/Mention' "
+                "itemid='8:orgid:two'>Juniper</span>"
+            ),
+        })
+        self.assertEqual(text, "@(Parker) @(Juniper)")
+
     def test_lists_links_blockquotes_and_code_are_readable(self):
         text = self.formatter.format_message({
             "messageType": "RichText/Html",
@@ -297,8 +418,10 @@ class TeamsExporterTests(unittest.TestCase):
             def __init__(self):
                 self.calls = []
 
-            def get_messages(self, conversation_id, *, limit=None, since=None):
-                self.calls.append((conversation_id, limit, since))
+            def get_messages(
+                self, conversation_id, *, limit=None, since=None, until=None
+            ):
+                self.calls.append((conversation_id, limit, since, until))
                 return [{
                     "id": "one",
                     "sequenceId": 1,
@@ -311,15 +434,27 @@ class TeamsExporterTests(unittest.TestCase):
         connector = FakeConnector()
         exporter = TeamsExporter(connector, TeamsMessageFormatter())
         chat = ChatSummary("19:fake", "Sample chat")
+        since = datetime(2026, 9, 28, 9, 0, tzinfo=timezone.utc)
+        until = datetime(2026, 9, 28, 11, 0, tzinfo=timezone.utc)
         destination = Path(self.id().replace(".", "_") + ".txt")
         try:
-            output = exporter.export_chat(chat, destination, limit=20)
+            output = exporter.export_chat(
+                chat,
+                destination,
+                limit=None,
+                since=since,
+                until=until,
+            )
             content = output.read_text(encoding="utf-8-sig")
             self.assertIn("Conversation: Sample chat", content)
             self.assertIn("Conversation ID: 19:fake", content)
             self.assertIn("[2026-09-28T10:00:00Z] Taylor", content)
             self.assertIn("Hi **there**", content)
-            self.assertEqual(connector.calls[0][0:2], ("19:fake", 20))
+            self.assertIn(f"Since: {since.isoformat()}", content)
+            self.assertIn(f"Until: {until.isoformat()}", content)
+            self.assertEqual(
+                connector.calls[0], ("19:fake", None, since, until)
+            )
         finally:
             destination.unlink(missing_ok=True)
 

@@ -789,9 +789,21 @@ Observed/reverse-engineered parameters include:
 
 ```text
 pageSize=<N>
-startTime=0
+startTime=<Unix epoch milliseconds>
 view=msnp24Equivalent
 ```
+
+`startTime=0` requests the unbounded history available to the caller. Live
+read-only tests confirmed that a nonzero `startTime` acts as an inclusive lower
+time bound for the tested conversation and meeting-event cases. The connector
+uses this parameter for `since` and retains a local timestamp check as a
+correctness guard. A `since=` query parameter and an OData-style `$filter` were
+ignored by the tested route.
+
+`endTime` was also tested, but ordinary-message boundary behavior was too coarse
+or inconsistent to use as a reliable inclusive upper bound. The current client
+therefore applies `until` locally. These observations are empirical and may vary
+by message type or service version.
 
 Historical clients have also used richer `view` combinations such as:
 
@@ -895,7 +907,7 @@ and then call that URL verbatim.
 
 Treat `syncState` as opaque. Do not decode or manufacture it unless live behavior forces us to.
 
-The route identifies the conversation directly in its path. A previously fetched conversation object may also expose a `messages` URL; captured implementations use the conversation ID to construct the route when that link is unavailable. The service supplies continuation URLs for older pages; count and date stopping conditions are client-side choices, not parameters defined by this route.
+The route identifies the conversation directly in its path. A previously fetched conversation object may also expose a `messages` URL; captured implementations use the conversation ID to construct the route when that link is unavailable. The service supplies continuation URLs for older pages. `startTime` is a confirmed server-side lower-bound parameter in the tested live responses; the finite count and safe upper-bound decisions remain client-side.
 
 ---
 
@@ -1897,6 +1909,59 @@ The relationship between `isSticky` and the Teams UI’s Favorites/pinned sectio
 A read-only Regional Chat Service request for a conversation’s message history succeeded. A request with `pageSize=10` returned ten messages in the tested case. The continuation URL remains the service-provided `_metadata.backwardLink`; its contents should be treated as opaque. One successful page-size sample does not establish a universal page-size cap or exact ordering guarantees across message types.
 
 The message endpoint uses a conversation ID in its path, so retrieving history does not require a conversation-list URL to be present. Returned messages and pages may contain timestamps, sequence IDs, message types, HTML content, and pagination metadata as described above.
+
+## Server-side filtering and pagination probe
+
+Read-only live requests on 2026-09-29 tested the private Chat Service routes
+against the signed-in account. No message bodies, chat names, identifiers, or
+credentials are included here.
+
+The browser automation interface did not expose the Teams tab's DevTools
+Network event log, so these request behaviors were tested with direct,
+read-only calls using the app's existing signed-in session instead of claiming
+that the browser's requests were intercepted.
+
+- `GET /v1/users/ME/conversations?view=mychats&pageSize=3` returned three rows
+  and an opaque `backwardLink`. A full traversal with `pageSize=500` returned
+  960 unique rows across three pages. No server-side conversation-name, type,
+  or activity-date filter was identified in the tested request shape.
+- The CSA startup response returned 943 chats and reported `isPartialData=false`
+  and `hasMoreChats=false`; every CSA ID was present in the raw Chat Service
+  list. The raw list had 17 additional entries, consisting of notification,
+  mention, call-log, notes, annotation, generic, space, and topic stream types.
+  These raw-only rows should not be merged into the ordinary complete CSA list
+  without an explicit product decision. The connector uses the raw list only as
+  a fallback when CSA explicitly reports partial data.
+- A first-page request with `pageSize=3` returned three messages. A 100-message
+  page was also observed. This verifies those samples only, not a universal
+  page-size limit.
+- A nonzero `startTime` representing a seven-day lower cutoff returned only
+  messages at or after that cutoff, with no older continuation page in the
+  tested conversation. Supplying the exact timestamp of a message included
+  that boundary message. A date-bounded meeting conversation returned four
+  system activity messages inside the requested interval.
+- Direct `backwardLink` traversal can return messages overlapping the previous
+  page, so callers still need message-ID de-duplication.
+- The legacy Chat Service route ignored `since=` and `$filter` parameters in
+  tests. Its `endTime` behavior did not reliably include ordinary messages at
+  the tested upper-bound edge, so no server-side `until` filter is enabled.
+
+Teams Web bundles collected on 2026-09-28 contain GraphQL operations for
+`messages(convId, replyChainId, cursor)` with `pageInfo.hasNextPage` and
+`fetchRecentMessagesAfter(convId, replyChainId, lastMessageId, count)`. These
+show cursor-based page loading and recent-message synchronization; the observed
+operations did not expose an arbitrary date-range filter.
+
+This is distinct from the documented Microsoft Graph chat-message API, which
+documents `$top`, `$orderby`, and `$filter` for a date range on
+`lastModifiedDateTime`, under a separate permission model. Graph support does
+not prove that the private Teams Chat Service accepts those parameters. A
+Microsoft Q&A moderator's answer says the Search API cannot scope a search to a
+specific chat/channel in one call; it recommends filtering results client-side
+by chat ID, or retrieving a specific chat's messages without keyword search.
+Maxim-Mazurok/teams-api independently corroborates the private route and
+continuation-link pattern, but its implementation is not a Microsoft API
+contract. See [Graph list chat messages (beta)](https://learn.microsoft.com/en-us/graph/api/chat-list-messages?tabs=powershell&view=graph-rest-beta), [Microsoft Q&A on scoping Teams search](https://learn.microsoft.com/en-us/answers/questions/5510799/does-the-teams-search-api-provide-any-operator-to), and [Maxim-Mazurok/teams-api chat-service client](https://github.com/Maxim-Mazurok/teams-api/blob/main/src/api/chat-service.ts).
 
 ## Delta synchronization and open uncertainties
 

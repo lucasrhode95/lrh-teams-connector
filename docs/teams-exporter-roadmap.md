@@ -12,9 +12,9 @@ The project uses app-owned Microsoft authentication and read-only Teams requests
 |---|---|
 | Explicit MSAL login with app-owned token cache and device-code fallback | Implemented |
 | Separate resource tokens and service-specific request headers for Chat Service, Middle Tier, and CSA | Implemented |
-| CSA startup chat catalog with activity-time ordering | Implemented; partial catalogs fail clearly rather than returning an incomplete list |
+| CSA startup chat catalog with activity-time ordering | Implemented; partial CSA results fall back to paginated Chat Service conversations and preserve richer CSA entries |
 | Display-name lookup for untitled one-to-one chats | Partially implemented; uses Middle Tier when CSA lacks names |
-| Message retrieval by conversation ID, opaque continuation links, deduplication, count/date filters, chronological result | Implemented; date-bounded requests currently continue through older history unless the count is reached |
+| Message retrieval by conversation ID, opaque continuation links, deduplication, inclusive date-range/count filters, chronological result | Implemented; `since` uses the observed server-side `startTime` lower bound, while `until` remains a local filter |
 | Message formatter for rich text, semantic @mentions, deleted/system markers, attachment and image markers | Implemented |
 | Plain-text export for one or multiple chats | Implemented |
 | Fixture-based tests for connector, filtering, formatting, and export | Implemented |
@@ -27,37 +27,37 @@ Implement these requirements in the order listed.
 
 ### P1.1 Complete and verify chat catalog loading
 
-**Status:** Partial. CSA startup works when it returns a complete response. The connector detects `isPartialData` or `hasMoreChats` and raises an error; it does not yet request the additional catalog data.
+**Status:** Partially implemented. When CSA marks its startup catalog partial, the connector now retrieves the Chat Service `view=mychats` catalog through its opaque `backwardLink` pages, de-duplicates IDs, and keeps CSA summaries when both sources contain the same chat. A live probe returned 960 raw catalog entries over three pages; a later CSA response contained 943, all represented in the raw list. The 17 raw-only entries included system streams and other nonstandard types, so the fallback is only used when CSA explicitly reports partial data. The catalog request supports pagination, but no server-side search, type, or date filter has been confirmed.
 
 Requirements:
 
-- Handle partial CSA startup results and additional chat groups without silently omitting chats.
+- Verify how partial CSA responses and additional chat groups map to the raw `view=mychats` feed, especially hidden/system stream types.
 - Verify whether `teams/users/me/updates` plus `metadata.syncToken` can complete or incrementally maintain the catalog.
-- Keep the visible chat order aligned with the live Teams UI. Current evidence supports descending `lastMessage.originalArrivalTime` for one session; retain it as an observed behavior, not a universal guarantee.
+- Validate activity ordering and title behavior for fallback-only rows; current live UI alignment evidence applies to CSA ordering and is not a universal guarantee.
 - Resolve one-to-one names where possible and show a safe fallback when the service provides no profile.
-- Add fixture coverage for partial responses, delta updates, missing titles, and stable ordering.
+- Add sanitized fixture coverage for partial responses, delta updates, missing titles, and stable ordering.
 
 Acceptance:
 
-- The UI receives either a complete list or a clear actionable error; it never presents a partial list as complete.
+- A partial CSA response is completed by paginated raw catalog results, or produces a clear actionable error; it is never presented as complete without fallback.
 - Chat ordering and title behavior are covered by tests using sanitized fixtures.
 
 ### P1.2 Make message filters efficient and reliable on long histories
 
-**Status:** Partial. Conversation-ID retrieval, opaque `backwardLink` pagination, message deduplication, inclusive `since`, count limits, timezone validation, and oldest-to-newest output are implemented. A `since`-only request currently scans to the end of available history because timestamp/page-boundary stopping semantics are not fully verified. Continuation page-size behavior also needs verification.
+**Status:** Partially implemented. Live tests confirmed that `pageSize` is honored on sampled first pages and that `startTime=<Unix epoch milliseconds>` acts as an inclusive lower bound on the message service. The connector sends `since` through `startTime` and still applies local inclusive checks. `until` remains local because tested `endTime` behavior was inconsistent at ordinary-message timestamp edges. Opaque continuations can overlap, so ID de-duplication remains necessary. Broader chat-type and boundary verification is still needed.
 
 Requirements:
 
-- Verify page ordering, continuation behavior, requested `pageSize`, and segment-boundary fields against multiple live pages.
-- Stop requesting older pages once the service data proves that they cannot contain messages at or after `since`.
+- Verify page ordering, continuation behavior, requested `pageSize`, and segment-boundary fields against more chat types and long histories.
+- Determine whether a reliable `endTime` boundary exists before moving `until` filtering to the service.
 - Preserve conservative behavior for anomalous timestamps and system messages; do not drop messages based on an unverified monotonic-order assumption.
-- For finite `limit`, request only the remaining number where the service honors the requested page size.
+- Keep verifying that finite `limit` page sizes are honored across continuation pages.
 - Keep the public result ordered oldest to newest and deduplicated by message ID.
 
 Acceptance:
 
-- A multi-page fixture proves the inclusive date boundary, count-plus-date behavior, duplicate handling, and early stop.
-- A live check confirms the chosen early-stop rule on ordinary messages and relevant system-message cases before enabling it by default.
+- A multi-page fixture proves the inclusive lower boundary, count-plus-date behavior, duplicate handling, and local upper-bound behavior.
+- Live checks confirm the `startTime` lower-bound semantics across ordinary and system messages, and a separate safe upper-bound rule is established before using `endTime`.
 
 ### P1.3 Build the local web UI and export flow
 

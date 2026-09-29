@@ -20,6 +20,9 @@ class TeamsHtmlParser(HTMLParser):
         self.ignored_depth = 0
         self.suppress_leading_mention_at = False
         self.mention_tags: list[str] = []
+        self.mention_ids: list[str] = []
+        self.last_mention_id: str | None = None
+        self.last_mention_close_index: int | None = None
 
     def handle_starttag(
         self, tag: str, attrs: list[tuple[str, str | None]]
@@ -27,9 +30,13 @@ class TeamsHtmlParser(HTMLParser):
         attributes = {name.lower(): value or "" for name, value in attrs}
         item_type = attributes.get("itemtype", "").lower()
         if item_type.rstrip("/").endswith("/mention"):
+            mention_id = attributes.get("itemid", "").strip()
+            joins_previous = self._join_previous_mention(mention_id)
             self.mention_tags.append(tag)
+            self.mention_ids.append(mention_id)
             self.suppress_leading_mention_at = True
-            self.parts.append("@(")
+            if not joins_previous:
+                self.parts.append("@(")
         if "amsimage" in item_type:
             image_url = (
                 attributes.get("src")
@@ -98,8 +105,11 @@ class TeamsHtmlParser(HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         if self.mention_tags and tag == self.mention_tags[-1]:
             self.mention_tags.pop()
+            mention_id = self.mention_ids.pop()
             self.suppress_leading_mention_at = False
             self.parts.append(")")
+            self.last_mention_id = mention_id or None
+            self.last_mention_close_index = len(self.parts) - 1
         if tag in {"script", "style"} and self.ignored_depth:
             self.ignored_depth -= 1
             return
@@ -138,12 +148,33 @@ class TeamsHtmlParser(HTMLParser):
     def handle_data(self, data: str) -> None:
         if self.ignored_depth:
             return
+        if not self.mention_tags and data.strip():
+            self.last_mention_id = None
+            self.last_mention_close_index = None
         if self.suppress_leading_mention_at and data.strip():
             leading_whitespace = len(data) - len(data.lstrip())
             if data[leading_whitespace:].startswith("@"):
                 data = data[:leading_whitespace] + data[leading_whitespace + 1 :]
             self.suppress_leading_mention_at = False
         self.parts.append(data)
+
+    def _join_previous_mention(self, mention_id: str) -> bool:
+        close_index = self.last_mention_close_index
+        if (
+            self.mention_tags
+            or not mention_id
+            or mention_id != self.last_mention_id
+            or close_index is None
+            or not self.parts[close_index].endswith(")")
+        ):
+            return False
+
+        separator = "".join(self.parts[close_index + 1 :])
+        if any(character not in " \t\xa0" for character in separator):
+            return False
+
+        self.parts[close_index] = self.parts[close_index][:-1]
+        return True
 
     def _newline(self, count: int) -> None:
         current = "".join(self.parts)

@@ -27,11 +27,13 @@ class TeamsExporter:
         *,
         limit: int | None = None,
         since: datetime | None = None,
+        until: datetime | None = None,
     ) -> Path:
         messages = self.connector.get_messages(
             chat.id,
             limit=limit,
             since=since,
+            until=until,
         )
         destination = Path(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -43,6 +45,8 @@ class TeamsExporter:
         ]
         if since is not None:
             lines.append(f"Since: {since.isoformat()}")
+        if until is not None:
+            lines.append(f"Until: {until.isoformat()}")
         if limit is not None:
             lines.append(f"Limit: {limit}")
         lines.append("")
@@ -71,6 +75,7 @@ class TeamsExporter:
         *,
         limit: int | None = None,
         since: datetime | None = None,
+        until: datetime | None = None,
     ) -> list[Path]:
         directory = Path(destination)
         directory.mkdir(parents=True, exist_ok=True)
@@ -90,6 +95,7 @@ class TeamsExporter:
                     directory / f"{stem}.txt",
                     limit=limit,
                     since=since,
+                    until=until,
                 )
             )
         return exported
