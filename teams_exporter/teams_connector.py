@@ -16,6 +16,7 @@ from teams_exporter.teams_html_to_text import TeamsHtmlToText
 class TeamsConnector:
     """Minimal Teams connector with persistent Microsoft authentication."""
 
+    CONVERSATION_PAGE_SIZE = 500
     TEAMS_CLIENT_ID = "1fec8e78-bce4-4aaf-ab1b-5451cc387264"
     TEAMS_SCOPE = "https://api.spaces.skype.com/.default"
     AUTHZ_URL = "https://authsvc.teams.microsoft.com/v1.0/authz"
@@ -40,6 +41,7 @@ class TeamsConnector:
         self._conversation_snapshot: list[dict[str, Any]] = []
         self._conversation_ids: set[str] = set()
         self._conversation_backward_link: str | None = None
+        self._conversation_seen_links: set[str] = set()
         self._conversation_snapshot_started = False
         self._conversation_snapshot_complete = False
 
@@ -146,11 +148,72 @@ class TeamsConnector:
         }
 
     def list_conversations(self, limit: int = 15) -> list[dict[str, Any]]:
-        """Return the latest ``limit`` conversations."""
+        """Return the latest ``limit`` raw service conversations."""
         if limit <= 0:
             raise ValueError("limit must be greater than zero")
 
         return self.get_conversations(1, limit)
+
+    def list_chats(self, limit: int = 15) -> list[dict[str, Any]]:
+        """Return chat-like entries, omitting system streams and empty meetings."""
+        if limit <= 0:
+            raise ValueError("limit must be greater than zero")
+        return self.get_chats(1, limit)
+
+    def get_chats(self, start: int, end: int) -> list[dict[str, Any]]:
+        """Return an inclusive 1-based range after chat-list filtering.
+
+        The filter approximates the Teams chat list. Teams can apply additional
+        user-specific and meeting visibility rules that this API does not expose.
+        """
+        self._require_connected()
+        if start < 1:
+            raise ValueError("start must be at least 1")
+        if end < start:
+            raise ValueError("end must be greater than or equal to start")
+
+        while True:
+            chats = [
+                row for row in self._conversation_snapshot
+                if self._is_chat_list_candidate(row)
+            ]
+            if len(chats) >= end or self._conversation_snapshot_complete:
+                selected = chats[start - 1:end]
+                self._populate_conversation_display_names(selected)
+                return selected
+
+            previous_count = len(self._conversation_snapshot)
+            next_count = (
+                max(end, 30) if not self._conversation_snapshot_started
+                else previous_count + max(50, end - len(chats))
+            )
+            self._ensure_conversations_loaded(next_count)
+            if len(self._conversation_snapshot) == previous_count:
+                # The raw feed ended before the requested chat range.
+                selected = chats[start - 1:end]
+                self._populate_conversation_display_names(selected)
+                return selected
+
+    @staticmethod
+    def _is_chat_list_candidate(conversation: dict[str, Any]) -> bool:
+        thread = conversation.get("threadProperties") or {}
+        properties = conversation.get("properties") or {}
+        kind = str(
+            thread.get("productThreadType") or thread.get("threadType") or ""
+        )
+        if kind.startswith("StreamOf") or kind in {
+            "TeamsTeam", "TeamsStandardChannel", "TeamsPrivateChannel",
+            "TeamsSharedChannel",
+        }:
+            return False
+        if str(thread.get("hidden", "")).lower() == "true":
+            return False
+        if (
+            kind.lower() == "meeting"
+            and str(properties.get("isemptyconversation", "")).lower() == "true"
+        ):
+            return False
+        return True
 
     def get_conversations(
         self,
@@ -166,9 +229,9 @@ class TeamsConnector:
             get_conversations(80, 120) -> positions 80 through 120
 
         Conversation pages are loaded lazily and retained for the lifetime of
-        this connector instance. The first request asks the service for exactly
-        ``end`` conversations. Later calls follow the service's backwardLink
-        only when more history is needed.
+        this connector instance. Requests ask for only the missing rows, up to
+        CONVERSATION_PAGE_SIZE per request. Later calls follow the service's
+        backwardLink only when more history is needed.
         """
         self._require_connected()
 
@@ -188,11 +251,12 @@ class TeamsConnector:
         if not self._conversation_snapshot_started:
             payload = self._fetch_conversation_page(
                 url=None,
-                page_size=required_count,
+                page_size=min(required_count, self.CONVERSATION_PAGE_SIZE),
             )
             self._conversation_snapshot_started = True
             self._consume_conversation_page(payload)
 
+        no_progress_pages = 0
         while (
             len(self._conversation_snapshot) < required_count
             and not self._conversation_snapshot_complete
@@ -201,24 +265,28 @@ class TeamsConnector:
                 self._conversation_snapshot_complete = True
                 break
 
+            previous_link = self._conversation_backward_link
+            if previous_link in self._conversation_seen_links:
+                raise RuntimeError("Teams repeated a conversation continuation link")
+
             missing = required_count - len(self._conversation_snapshot)
             previous_count = len(self._conversation_snapshot)
-            previous_link = self._conversation_backward_link
 
             payload = self._fetch_conversation_page(
                 url=previous_link,
-                page_size=missing,
+                page_size=min(missing, self.CONVERSATION_PAGE_SIZE),
             )
             self._consume_conversation_page(payload)
+            self._conversation_seen_links.add(previous_link)
 
-            # Defensive stop if the private API gives us a continuation that
-            # neither advances nor yields any new conversations.
-            if (
-                len(self._conversation_snapshot) == previous_count
-                and self._conversation_backward_link == previous_link
-            ):
-                self._conversation_snapshot_complete = True
-                break
+            if len(self._conversation_snapshot) == previous_count:
+                no_progress_pages += 1
+                if no_progress_pages >= 3:
+                    raise RuntimeError(
+                        "Teams returned three conversation pages without progress"
+                    )
+            else:
+                no_progress_pages = 0
 
     def _fetch_conversation_page(
         self,
@@ -249,6 +317,7 @@ class TeamsConnector:
         else:
             # Continuation URLs already contain syncState. Preserve everything
             # returned by Teams and only tune the requested page size.
+            self._validate_chat_service_url(url)
             url = self._set_query_parameters(
                 url,
                 pageSize=str(page_size),
@@ -280,10 +349,10 @@ class TeamsConnector:
             if not row.get("id") or row["id"] not in self._conversation_ids
         ]
         if new_rows and self._conversation_snapshot:
-            newest_version = self._conversation_sort_key(new_rows[0])[0]
+            newest_version = self._conversation_sort_key(new_rows[0])
             last_loaded_version = self._conversation_sort_key(
                 self._conversation_snapshot[-1]
-            )[0]
+            )
             if newest_version > last_loaded_version:
                 raise RuntimeError(
                     "Teams conversation pages were not in descending version "
@@ -327,12 +396,13 @@ class TeamsConnector:
     @classmethod
     def _conversation_sort_key(
         cls, conversation: dict[str, Any]
-    ) -> tuple[int, str]:
+    ) -> int:
         try:
             version = int(conversation.get("version"))
         except (TypeError, ValueError):
             version = int(cls._conversation_activity_timestamp(conversation) * 1000)
-        return version, str(conversation.get("id") or "")
+        # Python's stable sort retains the service's order when versions tie.
+        return version
 
     def get_messages(
         self,
@@ -449,7 +519,7 @@ class TeamsConnector:
             or actual.netloc.lower() != expected.netloc.lower()
         ):
             raise RuntimeError(
-                "Teams supplied a messages URL outside its chat service"
+                "Teams supplied a URL outside its chat service"
             )
 
     @staticmethod

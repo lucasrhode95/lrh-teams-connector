@@ -7,9 +7,9 @@ connector.connect()
 
 print("\nConnected.")
 
-conversations = connector.list_conversations(limit=15)
+conversations = connector.list_chats(limit=15)
 
-print(f"\nLatest {len(conversations)} conversations:")
+print(f"\nLatest {len(conversations)} chats (thread version order):")
 
 for number, conversation in enumerate(conversations, start=1):
     last_message = conversation.get("lastMessage") or {}
@@ -21,15 +21,15 @@ for number, conversation in enumerate(conversations, start=1):
             or "unknown"
     )
 
-    activity_timestamp = connector._conversation_activity_timestamp(
-        conversation
+    message_timestamp = connector._conversation_activity_timestamp(
+        {"lastMessage": last_message}
     )
-    last_activity = (
+    last_message_time = (
         datetime.fromtimestamp(
-            activity_timestamp,
+            message_timestamp,
             tz=timezone.utc,
         ).isoformat()
-        if activity_timestamp
+        if message_timestamp
         else "unknown"
     )
 
@@ -44,5 +44,6 @@ for number, conversation in enumerate(conversations, start=1):
         f"    type: {conversation_type}\n"
         f"    id: {conversation.get('id')}\n"
         f"    last sender: {last_sender}\n"
-        f"    last activity: {last_activity}"
+        f"    thread version: {conversation.get('version', 'unknown')}\n"
+        f"    last message: {last_message_time}"
     )
