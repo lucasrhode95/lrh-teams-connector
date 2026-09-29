@@ -84,45 +84,18 @@ Acceptance:
 - A user can export a selected chat with count-only, date-only, and combined filters.
 - The UI displays an explicit authentication-needed state and can refresh after device-code sign-in.
 
-## Nice-to-haves — after the local exporter works
-
-These are lower priority than the Phase 1 requirements. Keep this order; Favorites/pinned chats are the lowest-priority item.
-
-### N1. Download attachments and images
-
-**Status:** Not implemented; exports currently preserve attachment/image markers and available links.
-
-Download files and images into an export subfolder and use relative links in the text export. Preserve names where safe, handle duplicate names, and report failed downloads without losing the text export.
-
-### N2. Display read/unread indicators
-
-**Status:** Partially available in backend data; `ChatSummary` can carry an unread value from CSA. No UI exists.
-
-Display only server-provided read/unread state. This feature must be read-only: listing, viewing, searching, or exporting must never mark a chat or message as read or change any status. If the service does not expose a reliable remote value, show no indicator.
-
-### N3. Show profile pictures on messages
-
-Resolve sender profile images and display them alongside messages in the UI. Keep failures non-blocking and avoid making image availability a requirement for message retrieval or export.
-
-### N4. Send a message to a selected chat
-
-Allow the user to compose and send a message to an explicitly selected chat. Require a clear user action for each send, show the destination and message before submission, and report service errors. Do not add automatic sending or sending during search/export.
-
-### N5. Add a conversation viewer
-
-**Status:** Not implemented.
-
-Let the user open a selected chat and browse messages using the same retrieval path as export. Show useful timestamps, senders, and message content. Keep the viewer from changing read state.
-
-### N6. Show Favorites/pinned chats in a separate first section
-
-**Status:** Not implemented; the meaning of CSA `isSticky` has not been verified against Teams Favorites.
-
-Display verified Favorites/pinned chats in their own section above the regular chat list. First confirm which remote field or route represents this UI state. Do not infer Favorites from `isSticky` until live comparison establishes that mapping. This is the lowest-priority nice-to-have.
-
 ## Phase 2 — expose chat search and extraction to Codex
 
-Expose a local interface that Codex can call. An MCP server is the preferred option; it may use a small local HTTP API internally. The interface must use the existing app-owned sign-in and connector rather than requiring a separate Microsoft app registration.
+Expose a local Python MCP server over `stdio` that Codex can start from its MCP configuration. This interface can call the existing backend directly; it does not require a continuously running HTTP listener. The separate local web UI may use HTTP. Reuse the app-owned sign-in and connector without a separate Microsoft app registration.
+
+**Status:** Not implemented. The connector already supports chat listing and message retrieval; the MCP server, participant search, and message-content search remain to be built.
+
+MCP requirements:
+
+- Advertise typed, read-only tools with clear descriptions and bounded, paginated results so large chats do not flood the model context.
+- Reuse the app-owned MSAL cache. Report a missing or expired sign-in clearly; do not print device-code instructions or other text to the MCP protocol's standard output.
+- Return source chat IDs, message IDs, authors, timestamps, and coverage limits with search and retrieval results.
+- Document the local Codex MCP configuration. An optional skill may describe multi-tool research workflows after the tools work.
 
 ### Primary AI workflows
 
@@ -153,6 +126,42 @@ Acceptance:
 - Search results can be followed by a retrieval call using their conversation ID and timestamps.
 - A scheduled daily run can produce an attention summary with source references; an ad-hoc topic request can search across chats and prioritize a named conversation, with findings traceable to messages.
 - Calls preserve authentication boundaries and expose no tokens, cookies, or authorization headers.
+
+## Nice-to-haves — after the local exporter and Codex access work
+
+These are lower priority than the Phase 1 and Phase 2 requirements. The conversation viewer is the lowest-priority item.
+
+### N1. Download attachments and images
+
+**Status:** Not implemented; exports currently preserve attachment/image markers and available links.
+
+Download files and images into an export subfolder and use relative links in the text export. Preserve names where safe, handle duplicate names, and report failed downloads without losing the text export.
+
+### N2. Display read/unread indicators
+
+**Status:** Partially available in backend data; `ChatSummary` can carry an unread value from CSA. No UI exists.
+
+Display only server-provided read/unread state. This feature must be read-only: listing, viewing, searching, or exporting must never mark a chat or message as read or change any status. If the service does not expose a reliable remote value, show no indicator.
+
+### N3. Show profile pictures on messages
+
+Resolve sender profile images and display them alongside messages in the UI. Keep failures non-blocking and avoid making image availability a requirement for message retrieval or export.
+
+### N4. Send a message to a selected chat
+
+Allow the user to compose and send a message to an explicitly selected chat. Require a clear user action for each send, show the destination and message before submission, and report service errors. Do not add automatic sending or sending during search/export.
+
+### N5. Show Favorites/pinned chats in a separate first section
+
+**Status:** Not implemented; the meaning of CSA `isSticky` has not been verified against Teams Favorites.
+
+Display verified Favorites/pinned chats in their own section above the regular chat list. First confirm which remote field or route represents this UI state. Do not infer Favorites from `isSticky` until live comparison establishes that mapping.
+
+### N6. Add a conversation viewer
+
+**Status:** Not implemented.
+
+Let the user open a selected chat and browse messages using the same retrieval path as export. Show useful timestamps, senders, and message content. Keep the viewer from changing read state. This is the lowest-priority nice-to-have.
 
 ## Engineering constraints
 
