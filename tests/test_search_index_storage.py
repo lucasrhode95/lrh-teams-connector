@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from teams_exporter.teams_connector import ChatSummary
+from teams_exporter.teams_message_formatter import TeamsMessageFormatter
 from teams_exporter.teams_search_index import TeamsSearchIndex
 from teams_exporter.teams_service import TeamsService
 
@@ -95,6 +96,61 @@ class SearchIndexStorageTests(unittest.TestCase):
         self.assertEqual(TeamsSearchIndex.read_owner_fingerprint(destination), owner)
         with self.assertRaises(FileExistsError):
             source.backup_to(destination)
+
+    def test_message_upsert_keeps_full_body_and_applies_only_newer_edits(self):
+        index = TeamsSearchIndex(self.root / "messages.sqlite3")
+        index.upsert_chats([ChatSummary("19:alpha@thread.v2", "Alpha")])
+        formatter = TeamsMessageFormatter()
+
+        def save(content: str, edit_time: str) -> None:
+            index.upsert_messages(
+                "19:alpha@thread.v2",
+                [{
+                    "id": "m1",
+                    "originalarrivaltime": "2026-09-28T10:00:00Z",
+                    "imdisplayname": "Taylor",
+                    "messagetype": "Text",
+                    "content": content,
+                    "properties": {"edittime": edit_time},
+                }],
+                formatter=formatter,
+            )
+
+        save("first version", "2026-09-28T10:01:00Z")
+        save("new edited body " + ("x" * 2_000), "2026-09-28T10:03:00Z")
+        save("stale body", "2026-09-28T10:02:00Z")
+
+        rows = index.query_message_page(
+            "19:alpha@thread.v2", since=None, until=None, before=None, limit=10
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["body"], "new edited body " + ("x" * 2_000))
+        self.assertEqual(rows[0]["edited_at"], "2026-09-28T10:03:00Z")
+
+    def test_soft_delete_is_recorded_without_erasing_last_known_content(self):
+        index = TeamsSearchIndex(self.root / "deleted.sqlite3")
+        formatter = TeamsMessageFormatter()
+        index.upsert_messages(
+            "19:alpha@thread.v2",
+            [{"id": "m1", "originalarrivaltime": "2026-09-28T10:00:00Z", "content": "kept locally"}],
+            formatter=formatter,
+        )
+        index.upsert_messages(
+            "19:alpha@thread.v2",
+            [{
+                "id": "m1",
+                "originalarrivaltime": "2026-09-28T10:00:00Z",
+                "messagetype": "MessageDelete",
+                "content": "",
+                "properties": {"deletetime": "2026-09-28T11:00:00Z"},
+            }],
+            formatter=formatter,
+        )
+
+        row = index.get_message("19:alpha@thread.v2", "m1")
+        self.assertTrue(row["is_deleted"])
+        self.assertEqual(row["deleted_at"], "2026-09-28T11:00:00Z")
+        self.assertEqual(row["body"], "kept locally")
 
 
 if __name__ == "__main__":

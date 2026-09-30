@@ -15,6 +15,7 @@ from teams_exporter.teams_connector import (
     TeamsConnector,
 )
 from teams_exporter.teams_message_formatter import TeamsMessageFormatter
+from teams_exporter.teams_service import TeamsService
 
 
 class TeamsExporter:
@@ -24,9 +25,11 @@ class TeamsExporter:
         self,
         connector: TeamsConnector,
         formatter: TeamsMessageFormatter,
+        service: TeamsService | None = None,
     ) -> None:
         self.connector = connector
         self.formatter = formatter
+        self.service = service
 
     def export_chat(
         self,
@@ -65,18 +68,41 @@ class TeamsExporter:
                         }
                     )
 
-            for page in self.connector.iter_message_pages(
-                chat.id,
-                limit=limit,
-                since=since,
-                until=until,
-                cancel_event=cancel_event,
-                progress_callback=report_fetch,
-            ):
+            if self.service is not None:
+                self.service.fetch_chat_to_archive(
+                    chat.id,
+                    since=since,
+                    until=until,
+                    cancel_event=cancel_event,
+                    progress_callback=report_fetch,
+                )
+                message_count, cutoff = self.service.archived_export_message_count(
+                    chat.id,
+                    since=since,
+                    until=until,
+                    limit=limit,
+                )
+                pages = self.service.iter_archived_export_pages(
+                    chat.id,
+                    since=since,
+                    until=until,
+                    from_key=cutoff,
+                )
+            else:
+                pages = self.connector.iter_message_pages(
+                    chat.id,
+                    limit=limit,
+                    since=since,
+                    until=until,
+                    cancel_event=cancel_event,
+                    progress_callback=report_fetch,
+                )
+            for page in pages:
                 page_offsets.append(spool.tell())
                 spool.write(json.dumps(page, ensure_ascii=False, separators=(",", ":")))
                 spool.write("\n")
-                message_count += len(page)
+                if self.service is None:
+                    message_count += len(page)
 
             coverage = getattr(self.connector, "last_message_read_coverage", {})
             missing_timestamps = int(
@@ -113,7 +139,12 @@ class TeamsExporter:
                     output.write("\n".join(lines) + "\n\n")
 
                     written = 0
-                    for offset in reversed(page_offsets):
+                    replay_offsets = (
+                        page_offsets
+                        if self.service is not None
+                        else reversed(page_offsets)
+                    )
+                    for offset in replay_offsets:
                         self._raise_if_cancelled(cancel_event)
                         spool.seek(offset)
                         page = json.loads(spool.readline())
@@ -128,7 +159,9 @@ class TeamsExporter:
                                 else "unknown time"
                             )
                             output.write(f"[{timestamp_text}] {self._author(message)}\n")
-                            body = self.formatter.format_message(message)
+                            body = message.get("__formatted_body")
+                            if not isinstance(body, str):
+                                body = self.formatter.format_message(message)
                             output.write(body if body else "[No text content]")
                             output.write("\n")
                             written += 1
