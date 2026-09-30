@@ -1463,6 +1463,18 @@ These should not be assumed to use the same token as the Chat Service.
 
 The exact request/response contracts remain unverified.
 
+## Read-only feasibility check — 2026-09-29
+
+The app-owned MSAL cache could silently obtain a token for the Substrate search resource. The token was held only in memory for the probe and was not written to disk, printed, or included in these notes.
+
+The `teams-api` implementation sends chat suggestions to the endpoint above with a bearer token and JSON body containing an `EntityRequests` entry with `EntityType: "Chat"`, a `Query.QueryString`, and `Size`; the outer object includes `Scenario.Name: "peoplepicker.newChat"` and `AppName: "Microsoft Teams"`. Its implementation describes suggestion fields such as `Name`, `ThreadId`, `ThreadType`, `MatchingMembers`, and `ChatMembers`. This appears to be a new-chat people-picker/search suggestion flow, not a verified complete search over all existing conversations.
+
+A read-only direct request using the cached Substrate token and that request shape returned HTTP 400 with a generic service error. It did not return a usable chat result. This does not establish whether a different Teams build, tenant policy, request context, or token acquisition path would succeed; the route is not used by the exporter.
+
+The signed-in Teams Web UI did return keyword search results spanning messages and chats in a visual check. The collected Web bundles contain the `search/api/v2/query` and `searchservice/api/v2/query` route families, plus suggestion routes. The request body, result shape, continuation behavior, supported scope, and token requirements for the message-search routes remain unverified. Route strings and a working UI search alone do not establish that a direct backend call is usable.
+
+Separately, a read-only `GET /v1/threads/{conversationId}/members` request returned nine member records for one live group chat. Their display names were empty in the Chat Service response. The app's existing Middle Tier profile lookup resolved all nine identifiers during the same session. This supports local participant-name indexing after roster retrieval, but it is one sample and does not prove that all member identities resolve.
+
 ---
 
 # AMS / Async Media Service
