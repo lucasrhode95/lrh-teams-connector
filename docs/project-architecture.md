@@ -14,10 +14,10 @@ Both entry points call the same service layer and connector. MCP search and hist
 | `teams_exporter/teams_connector.py` | Authenticates through the app-owned Microsoft token cache and makes Teams service requests. It loads the chat catalog, conversation members, account/profile picture URIs, and message pages; follows opaque continuation links; and implements the message-send request. It contains the assumptions and low-level behavior for the private Teams routes. |
 | `teams_exporter/teams_service.py` | Shared application layer used by MCP and the local page. It validates inputs, pages chat and message results, formats stable records and coverage, manages continuation cursors, and coordinates archive sync/search. Before sending, it validates the live chat ID/name and requires an authorization record; the MCP caller remains responsible for obtaining explicit user consent. |
 | `teams_exporter/teams_message_formatter.py` | Converts Teams message bodies into readable text, including HTML/rich text, delimited mentions, system/deleted-message markers, and attachment or image markers. |
-| `teams_exporter/teams_exporter.py` | Writes formatted conversation messages to plain-text export files. The local page combines these files into a ZIP when multiple chats are selected, or a single text file when combine is selected. |
+| `teams_exporter/teams_exporter.py` | Retrieves full histories page by page, spools message pages to disk, and atomically writes formatted plain-text export files. The local page combines these files into a ZIP when multiple chats are selected, or a single text file when combine is selected. |
 | `teams_exporter/teams_search_index.py` | Stores chats, indexed messages, participant names, sync cursors, and coverage in a persistent SQLite database with FTS5 search. It isolates archives by signed-in account and provides a consistent backup operation. |
 | `teams_exporter/mcp_server.py` | Exposes the shared service through the standard MCP protocol over `stdio`. It provides typed input/output schemas and bounded result pages; an MCP client starts the process on demand. |
-| `teams_exporter/local_server.py` | Serves the simple conversation-selection and export page over loopback HTTP. It handles the browser API requests and downloads while leaving Teams retrieval and formatting in shared application code. |
+| `teams_exporter/local_server.py` | Serves the simple conversation-selection and export page over loopback HTTP. It manages background export jobs and their progress, cancellation, and downloads while leaving Teams retrieval and formatting in shared application code. |
 | `teams_exporter/__main__.py` | Command-line entry point for interactive sign-in, the local page, and archive backup. |
 | `teams_exporter/__init__.py` | Python package marker. The application imports concrete modules directly rather than re-exporting a combined public API. |
 | `teams_exporter/*.svg` | Local fallback icons for a person, group chat, and call when Teams does not provide a usable picture URI. |
@@ -44,7 +44,7 @@ MCP timestamps and text export timestamps use UTC. The local page displays activ
 
 The page is intended as a straightforward extraction tool for a person who wants to download Teams conversation history without asking an AI to search, summarize, classify, or produce the export. The person selects one or more chats, optionally chooses an inclusive date range and per-chat message count, and downloads the result. Clearing the date range and leaving the message count empty mean unlimited.
 
-The local page requires the Python app to be running and uses its signed-in Teams connector. It is not an offline copy of Teams and cannot retrieve new messages while disconnected. Its purpose is to avoid requiring an AI product or a separate Teams-export application for a manual export.
+The local page requires the Python app to be running and uses its signed-in Teams connector. It is not an offline copy of Teams and cannot retrieve new messages while disconnected. Its purpose is to avoid requiring an AI product or a separate Teams-export application for a manual export. Large exports report page/message progress and can be cancelled between service requests; cancellation waits for an in-flight request to return or time out.
 
 ## Data flow
 

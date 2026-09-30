@@ -2017,6 +2017,29 @@ that the browser's requests were intercepted.
   tests. Its `endTime` behavior did not reliably include ordinary messages at
   the tested upper-bound edge, so no server-side `until` filter is enabled.
 
+An additional focused history probe on 2026-09-30 used the user's selected
+Fiona direct conversation with the existing app-owned session. The exact
+display name resolved to one catalog entry; its two-member roster did not expose
+the supplied email address, so the conversation identity was matched by that
+unique display name rather than independently by email. No chat ID or message
+content was retained in this note.
+
+- An initial `pageSize=10` request returned ten messages and an opaque
+  `backwardLink`. Following that exact link returned ten more messages, even
+  when the caller passed `page_size=3` to the local page-reading method. The
+  continuation URL itself retained `pageSize=10`; continuation links therefore
+  control their own page-size behavior and must remain opaque.
+- The two sampled pages had no overlapping message IDs. Each page was sorted
+  oldest to newest by the client, and every timestamp on the continuation page
+  was no newer than the first page. This is evidence for that conversation and
+  sample only; it does not supersede the overlap observed in other history
+  probes or establish ordering for system-event types generally.
+- A request whose `startTime` exactly matched the first page's oldest message
+  included that message. An exact `until` boundary was also included by the
+  client-side filter, while messages newer than it were excluded from the
+  returned page. The outgoing message request contained no `endTime` parameter.
+- No transient retry was needed during this sample.
+
 Teams Web bundles collected on 2026-09-28 contain GraphQL operations for
 `messages(convId, replyChainId, cursor)` with `pageInfo.hasNextPage` and
 `fetchRecentMessagesAfter(convId, replyChainId, lastMessageId, count)`. These

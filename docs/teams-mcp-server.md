@@ -46,9 +46,9 @@ The MCP input and output schemas are typed, results have bounded page sizes, and
   fallback names. `catalog_complete` applies only to `catalog_scope`; it is not
   a guarantee that every hidden or tenant-specific Teams object is exposed.
 - `search_chats`: find chats by participant-name substring in locally indexed rosters. Use `sync_search_index` first; coverage reports missing rosters and unresolved names.
-- `get_messages`: retrieve a bounded page for a conversation ID with optional inclusive timestamp bounds. Each message body is capped at 1,200 characters; `content_truncated` and `content_char_count` make clipping explicit. Follow `next_cursor` for older messages.
+- `get_messages`: retrieve a bounded page for a conversation ID with optional inclusive timestamp bounds. Each message body is capped at 1,200 characters; `content_truncated` and `content_char_count` make clipping explicit. Coverage includes `retry_count_this_call`; follow `next_cursor` for older messages.
 - `search_messages`: search locally indexed content with exact token-phrase or all-terms matching, optionally scoped to one chat and/or date range. Follow `next_cursor` for more matches.
-- `sync_search_index`: fetch bounded history and participant rosters into the persistent local archive. Calls continue saved history links and rotate fairly across chats. Completed histories refresh their newest page while preserving older messages.
+- `sync_search_index`: fetch bounded history and participant rosters into the persistent local archive. Calls continue saved history links and rotate fairly across chats. Completed histories refresh their newest page while preserving older messages. Each chat result reports `message_retries_this_call`.
 - `get_search_index_status`: inspect per-chat history and roster progress and requested-range coverage.
 - `send_message`: send plain text to an existing chat ID. The tool verifies the live chat ID and expected chat name before making one POST attempt. Its required `user_confirmation` argument records the user's authorization for the recipient and content.
 
@@ -63,6 +63,10 @@ The message request is attempted once and is not retried automatically. If a con
 The service does not use a verified server-side message search route. Search results cover only messages already in the local FTS5 index. An empty result with incomplete coverage is not evidence that Teams has no matching message. Participant search likewise depends on the rosters successfully indexed.
 
 Message timestamps returned through MCP are normalized to UTC. The local page formats chat activity times in the browser's local timezone; text export timestamps are UTC.
+
+Read-only GET/HEAD requests retry transient HTTP 408, 429, selected 5xx responses, and transport failures up to four total attempts per request. Retry-After and exponential delays are capped. A new request/page receives a fresh retry budget; write requests are never retried. The MCP retry fields count additional attempts for the current page request or per-chat sync call.
+
+The local page runs exports as background jobs and reports the current chat, phase, pages, messages, and retries. Cancellation is checked between pages, during retry delays, while formatting, and while combining files. It cannot abort a network read already in progress; the request completes or reaches its 30-second timeout before cancellation is observed. Export message bodies are spooled to disk and the final file is published only after successful completion. A normal export does not yet have a durable resume checkpoint after a process restart or exhausted retry budget; index-sync pages have their own persisted progress.
 
 ## Configure an MCP client
 
