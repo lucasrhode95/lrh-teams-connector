@@ -160,7 +160,9 @@ class TeamsExporter:
                             )
                             output.write(f"[{timestamp_text}] {self._author(message)}\n")
                             body = message.get("__formatted_body")
-                            if not isinstance(body, str):
+                            if isinstance(body, str):
+                                body = self.formatter.sanitize_preformatted_body(body)
+                            else:
                                 body = self.formatter.format_message(message)
                             output.write(body if body else "[No text content]")
                             output.write("\n")

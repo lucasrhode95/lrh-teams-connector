@@ -1107,6 +1107,101 @@ class TeamsMessageFormatterTests(unittest.TestCase):
         self.assertIn("https://files.example.test/report", text)
         self.assertIn("[Image: https://images.example.test/one.png]", text)
 
+    def test_swift_uriobject_decodes_adaptive_card_text_without_layout_or_payload(self):
+        card = {
+            "type": "message/card",
+            "summary": "Approval required",
+            "attachments": [{
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": {
+                    "type": "AdaptiveCard",
+                    "version": "1.5",
+                    "body": [{
+                        "type": "Container",
+                        "spacing": "large",
+                        "items": [
+                            {"type": "TextBlock", "text": "Approval required", "weight": "bolder"},
+                            {"type": "TextBlock", "text": "Please review this request."},
+                            {"type": "FactSet", "facts": [
+                                {"title": "Case ID", "value": "CASE-2048"},
+                                {"title": "Status", "value": "Pending"},
+                            ]},
+                            {"type": "Image", "url": "https://images.example.test/layout.png", "altText": "Equipment diagram"},
+                        ],
+                    }],
+                    "actions": [{
+                        "type": "Action.OpenUrl",
+                        "title": "Open case",
+                        "url": "https://example.test/cases/CASE-2048",
+                    }],
+                    "padding": "large",
+                },
+            }],
+            "entities": [{"type": "layout-only", "value": "discard this metadata"}],
+        }
+        encoded = base64.b64encode(json.dumps(card).encode("utf-8")).decode("ascii")
+        content = (
+            '<p>Before card</p>'
+            '<URIObject type="SWIFT.1" url_thumbnail="https://images.example.test/preview.png">'
+            '<a href="https://cards.example.test">Card preview</a>'
+            '<Title>Approval required</Title>'
+            f'<Swift b64="{encoded}" />'
+            '<Description />'
+            '</URIObject><p>After card</p>'
+        )
+
+        text = self.formatter.format_message({
+            "messageType": "RichText/Html",
+            "content": content,
+        })
+
+        self.assertIn("Before card", text)
+        self.assertIn("After card", text)
+        self.assertIn("Please review this request.", text)
+        self.assertIn("Case ID: CASE-2048", text)
+        self.assertIn("Status: Pending", text)
+        self.assertIn("Equipment diagram", text)
+        self.assertIn("Open case", text)
+        self.assertIn("https://example.test/cases/CASE-2048", text)
+        self.assertIn("https://cards.example.test", text)
+        self.assertEqual(text.count("Approval required"), 1)
+        self.assertNotIn(encoded, text)
+        self.assertNotIn("discard this metadata", text)
+        self.assertNotIn("padding", text)
+        self.assertNotIn("weight", text)
+        self.assertNotIn("url_thumbnail", text)
+
+    def test_malformed_swift_payload_keeps_visible_uriobject_text_only(self):
+        text = self.formatter.format_message({
+            "messageType": "RichText/Html",
+            "content": (
+                '<URIObject type="SWIFT.1"><Title>Visible fallback</Title>'
+                '<Swift b64="not-valid-base64-%" /><Description />'
+                '</URIObject>'
+            ),
+        })
+
+        self.assertIn("Visible fallback", text)
+        self.assertNotIn("not-valid-base64", text)
+        self.assertNotIn("b64", text)
+
+    def test_plain_message_content_with_swift_uriobject_is_sanitized(self):
+        card = {
+            "type": "AdaptiveCard",
+            "body": [{"type": "TextBlock", "text": "Decoded plain message"}],
+        }
+        encoded = base64.b64encode(json.dumps(card).encode("utf-8")).decode("ascii")
+        text = self.formatter.format_message({
+            "messageType": "Text",
+            "content": (
+                '<URIObject type="SWIFT.1"><Title>Visible plain text</Title>'
+                f'<Swift b64="{encoded}" /></URIObject>'
+            ),
+        })
+        self.assertIn("Visible plain text", text)
+        self.assertIn("Decoded plain message", text)
+        self.assertNotIn(encoded, text)
+
     def test_deleted_message_gets_a_system_marker(self):
         self.assertEqual(
             self.formatter.format_message({"messagetype": "MessageDelete"}),
@@ -1169,6 +1264,39 @@ class TeamsExporterTests(unittest.TestCase):
             self.assertEqual(
                 connector.calls[0], ("19:fake", None, since, until)
             )
+        finally:
+            destination.unlink(missing_ok=True)
+
+    def test_export_sanitizes_swift_payloads_in_preformatted_archived_bodies(self):
+        card = {
+            "type": "AdaptiveCard",
+            "body": [{"type": "TextBlock", "text": "Archived card text"}],
+        }
+        encoded = base64.b64encode(json.dumps(card).encode("utf-8")).decode("ascii")
+
+        class ArchivedConnector:
+            last_message_read_coverage = {"retry_count": 0}
+
+            def iter_message_pages(self, *_args, **_kwargs):
+                yield [{
+                    "id": "archived-card",
+                    "originalarrivaltime": "2026-09-28T10:00:00Z",
+                    "imdisplayname": "Taylor",
+                    "__formatted_body": (
+                        '<URIObject type="SWIFT.1"><Title>Visible archived text</Title>'
+                        f'<Swift b64="{encoded}" /></URIObject>'
+                    ),
+                }]
+
+        destination = Path(self.id().replace(".", "_") + ".txt")
+        try:
+            exporter = TeamsExporter(ArchivedConnector(), TeamsMessageFormatter())
+            exporter.export_chat(ChatSummary("19:archive", "Archive"), destination)
+            content = destination.read_text(encoding="utf-8-sig")
+            self.assertIn("Visible archived text", content)
+            self.assertIn("Archived card text", content)
+            self.assertNotIn(encoded, content)
+            self.assertNotIn("b64", content)
         finally:
             destination.unlink(missing_ok=True)
 
