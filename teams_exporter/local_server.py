@@ -35,7 +35,7 @@ LOCAL_IMAGE_ASSETS = {
     "chat-call.svg",
     "chat-group.svg",
 }
-LOCAL_STATIC_ASSETS = {"app.css", "app.js"}
+LOCAL_STATIC_ASSETS = {"app.css", "app.js", "auth.js"}
 TEMPLATE_DIRECTORY = Path(__file__).parent / "templates"
 STATIC_DIRECTORY = Path(__file__).parent / "static"
 TEMPLATE_ENVIRONMENT = Environment(
@@ -266,13 +266,41 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
         parsed_target = urlsplit(self.path)
         path = parsed_target.path
         if path == "/":
-            body = TEMPLATE_ENVIRONMENT.get_template("chats.html").render().encode("utf-8")
-            self.send_response(200)
-            self._security_headers("text/html; charset=utf-8")
-            self.send_header("Content-Security-Policy", "default-src 'none'; img-src 'self' https:; style-src 'self'; script-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self._send_html_template("auth.html")
+            return
+        if path == "/chats":
+            try:
+                self.server.service.check_authentication()
+            except AuthenticationRequiredError:
+                self.send_response(303)
+                self._security_headers("text/plain; charset=utf-8")
+                self.send_header("Location", "/")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            except Exception:
+                self.send_response(303)
+                self._security_headers("text/plain; charset=utf-8")
+                self.send_header("Location", "/")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self._send_html_template("chats.html")
+            return
+        if path == "/api/auth-status":
+            try:
+                self.server.service.check_authentication()
+                self._send_json(200, {"authenticated": True})
+            except AuthenticationRequiredError as exc:
+                self._send_json(401, self._error("authentication_required", str(exc)))
+            except Exception as exc:
+                self._send_json(
+                    502,
+                    self._error(
+                        "connection_failed",
+                        f"Could not confirm the Teams sign-in: {TeamsService._safe_error(exc)}",
+                    ),
+                )
             return
         if path.startswith("/static/"):
             asset_name = path.removeprefix("/static/")
@@ -353,6 +381,19 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         self._send_json(404, self._error("not_found", "Not found."))
+
+    def _send_html_template(self, template_name: str) -> None:
+        body = TEMPLATE_ENVIRONMENT.get_template(template_name).render().encode("utf-8")
+        self.send_response(200)
+        self._security_headers("text/html; charset=utf-8")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'none'; img-src 'self'; style-src 'self'; script-src 'self'; "
+            "connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+        )
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_POST(self) -> None:
         if not self._request_is_local():

@@ -46,11 +46,13 @@ class ServiceConnector(TeamsConnector):
         self.page_calls = []
         self.retry_counts = []
         self.login_calls = 0
+        self.interactive_login_values = []
         self.auth_required = False
         self.sent_messages = []
 
     def login(self, *, interactive=True):
         self.login_calls += 1
+        self.interactive_login_values.append(interactive)
         if self.auth_required:
             raise AuthenticationRequiredError("sign-in needed")
 
@@ -135,6 +137,24 @@ class TeamsServiceTests(unittest.TestCase):
         self.connector = ServiceConnector()
         index = TeamsSearchIndex(Path(self.temp.name) / "search.sqlite3")
         self.service = TeamsService(connector=self.connector, index=index)
+
+    def test_authentication_check_does_not_load_chat_catalog(self):
+        result = self.service.check_authentication()
+
+        self.assertEqual(result, {"authenticated": True})
+        self.assertEqual(self.connector.login_calls, 1)
+        self.assertEqual(self.connector.interactive_login_values, [False])
+        self.assertIsNone(self.service._chats_cache)
+
+    def test_authentication_check_uses_noninteractive_sign_in(self):
+        self.connector.auth_required = True
+
+        with self.assertRaises(AuthenticationRequiredError):
+            self.service.check_authentication()
+
+        self.assertEqual(self.connector.login_calls, 1)
+        self.assertEqual(self.connector.interactive_login_values, [False])
+        self.assertEqual(self.connector.page_calls, [])
 
     def test_list_chats_returns_bounded_pages_and_coverage(self):
         self.connector.catalog_coverage = ChatCatalogCoverage(

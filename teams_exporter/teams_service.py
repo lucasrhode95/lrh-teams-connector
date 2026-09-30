@@ -104,6 +104,11 @@ class TeamsService:
         if not self._index_is_injected:
             self._select_index_for_account(self.connector.get_user_metadata())
 
+    def check_authentication(self) -> dict[str, Any]:
+        """Confirm the saved Teams session without loading the chat catalog."""
+        self._ensure_session()
+        return {"authenticated": True}
+
     def _select_index_for_account(self, metadata: dict[str, Any]) -> None:
         if self._index_is_injected:
             return

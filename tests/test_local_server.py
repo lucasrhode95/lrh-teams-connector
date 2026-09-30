@@ -136,6 +136,11 @@ class ExportService:
             "next_page_token": f"offset:{next_offset}" if next_offset < len(self.chats) else None,
         }
 
+    def check_authentication(self):
+        if self.auth_required:
+            raise AuthenticationRequiredError("Teams sign-in is required.")
+        return {"authenticated": True}
+
     def _messages_in_range(self, conversation_id, *, since=None, until=None):
         messages = list(self.archive.get(conversation_id, {}).values())
         if since is not None:
@@ -275,13 +280,23 @@ class LocalTeamsServerTests(unittest.TestCase):
         self.service.database_notice = "An unverified archive was preserved."
         page_status, page_headers, page = self.request("GET", "/")
         self.assertEqual(page_status, 200)
+        self.assertIn(b"Checking Teams sign-in", page)
+        self.assertIn(b"/static/auth.js", page)
+        self.assertIn(b"Confirming the saved Teams sign-in", page)
+        self.assertEqual(self.service.list_calls, [])
+
+        status, _, body = self.request("GET", "/api/auth-status")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"authenticated": True})
+        chats_status, page_headers, page = self.request("GET", "/chats")
+        self.assertEqual(chats_status, 200)
         self.assertIn(b"Download conversations", page)
         self.assertIn(b'href="/static/app.css"', page)
         self.assertIn(b'src="/static/app.js"', page)
         self.assertIn(b"Loading conversations", page)
         self.assertIn(b"class=\"spinner\"", page)
         self.assertEqual(page_headers["Content-Security-Policy"].split(";", 1)[0], "default-src 'none'")
-        self.assertIn("img-src 'self' https:", page_headers["Content-Security-Policy"])
+        self.assertIn("img-src 'self'", page_headers["Content-Security-Policy"])
         self.assertIn("style-src 'self'; script-src 'self'", page_headers["Content-Security-Policy"])
 
         status, headers, body = self.request("GET", "/api/chats")
@@ -295,6 +310,24 @@ class LocalTeamsServerTests(unittest.TestCase):
         self.assertEqual(result["account"]["picture_url"], "https://images.example.test/taylor.png")
         self.assertEqual(headers["Cache-Control"], "no-store")
         self.assertEqual(self.service.list_calls, [(100, None, True)])
+
+    def test_auth_landing_explains_sign_in_and_gates_the_chat_page(self):
+        self.service.auth_required = True
+        status, _, body = self.request("GET", "/api/auth-status")
+        self.assertEqual(status, 401)
+        self.assertEqual(json.loads(body)["error"]["code"], "authentication_required")
+
+        status, headers, body = self.request("GET", "/chats")
+        self.assertEqual(status, 303)
+        self.assertEqual(headers["Location"], "/")
+        self.assertEqual(body, b"")
+
+        status, _, body = self.request("GET", "/")
+        self.assertIn(b"Checking Teams sign-in", body)
+        self.assertIn(b"/static/auth.js", body)
+        status, _, body = self.request("GET", "/static/auth.js")
+        self.assertEqual(status, 200)
+        self.assertIn(b"python -m teams_exporter auth", body)
 
     def test_local_avatar_assets_are_available_and_unknown_assets_are_rejected(self):
         for asset in ("avatar-person.svg", "chat-call.svg", "chat-group.svg"):
