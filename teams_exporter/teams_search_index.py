@@ -183,6 +183,7 @@ class TeamsSearchIndex:
                         conversation_id TEXT NOT NULL,
                         message_id TEXT NOT NULL,
                         author TEXT NOT NULL,
+                        author_id TEXT,
                         sent_at TEXT,
                         body TEXT NOT NULL,
                         message_type TEXT,
@@ -238,6 +239,12 @@ class TeamsSearchIndex:
                     );
                     """
                 )
+                message_columns = {
+                    row["name"]
+                    for row in connection.execute("PRAGMA table_info(messages)")
+                }
+                if "author_id" not in message_columns:
+                    connection.execute("ALTER TABLE messages ADD COLUMN author_id TEXT")
                 if self.owner_fingerprint is not None:
                     connection.execute(
                         "INSERT OR IGNORE INTO index_metadata(key, value) VALUES (?, ?)",
@@ -382,6 +389,7 @@ class TeamsSearchIndex:
             for message in messages:
                 body = formatter.format_message(message)
                 author = self._message_author(message, body)
+                author_id = TeamsConnector._message_author_id(message)
                 timestamp = self._timestamp(TeamsConnector._message_datetime(message))
                 message_id = message.get("id")
                 if message_id is None:
@@ -408,18 +416,36 @@ class TeamsSearchIndex:
                         "DELETE FROM message_fts WHERE rowid = ?", (existing["row_id"],)
                     )
                     connection.execute(
-                        """UPDATE messages SET author = ?, sent_at = ?, body = ?,
-                           message_type = ?, indexed_at = ? WHERE row_id = ?""",
-                        (author, timestamp, body, message_type, now, existing["row_id"]),
+                        """UPDATE messages SET author = ?, author_id = COALESCE(?, author_id),
+                           sent_at = ?, body = ?, message_type = ?, indexed_at = ?
+                           WHERE row_id = ?""",
+                        (
+                            author,
+                            author_id,
+                            timestamp,
+                            body,
+                            message_type,
+                            now,
+                            existing["row_id"],
+                        ),
                     )
                     row_id = existing["row_id"]
                 else:
                     cursor = connection.execute(
                         """INSERT INTO messages (
-                            conversation_id, message_id, author, sent_at, body,
-                            message_type, indexed_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                        (conversation_id, message_id, author, timestamp, body, message_type, now),
+                            conversation_id, message_id, author, author_id, sent_at,
+                            body, message_type, indexed_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (
+                            conversation_id,
+                            message_id,
+                            author,
+                            author_id,
+                            timestamp,
+                            body,
+                            message_type,
+                            now,
+                        ),
                     )
                     row_id = cursor.lastrowid
                     stored += 1
@@ -559,7 +585,7 @@ class TeamsSearchIndex:
                 parameters,
             ).fetchone()[0]
             rows = connection.execute(
-                f"""SELECT m.conversation_id, m.message_id, m.author,
+                f"""SELECT m.conversation_id, m.message_id, m.author, m.author_id,
                            m.sent_at, m.body, m.message_type, c.display_name
                     FROM message_fts JOIN messages m ON m.row_id = message_fts.rowid
                     JOIN chats c ON c.conversation_id = m.conversation_id

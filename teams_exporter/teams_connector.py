@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ class ChatSummary:
     unread: bool | None = None
     chat_type: str | None = None
     avatar_url: str | None = None
+    is_self_chat: bool = False
 
 
 class AuthenticationRequiredError(RuntimeError):
@@ -41,6 +43,15 @@ class TeamsConnector:
     CSA_STARTUP_URL = (
         "https://teams.microsoft.com/api/csa/api/v1/teams/users/me"
         "?isPrefetch=false&enableMembershipSummary=true"
+    )
+    SELF_CHAT_ID = "48:notes"
+    _MESSAGE_AUTHOR_MRI = re.compile(
+        r"(?i)(?<![a-z0-9])(8:orgid:[0-9a-f]{8}-[0-9a-f]{4}-"
+        r"[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?![0-9a-f])"
+    )
+    _OBJECT_ID = re.compile(
+        r"(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+        r"[0-9a-f]{4}-[0-9a-f]{12}"
     )
     MESSAGE_PAGE_SIZE = 100
     REQUEST_TIMEOUT_SECONDS = 30
@@ -254,6 +265,7 @@ class TeamsConnector:
                     unread=unread,
                     chat_type=chat_type,
                     avatar_url=self._avatar_url_from_rows(chat),
+                    is_self_chat=chat_id == self.SELF_CHAT_ID,
                 )
             )
         self._resolve_untitled_one_to_one_names(
@@ -270,15 +282,50 @@ class TeamsConnector:
                     continue
                 normalized.append(self._summarize_chat_service_conversation(row))
                 known_ids.add(conversation_id)
+        self._ensure_self_chat(normalized)
         # The visible Teams chat rows matched descending last-message time in a live
         # comparison better than the raw CSA array. Stable sorting retains the
         # CSA order when two chats have the same timestamp.
         oldest = datetime.min.replace(tzinfo=timezone.utc)
         return sorted(
             normalized,
-            key=lambda chat: chat.last_message_at or oldest,
+            key=lambda chat: (
+                chat.is_self_chat,
+                chat.last_message_at or oldest,
+            ),
             reverse=True,
         )
+
+    def _ensure_self_chat(self, chats: list[ChatSummary]) -> None:
+        """Include Teams' special notes-to-self thread in the normalized catalog."""
+        chat = next(
+            (item for item in chats if item.id == self.SELF_CHAT_ID),
+            None,
+        )
+        if chat is None:
+            chat = ChatSummary(
+                id=self.SELF_CHAT_ID,
+                display_name=self._self_chat_display_name(),
+                chat_type="chat",
+                is_self_chat=True,
+            )
+            chats.append(chat)
+        chat.is_self_chat = True
+        chat.display_name = self._self_chat_display_name()
+        chat.avatar_url = chat.avatar_url or self.get_profile_picture_uri(
+            display_name=self._self_chat_display_name().removesuffix(" (You)")
+        )
+
+    def _self_chat_display_name(self) -> str:
+        name = self._spaces_claims.get("name") or self._spaces_claims.get(
+            "preferred_username"
+        )
+        if not isinstance(name, str) or not name.strip():
+            return "Notes to self"
+        label = name.strip()
+        if not label.casefold().endswith(" (you)"):
+            label += " (You)"
+        return label
 
     def _list_chat_service_conversations(self) -> list[dict[str, Any]]:
         """Follow Chat Service pages to complete a partial CSA catalog."""
@@ -363,6 +410,7 @@ class TeamsConnector:
             avatar_url=self._avatar_url_from_rows(
                 conversation, properties, thread_properties
             ),
+            is_self_chat=conversation_id == self.SELF_CHAT_ID,
         )
 
     def _add_one_to_one_profile_picture_uris(
@@ -555,6 +603,40 @@ class TeamsConnector:
         if identifier.lower().startswith("8:orgid:"):
             identifier = identifier[len("8:orgid:") :]
         return identifier.lower() or None
+
+    @classmethod
+    def _message_author_id(cls, message: dict[str, Any]) -> str | None:
+        """Return a canonical sender MRI/object ID when the message exposes one."""
+        id_keys = ("id", "mri", "objectId", "userId", "userMri")
+        sender_keys = (
+            "from",
+            "fromId",
+            "fromMri",
+            "sender",
+            "senderId",
+            "senderMri",
+            "authorId",
+            "authorMri",
+            "userId",
+            "userMri",
+        )
+        for key in sender_keys:
+            value = message.get(key)
+            candidates = (
+                [value.get(nested_key) for nested_key in id_keys]
+                if isinstance(value, dict)
+                else [value]
+            )
+            for candidate in candidates:
+                if not isinstance(candidate, str) or not candidate.strip():
+                    continue
+                normalized = candidate.strip()
+                mri_match = cls._MESSAGE_AUTHOR_MRI.search(normalized)
+                if mri_match:
+                    return mri_match.group(1).lower()
+                if cls._OBJECT_ID.fullmatch(normalized):
+                    return f"8:orgid:{normalized.lower()}"
+        return None
 
     def get_messages(
         self,

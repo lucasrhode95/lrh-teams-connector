@@ -268,6 +268,10 @@ class TeamsService:
         items, total = self.index.search_chats_by_participant(
             query, limit=page_size, offset=offset
         )
+        for item in items:
+            item["is_self_chat"] = (
+                item.get("id") == TeamsConnector.SELF_CHAT_ID
+            )
         coverage = self.index.participant_coverage()
         complete = coverage["catalog_chats"] == coverage["complete_rosters"]
         next_offset = offset + len(items)
@@ -370,12 +374,25 @@ class TeamsService:
 
         chats = self._get_chats()
         chat = next((item for item in chats if item.id == conversation_id), None)
+        account_user_id = self._current_account_user_id()
         return {
             "conversation": {
                 "id": conversation_id,
                 "name": chat.display_name if chat else conversation_id,
+                "is_self_chat": (
+                    chat.is_self_chat
+                    if chat is not None
+                    else conversation_id == TeamsConnector.SELF_CHAT_ID
+                ),
             },
-            "items": [self._message_record(conversation_id, message) for message in unique],
+            "items": [
+                self._message_record(
+                    conversation_id,
+                    message,
+                    account_user_id=account_user_id,
+                )
+                for message in unique
+            ],
             "next_cursor": next_cursor,
             "database_notice": self.database_notice,
             "coverage": {
@@ -439,7 +456,15 @@ class TeamsService:
             limit=result_limit,
             offset=offset,
         )
-        items = [self._indexed_message_record(row, query) for row in rows]
+        account_user_id = self._current_account_user_id()
+        items = [
+            self._indexed_message_record(
+                row,
+                query,
+                account_user_id=account_user_id,
+            )
+            for row in rows
+        ]
         next_offset = offset + len(items)
         next_cursor = None
         if next_offset < total:
@@ -732,13 +757,24 @@ class TeamsService:
         self,
         conversation_id: str,
         message: dict[str, Any],
+        *,
+        account_user_id: str | None = None,
     ) -> dict[str, Any]:
         body = self.formatter.format_message(message)
         timestamp = self.connector._message_datetime(message)
+        author_id = TeamsConnector._message_author_id(message)
+        account_identifier = TeamsConnector._profile_identifier(account_user_id)
+        author_identifier = TeamsConnector._profile_identifier(author_id)
         return {
             "id": str(message["id"]) if message.get("id") is not None else None,
             "conversation_id": conversation_id,
             "author": self._message_author(message, body),
+            "author_id": author_id,
+            "is_self": (
+                author_identifier == account_identifier
+                if author_identifier and account_identifier
+                else None
+            ),
             "timestamp": self._timestamp(timestamp),
             "content": body[:MAX_MESSAGE_CONTENT_CHARS],
             "content_truncated": len(body) > MAX_MESSAGE_CONTENT_CHARS,
@@ -746,16 +782,47 @@ class TeamsService:
             "message_type": self._first_string(message, "messagetype", "messageType"),
         }
 
-    def _indexed_message_record(self, row: dict[str, Any], query: str) -> dict[str, Any]:
+    def _indexed_message_record(
+        self,
+        row: dict[str, Any],
+        query: str,
+        *,
+        account_user_id: str | None = None,
+    ) -> dict[str, Any]:
+        author_id = row.get("author_id")
+        author_identifier = TeamsConnector._profile_identifier(author_id)
+        account_identifier = TeamsConnector._profile_identifier(account_user_id)
         return {
             "id": row["message_id"],
             "conversation_id": row["conversation_id"],
             "chat_name": row["display_name"],
             "author": row["author"],
+            "author_id": author_id,
+            "is_self": (
+                author_identifier == account_identifier
+                if author_identifier and account_identifier
+                else None
+            ),
             "timestamp": row["sent_at"],
             "excerpt": self._excerpt(row["body"], query),
             "message_type": row["message_type"],
         }
+
+    def _current_account_user_id(self) -> str | None:
+        for method_name in ("get_user_metadata", "get_cached_account_metadata"):
+            get_metadata = getattr(self.connector, method_name, None)
+            if not callable(get_metadata):
+                continue
+            try:
+                metadata = get_metadata()
+            except RuntimeError:
+                continue
+            if not isinstance(metadata, dict):
+                continue
+            user_id = metadata.get("user_id")
+            if isinstance(user_id, str) and user_id.strip():
+                return user_id.strip()
+        return None
 
     @staticmethod
     def _participant_record(member: dict[str, Any]) -> dict[str, str | None]:
@@ -774,6 +841,7 @@ class TeamsService:
             "id": chat.id,
             "name": chat.display_name,
             "chat_type": chat.chat_type,
+            "is_self_chat": chat.is_self_chat,
             "last_message_at": TeamsService._timestamp(chat.last_message_at),
             "last_message_preview": chat.last_message_preview,
             "unread": chat.unread,

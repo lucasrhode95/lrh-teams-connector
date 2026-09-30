@@ -746,6 +746,7 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
             display_name=record["name"],
             last_message_at=parsed,
             chat_type=record.get("chat_type"),
+            is_self_chat=bool(record.get("is_self_chat")),
         )
 
     @staticmethod

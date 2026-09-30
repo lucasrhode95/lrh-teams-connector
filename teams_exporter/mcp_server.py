@@ -24,6 +24,9 @@ SERVER_INSTRUCTIONS = (
     "Message and participant searches query a persistent local SQLite index. "
     "Use sync_search_index to fetch bounded history batches and get_search_index_status "
     "to inspect indexed coverage. Search results explicitly report incomplete coverage. "
+    "list_chats includes the signed-in user's self chat and marks it with is_self_chat. "
+    "get_messages returns author_id and is_self when sender identity is available; "
+    "use is_self rather than matching display names to identify the user's own messages. "
     "Search cursors expire after 30 minutes and are lost when this server process restarts."
 )
 
@@ -44,6 +47,7 @@ class ChatRecord(TypedDict):
     id: str
     name: str
     chat_type: str | None
+    is_self_chat: bool
     last_message_at: str | None
     last_message_preview: str | None
     unread: bool | None
@@ -96,12 +100,15 @@ class SearchChatsResult(TypedDict):
 class ConversationRecord(TypedDict):
     id: str
     name: str
+    is_self_chat: bool
 
 
 class MessageRecord(TypedDict):
     id: str | None
     conversation_id: str
     author: str
+    author_id: str | None
+    is_self: bool | None
     timestamp: str | None
     content: str
     content_truncated: bool
@@ -143,6 +150,8 @@ class SearchMessageRecord(TypedDict):
     conversation_id: str
     chat_name: str
     author: str
+    author_id: str | None
+    is_self: bool | None
     timestamp: str | None
     excerpt: str
     message_type: str | None
@@ -292,6 +301,8 @@ def create_mcp_server(service: TeamsService | None = None) -> FastMCP:
     ) -> ListChatsResult:
         """List Teams chats by most recent activity, using bounded pages.
 
+        The signed-in user's self chat is included and marked with is_self_chat.
+
         Args:
             page_size: Number of chats to return (1–100).
             page_token: Token returned by the preceding page, if any.
@@ -336,12 +347,13 @@ def create_mcp_server(service: TeamsService | None = None) -> FastMCP:
     ) -> GetMessagesResult:
         """Read one bounded history page, optionally within an inclusive date range.
 
-        Results are ordered oldest to newest within each page. The continuation
-        cursor fetches older history. Date values must be ISO-8601 timestamps
-        with a timezone; pass the same bounds when continuing.
+        Results include author_id and is_self when the service exposes a stable
+        sender identity. Results are ordered oldest to newest within each page.
+        The continuation cursor fetches older history. Date values must be
+        ISO-8601 timestamps with a timezone; pass the same bounds when continuing.
 
         Args:
-            conversation_id: Stable Teams conversation ID from list_chats/search results.
+            conversation_id: Stable Teams conversation ID from list_chats/search results. The self chat uses 48:notes.
             page_size: Number of messages requested (1–50). Each message body is capped at 1,200 characters and has a truncation flag.
             since: Inclusive lower timestamp, or null for the oldest available history.
             until: Inclusive upper timestamp, or null for no upper bound.
