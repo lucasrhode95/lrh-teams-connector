@@ -152,6 +152,54 @@ class SearchIndexStorageTests(unittest.TestCase):
         self.assertEqual(row["deleted_at"], "2026-09-28T11:00:00Z")
         self.assertEqual(row["body"], "kept locally")
 
+    def test_chat_delta_and_sync_token_persist_together(self):
+        path = self.root / "catalog.sqlite3"
+        index = TeamsSearchIndex(path)
+        formatter = TeamsMessageFormatter()
+        index.upsert_chat_updates(
+            [ChatSummary(
+                "19:channel@thread.tacv2",
+                "Analytics · General",
+                chat_type="channel",
+                avatar_url="https://images.example.test/channel.png",
+            )],
+            "sanitized-sync-token",
+        )
+        index.upsert_messages(
+            "19:channel@thread.tacv2",
+            [{
+                "id": "m1",
+                "originalarrivaltime": "2026-09-28T10:00:00Z",
+                "imdisplayname": "Taylor",
+                "messagetype": "Text",
+                "content": "retained channel message",
+            }],
+            formatter=formatter,
+        )
+        index.upsert_chat_updates([], "sanitized-next-sync-token", deleted_ids=["19:channel@thread.tacv2"])
+
+        reopened = TeamsSearchIndex(path)
+        catalog = reopened.chat_catalog()
+
+        self.assertEqual(reopened.get_chat_sync_token(), "sanitized-next-sync-token")
+        self.assertEqual(catalog, [])
+        self.assertEqual(
+            reopened.get_message("19:channel@thread.tacv2", "m1")["body"],
+            "retained channel message",
+        )
+
+    def test_invalid_sync_token_does_not_write_a_partial_catalog(self):
+        index = TeamsSearchIndex(self.root / "catalog-invalid.sqlite3")
+
+        with self.assertRaises(ValueError):
+            index.upsert_chat_updates(
+                [ChatSummary("19:alpha@thread.v2", "Alpha")],
+                " ",
+            )
+
+        self.assertEqual(index.chat_catalog(), [])
+        self.assertIsNone(index.get_chat_sync_token())
+
 
 if __name__ == "__main__":
     unittest.main()

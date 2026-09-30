@@ -50,6 +50,8 @@ class ServiceConnector(TeamsConnector):
         self.auth_required = False
         self.sent_messages = []
         self.profile_picture_calls = []
+        self.sync_calls = []
+        self.next_sync_token = "sanitized-sync-1"
 
     def login(self, *, interactive=True):
         self.login_calls += 1
@@ -64,6 +66,14 @@ class ServiceConnector(TeamsConnector):
 
     def list_chats(self):
         return self.chats
+
+    def get_chat_updates(self, sync_token=None):
+        self.sync_calls.append(sync_token)
+        return {
+            "chats": list(self.chats),
+            "sync_token": self.next_sync_token,
+            "is_bootstrap": sync_token is None,
+        }
 
     def get_messages_page(
         self,
@@ -208,6 +218,44 @@ class TeamsServiceTests(unittest.TestCase):
         self.assertEqual(first["coverage"]["fallback_chats_added"], 1)
         self.assertEqual(first["coverage"]["unclassified_service_rows_excluded"], 1)
         self.assertEqual(self.service.index.counts()["catalog_chats"], 2)
+
+    def test_refresh_merges_csa_delta_persists_cursor_and_reads_cache_without_network(self):
+        self.service.list_chats(page_size=10)
+        self.assertEqual(self.connector.sync_calls, [None])
+        self.assertEqual(self.service.index.get_chat_sync_token(), "sanitized-sync-1")
+
+        self.connector.chats = [
+            ChatSummary(
+                "19:alpha@thread.v2",
+                "Alpha renamed",
+                chat_type="group",
+            ),
+            ChatSummary(
+                "19:channel@thread.tacv2",
+                "Analytics · General",
+                chat_type="channel",
+                avatar_url="https://images.example.test/channel.png",
+            ),
+        ]
+        self.connector.next_sync_token = "sanitized-sync-2"
+        refreshed = self.service.list_chats(page_size=10, refresh=True)
+
+        self.assertEqual(self.connector.sync_calls, [None, "sanitized-sync-1"])
+        self.assertEqual(self.service.index.get_chat_sync_token(), "sanitized-sync-2")
+        self.assertEqual(
+            {item["id"] for item in refreshed["items"]},
+            {"19:alpha@thread.v2", "19:beta@thread.v2", "19:channel@thread.tacv2"},
+        )
+        self.assertEqual(
+            next(item["name"] for item in refreshed["items"] if item["id"].startswith("19:alpha")),
+            "Alpha renamed",
+        )
+
+        cached = self.service.list_cached_chats(page_size=10, include_avatar_uris=True)
+        self.assertEqual(self.connector.sync_calls, [None, "sanitized-sync-1"])
+        channel = next(item for item in cached["items"] if item["chat_type"] == "channel")
+        self.assertEqual(channel["avatar_url"], "https://images.example.test/channel.png")
+        self.assertEqual(cached["coverage"]["source"], "local SQLite cache")
 
     def test_avatar_uris_are_opt_in_for_local_ui_and_omitted_by_default(self):
         default_result = self.service.list_chats(page_size=1)

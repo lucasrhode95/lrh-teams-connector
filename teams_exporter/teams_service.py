@@ -194,10 +194,62 @@ class TeamsService:
 
     def _get_chats(self, *, refresh: bool = False) -> list[ChatSummary]:
         if refresh or self._chats_cache is None or time.monotonic() >= self._chats_cache_until:
-            self._chats_cache = self.connector.list_chats()
-            self.index.upsert_chats(self._chats_cache)
+            sync_updates = getattr(self.connector, "get_chat_updates", None)
+            if callable(sync_updates):
+                update = sync_updates(self.index.get_chat_sync_token())
+                chats = update.get("chats")
+                sync_token = update.get("sync_token")
+                if not isinstance(chats, list):
+                    raise RuntimeError("Teams returned an invalid chat update list.")
+                deleted_ids = update.get("deleted_ids", [])
+                if not isinstance(deleted_ids, list):
+                    raise RuntimeError("Teams returned an invalid deleted chat list.")
+                self.index.upsert_chat_updates(
+                    chats,
+                    sync_token,
+                    deleted_ids=deleted_ids,
+                )
+                self._chats_cache = [
+                    self._chat_from_record(record)
+                    for record in self.index.chat_catalog()
+                ]
+            else:
+                self._chats_cache = self.connector.list_chats()
+                self.index.upsert_chats(self._chats_cache)
             self._chats_cache_until = time.monotonic() + 60
         return self._chats_cache
+
+    def list_cached_chats(
+        self,
+        *,
+        page_size: int = MAX_LIST_PAGE_SIZE,
+        page_token: str | None = None,
+        include_avatar_uris: bool = False,
+    ) -> dict[str, Any]:
+        """Read the durable SQLite catalog without calling Teams."""
+        self._validate_int("page_size", page_size, 1, MAX_LIST_PAGE_SIZE)
+        if not isinstance(include_avatar_uris, bool):
+            raise ValueError("include_avatar_uris must be a boolean.")
+        self._ensure_session()
+        chats = [self._chat_from_record(record) for record in self.index.chat_catalog()]
+        offset = self._decode_offset(page_token)
+        page = chats[offset : offset + page_size]
+        next_offset = offset + len(page)
+        items = [self._chat_record(chat) for chat in page]
+        if include_avatar_uris:
+            for item, chat in zip(items, page):
+                item["avatar_url"] = chat.avatar_url
+        return {
+            "items": items,
+            "next_page_token": f"offset:{next_offset}" if next_offset < len(chats) else None,
+            "database_notice": self.database_notice,
+            "coverage": {
+                **self._catalog_coverage_record(),
+                "total_chats": len(chats),
+                "returned_this_page": len(page),
+                "source": "local SQLite cache",
+            },
+        }
 
     def _catalog_coverage_record(self) -> dict[str, Any]:
         coverage = getattr(self.connector, "catalog_coverage", None)
@@ -1623,6 +1675,29 @@ class TeamsService:
             "last_message_preview": chat.last_message_preview,
             "unread": chat.unread,
         }
+
+    @staticmethod
+    def _chat_from_record(record: dict[str, Any]) -> ChatSummary:
+        timestamp = record.get("last_message_at")
+        parsed = None
+        if isinstance(timestamp, str) and timestamp:
+            try:
+                parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            except ValueError:
+                parsed = None
+        unread = record.get("unread")
+        if isinstance(unread, int) and not isinstance(unread, bool):
+            unread = bool(unread)
+        return ChatSummary(
+            id=str(record["conversation_id"]),
+            display_name=str(record["display_name"]),
+            last_message_at=parsed,
+            last_message_preview=record.get("last_message_preview"),
+            unread=unread if isinstance(unread, bool) else None,
+            chat_type=record.get("chat_type"),
+            avatar_url=record.get("avatar_url"),
+            is_self_chat=str(record["conversation_id"]) == TeamsConnector.SELF_CHAT_ID,
+        )
 
     @staticmethod
     def _first_string(data: dict[str, Any], *keys: str) -> str | None:

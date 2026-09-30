@@ -119,6 +119,12 @@ class _TransientTeamsRequestError(RuntimeError):
         self.retry_after = retry_after
 
 
+class _TeamsHttpError(RuntimeError):
+    def __init__(self, message: str, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 class _MiddleTierRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Follow picture redirects only when they stay on the token's host."""
 
@@ -155,10 +161,11 @@ class TeamsConnector:
         "https://teams.microsoft.com/api/csa/api/v1/teams/users/me"
         "?isPrefetch=false&enableMembershipSummary=true"
     )
+    CSA_UPDATES_URL = "https://teams.microsoft.com/api/csa/api/v1/teams/users/me/updates"
     SELF_CHAT_ID = "48:notes"
     CHAT_CATALOG_SCOPE = (
-        "CSA chat and meeting entries plus the known notes-to-self chat; "
-        "team/channel entities and Teams service streams are excluded."
+        "CSA chat, meeting, and channel entries plus the known notes-to-self chat; "
+        "Teams service streams are excluded."
     )
     CHAT_SERVICE_CHAT_TYPES = {"chat", "onetoonechat", "meeting"}
     CHAT_SERVICE_NON_CHAT_TYPES = {
@@ -468,6 +475,220 @@ class TeamsConnector:
             and self._middle_tier_url
         )
 
+    def get_chat_updates(self, sync_token: str | None = None) -> dict[str, Any]:
+        """Fetch a CSA bootstrap or delta and normalize chat and channel rows.
+
+        A rejected/expired continuation is recovered by requesting a fresh
+        snapshot from the same updates route without the sync-token header.
+        The caller persists the returned token atomically with the rows.
+        """
+        self._require_logged_in()
+        if sync_token is not None and (not isinstance(sync_token, str) or not sync_token):
+            raise ValueError("sync_token must be a non-empty string or None.")
+
+        used_sync_token = sync_token is not None
+        try:
+            payload = self._request_csa(
+                self.CSA_UPDATES_URL,
+                sync_token=sync_token,
+            )
+            if used_sync_token and self._sync_token_expired(payload):
+                payload = self._request_csa(self.CSA_UPDATES_URL)
+                used_sync_token = False
+        except _TeamsHttpError as exc:
+            if not used_sync_token or exc.status_code not in {400, 410}:
+                raise
+            payload = self._request_csa(self.CSA_UPDATES_URL)
+            used_sync_token = False
+
+        metadata = self._mapping(payload.get("metadata"))
+        sync_token_value = metadata.get("syncToken") or metadata.get("forwardSyncToken")
+        if not isinstance(sync_token_value, str) or not sync_token_value.strip():
+            raise RuntimeError("Teams chat updates did not include a sync token.")
+
+        raw_chats = payload.get("chats", [])
+        raw_channels = payload.get("channels", [])
+        if not isinstance(raw_chats, list) or not isinstance(raw_channels, list):
+            raise RuntimeError("Unexpected Teams chat update response: chat or channel rows are invalid.")
+
+        normalized: list[ChatSummary] = []
+        deleted_ids: list[str] = []
+        for row in raw_chats:
+            if isinstance(row, dict) and self._optional_bool(row.get("isDeleted")) is True:
+                deleted_ids.append(self._csa_update_conversation_id(row, "chat"))
+                continue
+            summary = self._summarize_csa_update_row(row, entity_type="chat")
+            if summary is not None:
+                normalized.append(summary)
+        for row in raw_channels:
+            if isinstance(row, dict) and self._optional_bool(row.get("isDeleted")) is True:
+                deleted_ids.append(self._csa_update_conversation_id(row, "channel"))
+                continue
+            summary = self._summarize_csa_update_row(row, entity_type="channel")
+            if summary is not None:
+                normalized.append(summary)
+
+        if not used_sync_token:
+            # A bootstrap snapshot is expected to be complete. If CSA explicitly
+            # says otherwise, preserve the established paginated catalog fallback.
+            is_partial = metadata.get("isPartialData") is True or metadata.get("hasMoreChats") is True
+            if is_partial:
+                known_ids = {chat.id for chat in normalized}
+                for chat in self.list_chats():
+                    if chat.id not in known_ids:
+                        normalized.append(chat)
+                        known_ids.add(chat.id)
+            self._ensure_self_chat(normalized)
+
+        self._resolve_untitled_one_to_one_names(
+            raw_chats,
+            normalized,
+            payload.get("users"),
+        )
+        self._add_one_to_one_profile_picture_uris(raw_chats, normalized)
+
+        oldest = datetime.min.replace(tzinfo=timezone.utc)
+        ordered = sorted(
+            normalized,
+            key=lambda chat: chat.last_message_at or oldest,
+            reverse=True,
+        )
+        self.catalog_coverage = ChatCatalogCoverage(
+            catalog_complete=(
+                metadata.get("isPartialData") is False
+                and metadata.get("hasMoreChats") is False
+            ),
+            catalog_source="CSA updates" + (" bootstrap" if not used_sync_token else " delta"),
+            catalog_scope=self.CHAT_CATALOG_SCOPE,
+            csa_reported_partial=(
+                True
+                if metadata.get("isPartialData") is True or metadata.get("hasMoreChats") is True
+                else False
+                if metadata.get("isPartialData") is False and metadata.get("hasMoreChats") is False
+                else None
+            ),
+        )
+        return {
+            "chats": ordered,
+            "sync_token": sync_token_value.strip(),
+            "is_bootstrap": not used_sync_token,
+            "deleted_ids": deleted_ids,
+        }
+
+    @staticmethod
+    def _csa_update_conversation_id(row: dict[str, Any], entity_type: str) -> str:
+        keys = (
+            ("conversationId", "threadId", "id", "chatId")
+            if entity_type == "channel"
+            else ("id",)
+        )
+        conversation_id = next(
+            (
+                value
+                for key in keys
+                if isinstance((value := row.get(key)), str) and value
+            ),
+            None,
+        )
+        if not isinstance(conversation_id, str):
+            raise RuntimeError("Unexpected Teams chat update response: a deleted row has no conversation ID.")
+        return conversation_id
+
+    @classmethod
+    def _summarize_csa_update_row(
+        cls,
+        row: Any,
+        *,
+        entity_type: str,
+    ) -> ChatSummary | None:
+        if not isinstance(row, dict):
+            raise RuntimeError("Unexpected Teams chat update response: a row is not an object.")
+        if cls._optional_bool(row.get("isDeleted")) is True:
+            return None
+        channel = cls._mapping(row.get("channel"))
+        team = cls._mapping(row.get("team"))
+        if entity_type == "channel":
+            chat_id = next(
+                (
+                    value
+                    for key in ("conversationId", "threadId", "id", "chatId")
+                    if isinstance((value := row.get(key)), str) and value
+                ),
+                None,
+            )
+        else:
+            chat_id = row.get("id")
+        if not isinstance(chat_id, str) or not chat_id:
+            raise RuntimeError("Unexpected Teams chat update response: a row has no conversation ID.")
+
+        last_message = cls._mapping(row.get("lastMessage"))
+        title = (
+            row.get("title")
+            or row.get("displayName")
+            or row.get("topic")
+            or row.get("name")
+            or channel.get("title")
+            or channel.get("displayName")
+            or channel.get("name")
+            or chat_id
+        )
+        team_title = row.get("teamName") or team.get("title") or team.get("displayName") or team.get("name")
+        if entity_type == "channel" and isinstance(team_title, str) and team_title.strip():
+            if str(title).casefold() != team_title.strip().casefold():
+                title = f"{team_title.strip()} · {title}"
+
+        content = last_message.get("content")
+        preview = content.strip()[:240] if isinstance(content, str) else None
+        is_read = cls._optional_bool(row.get("isRead"))
+        unread = None if is_read is None else not is_read
+        if unread is None:
+            unread = cls._optional_bool(row.get("isUnread"))
+        raw_chat_type = row.get("chatType")
+        if entity_type == "channel":
+            chat_type = "channel"
+        elif isinstance(raw_chat_type, str) and raw_chat_type:
+            chat_type = raw_chat_type
+        elif row.get("isOneOnOne") is True:
+            chat_type = "oneOnOne"
+        else:
+            chat_type = "chat"
+
+        avatar_url = cls._avatar_url_from_rows(
+            row,
+            channel,
+            team,
+            cls._mapping(row.get("threadProperties")),
+            cls._mapping(row.get("image")),
+            cls._mapping(row.get("avatar")),
+        )
+        return ChatSummary(
+            id=chat_id,
+            display_name=str(title),
+            last_message_at=cls._message_datetime(last_message),
+            last_message_preview=preview,
+            unread=unread,
+            chat_type=chat_type,
+            avatar_url=avatar_url,
+            is_self_chat=chat_id == cls.SELF_CHAT_ID,
+        )
+
+    @staticmethod
+    def _sync_token_expired(payload: dict[str, Any]) -> bool:
+        error = TeamsConnector._mapping(payload.get("error"))
+        values = (
+            error.get("code"),
+            error.get("type"),
+            error.get("message"),
+            payload.get("errorCode"),
+            payload.get("code"),
+            payload.get("type"),
+        )
+        return any(
+            isinstance(value, str)
+            and "synctokenexpired" in re.sub(r"[^a-z]", "", value.casefold())
+            for value in values
+        )
+
     def list_chats(self) -> list[ChatSummary]:
         """Return a normalized chat catalog in Teams-visible activity order."""
         self._require_logged_in()
@@ -578,10 +799,7 @@ class TeamsConnector:
         oldest = datetime.min.replace(tzinfo=timezone.utc)
         ordered = sorted(
             normalized,
-            key=lambda chat: (
-                chat.is_self_chat,
-                chat.last_message_at or oldest,
-            ),
+            key=lambda chat: chat.last_message_at or oldest,
             reverse=True,
         )
 
@@ -1521,20 +1739,25 @@ class TeamsConnector:
         url: str,
         method: str = "GET",
         body: Any | None = None,
+        *,
+        sync_token: str | None = None,
     ) -> dict[str, Any]:
         self._require_logged_in()
         host = urlsplit(url)
         if host.scheme != "https" or host.netloc.lower() != "teams.microsoft.com":
             raise RuntimeError("Refusing a CSA request outside teams.microsoft.com.")
+        headers = {
+            "Authorization": f"Bearer {self._csa_access_token}",
+            "x-skypetoken": str(self._skype_token),
+            "Accept": "application/json",
+        }
+        if sync_token is not None:
+            headers["x-ms-synctoken"] = sync_token
         return self._http_json(
             url,
             method=method,
             body=body,
-            headers={
-                "Authorization": f"Bearer {self._csa_access_token}",
-                "x-skypetoken": str(self._skype_token),
-                "Accept": "application/json",
-            },
+            headers=headers,
         )
 
     def _request_teams_authz(self) -> dict[str, Any]:
@@ -1604,8 +1827,9 @@ class TeamsConnector:
                     )
                     exc.close()
                 else:
-                    error = RuntimeError(
-                        f"Teams request failed with HTTP {exc.code} for {location}."
+                    error = _TeamsHttpError(
+                        f"Teams request failed with HTTP {exc.code} for {location}.",
+                        exc.code,
                     )
                     exc.close()
                     raise error from exc
