@@ -657,11 +657,19 @@ class LocalTeamsHTTPServer(ThreadingHTTPServer):
 
     daemon_threads = True
     block_on_close = False
+    # HTTPServer enables SO_REUSEADDR by default. On Windows that can let two
+    # copies of this local app bind the same loopback port, so requests may
+    # reach an older process even after the user starts a new one.
+    allow_reuse_address = False
     JOB_RETENTION_SECONDS = 60 * 60
 
     def __init__(self, server_address: tuple[str, int], service: TeamsService | None = None):
         self.service = service or TeamsService()
-        self.exporter = TeamsExporter(self.service.connector, self.service.formatter)
+        self.exporter = TeamsExporter(
+            self.service.connector,
+            self.service.formatter,
+            service=self.service,
+        )
         self._jobs: dict[str, DownloadJob] = {}
         self._jobs_lock = threading.RLock()
         super().__init__(server_address, LocalTeamsRequestHandler)
@@ -730,12 +738,12 @@ class LocalTeamsHTTPServer(ThreadingHTTPServer):
                 job.status = "cancelled"
                 job.finished_at = time_module.monotonic()
             shutil.rmtree(artifact_directory, ignore_errors=True)
-        except AuthenticationRequiredError:
+        except AuthenticationRequiredError as exc:
             with self._jobs_lock:
                 job.status = "failed"
                 job.error = {
                     "code": "authentication_required",
-                    "message": "Teams sign-in is required.",
+                    "message": str(exc),
                 }
                 job.finished_at = time_module.monotonic()
             shutil.rmtree(artifact_directory, ignore_errors=True)
@@ -750,7 +758,7 @@ class LocalTeamsHTTPServer(ThreadingHTTPServer):
                 job.status = "failed"
                 job.error = {
                     "code": "export_failed",
-                    "message": f"Teams export failed ({type(exc).__name__}).",
+                    "message": f"Teams export failed: {TeamsService._safe_error(exc)}",
                 }
                 job.finished_at = time_module.monotonic()
             shutil.rmtree(artifact_directory, ignore_errors=True)
@@ -952,12 +960,15 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(409, self._error("export_busy", str(exc)))
                 return
             self._send_json(202, {"request_id": job.request_id, "status": job.status})
-        except AuthenticationRequiredError:
-            self._send_json(401, self._error("authentication_required", "Teams sign-in is required."))
+        except AuthenticationRequiredError as exc:
+            self._send_json(401, self._error("authentication_required", str(exc)))
         except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
             self._send_json(400, self._error("invalid_request", str(exc)))
         except Exception as exc:
-            self._send_json(502, self._error("export_failed", f"Teams export failed ({type(exc).__name__})."))
+            self._send_json(
+                502,
+                self._error("export_failed", f"Teams export failed: {TeamsService._safe_error(exc)}"),
+            )
 
     def log_message(self, format: str, *args: Any) -> None:
         # Request bodies and chat names can contain private information; keep the
@@ -994,10 +1005,13 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
                     "account": getattr(self.server.service, "account_info", None),
                 },
             )
-        except AuthenticationRequiredError:
-            self._send_json(401, self._error("authentication_required", "Teams sign-in is required."))
+        except AuthenticationRequiredError as exc:
+            self._send_json(401, self._error("authentication_required", str(exc)))
         except Exception as exc:
-            self._send_json(502, self._error("catalog_failed", f"Could not load chats ({type(exc).__name__})."))
+            self._send_json(
+                502,
+                self._error("catalog_failed", f"Could not load chats: {TeamsService._safe_error(exc)}"),
+            )
 
     def _prepare_download(self, payload: Any) -> DownloadRequest:
         if not isinstance(payload, dict):

@@ -113,6 +113,7 @@ class ExportService:
             ChatSummary("19:beta@thread.v2", "Beta", chat_type="oneOnOne"),
         ]
         self.list_calls = []
+        self.archive: dict[str, dict[str, dict]] = {}
 
     def list_chats(self, *, page_size=50, page_token=None, include_avatar_uris=False):
         if self.auth_required:
@@ -135,6 +136,86 @@ class ExportService:
             "next_page_token": f"offset:{next_offset}" if next_offset < len(self.chats) else None,
         }
 
+    def _messages_in_range(self, conversation_id, *, since=None, until=None):
+        messages = list(self.archive.get(conversation_id, {}).values())
+        if since is not None:
+            messages = [
+                message
+                for message in messages
+                if TeamsConnector._message_datetime(message) >= since
+            ]
+        if until is not None:
+            messages = [
+                message
+                for message in messages
+                if TeamsConnector._message_datetime(message) <= until
+            ]
+        return sorted(
+            messages,
+            key=lambda message: (
+                TeamsConnector._message_datetime(message),
+                message["id"],
+            ),
+        )
+
+    def fetch_chat_to_archive(
+        self,
+        conversation_id,
+        *,
+        since=None,
+        until=None,
+        cancel_event=None,
+        progress_callback=None,
+    ):
+        archived = self.archive.setdefault(conversation_id, {})
+        for page in self.connector.iter_message_pages(
+            conversation_id,
+            limit=None,
+            since=since,
+            until=until,
+            cancel_event=cancel_event,
+            progress_callback=progress_callback,
+        ):
+            for message in page:
+                archived[message["id"]] = {
+                    **message,
+                    "__formatted_body": self.formatter.format_message(message),
+                }
+
+    def archived_export_message_count(
+        self, conversation_id, *, since=None, until=None, limit=None
+    ):
+        messages = self._messages_in_range(conversation_id, since=since, until=until)
+        if limit is not None:
+            messages = messages[-limit:]
+        cutoff = None
+        if limit is not None and messages:
+            first = messages[0]
+            timestamp = TeamsConnector._message_datetime(first).isoformat().replace(
+                "+00:00", "Z"
+            )
+            cutoff = (timestamp, first["id"])
+        return len(messages), cutoff
+
+    def iter_archived_export_pages(
+        self, conversation_id, *, since=None, until=None, from_key=None, page_size=500
+    ):
+        messages = self._messages_in_range(conversation_id, since=since, until=until)
+        if from_key is not None:
+            messages = [
+                message
+                for message in messages
+                if (
+                    TeamsConnector._message_datetime(message)
+                    .isoformat()
+                    .replace("+00:00", "Z"),
+                    message["id"],
+                )
+                >= from_key
+            ]
+        for offset in range(0, len(messages), page_size):
+            yield messages[offset : offset + page_size]
+
 
 class LocalTeamsServerTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -148,6 +229,13 @@ class LocalTeamsServerTests(unittest.TestCase):
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=2)
+
+    def test_duplicate_server_instance_cannot_share_the_same_port(self):
+        with self.assertRaises(OSError):
+            LocalTeamsHTTPServer(
+                ("127.0.0.1", self.server.server_port),
+                self.service,
+            )
 
     def request(self, method: str, path: str, payload=None, extra_headers=None):
         connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=5)
@@ -251,7 +339,7 @@ class LocalTeamsServerTests(unittest.TestCase):
         self.assertNotIn("Alpha earlier", text)
         self.assertNotIn("Before the date", text)
         chat_id, limit, since, until = self.service.connector.calls[-1]
-        self.assertEqual((chat_id, limit, until), ("19:alpha@thread.v2", 1, None))
+        self.assertEqual((chat_id, limit, until), ("19:alpha@thread.v2", None, None))
         self.assertEqual(since.date().isoformat(), "2026-09-28")
         self.assertIsNotNone(since.utcoffset())
 
