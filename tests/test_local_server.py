@@ -117,6 +117,8 @@ class ExportService:
             ChatSummary("19:beta@thread.v2", "Beta", chat_type="oneOnOne"),
         ]
         self.list_calls = []
+        self.refresh_calls = []
+        self.cached_list_calls = []
         self.archive: dict[str, dict[str, dict]] = {}
         self.picture_calls = []
         self.auth_checks = 0
@@ -127,10 +129,12 @@ class ExportService:
     def has_recent_connection(self):
         return self.connection_recent
 
-    def list_chats(self, *, page_size=50, page_token=None, include_avatar_uris=False):
+    def list_chats(self, *, page_size=50, page_token=None, include_avatar_uris=False, refresh=False):
         if self.auth_required:
             raise AuthenticationRequiredError("not signed in")
         self.list_calls.append((page_size, page_token, include_avatar_uris))
+        if refresh:
+            self.refresh_calls.append(True)
         offset = int(page_token.split(":")[1]) if page_token else 0
         selected = self.chats[offset : offset + page_size]
         next_offset = offset + len(selected)
@@ -147,6 +151,14 @@ class ExportService:
             ],
             "next_page_token": f"offset:{next_offset}" if next_offset < len(self.chats) else None,
         }
+
+    def list_cached_chats(self, *, page_size=50, page_token=None, include_avatar_uris=False):
+        self.cached_list_calls.append((page_size, page_token, include_avatar_uris))
+        return self.list_chats(
+            page_size=page_size,
+            page_token=page_token,
+            include_avatar_uris=include_avatar_uris,
+        )
 
     def check_authentication(self):
         self.auth_checks += 1
@@ -348,6 +360,19 @@ class LocalTeamsServerTests(unittest.TestCase):
         self.assertEqual(image_headers["Cache-Control"], "no-store")
         self.assertEqual(image_body, b"sanitized-test-image")
         self.assertEqual(self.service.picture_calls, ["https://images.example.test/alpha.png"])
+
+    def test_chat_refresh_endpoint_forwards_refresh_and_exposes_sqlite_catalog(self):
+        status, _, body = self.request("GET", "/api/chats?refresh=true")
+        self.assertEqual(status, 200)
+        self.assertEqual(self.service.refresh_calls, [True])
+        self.assertEqual(json.loads(body)["source"], "teams")
+
+        status, _, body = self.request("GET", "/api/cached-chats")
+        self.assertEqual(status, 200)
+        result = json.loads(body)
+        self.assertEqual(result["source"], "cache")
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(self.service.cached_list_calls, [(100, None, True)])
 
     def test_auth_landing_explains_sign_in_and_gates_the_chat_page(self):
         self.service.auth_required = True

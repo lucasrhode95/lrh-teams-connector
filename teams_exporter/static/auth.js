@@ -19,7 +19,7 @@ async function checkAuthentication() {
     errorText.hidden = false;
     retryButton.hidden = false;
     if (response.status === 401 && result.error?.code === 'authentication_required') {
-      errorText.innerHTML = 'Teams sign-in is required. In a terminal opened in the project folder, run <code>python -m teams_exporter auth</code>, complete Microsoft sign-in, then reload this page.';
+      errorText.innerHTML = 'Teams sign-in is required. In a terminal opened in the project folder, run <code>python -m teams_exporter auth</code>, complete Microsoft sign-in, then reload this page. Microsoft may ask you to confirm with MFA more than once because this app requests access to multiple Teams services and your organization can apply separate verification rules.';
       return;
     }
     errorText.textContent = result.error?.message || 'The sign-in check failed. Try again.';

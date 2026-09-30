@@ -362,7 +362,11 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         if path == "/api/chats":
-            self._list_chats()
+            refresh_value = parse_qs(parsed_target.query, keep_blank_values=True).get("refresh", [""])[0]
+            self._list_chats(refresh=refresh_value.casefold() in {"1", "true", "yes"})
+            return
+        if path == "/api/cached-chats":
+            self._list_chats(cached=True)
             return
         if path == "/api/download-status":
             request_id = self._query_request_id(parsed_target.query)
@@ -441,6 +445,7 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
         return path in {
             "/chats",
             "/api/chats",
+            "/api/cached-chats",
             "/api/download-status",
             "/api/download-file",
         } or path.startswith("/api/profile-picture/")
@@ -545,16 +550,22 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
         # simple local server quiet rather than writing access logs by default.
         return
 
-    def _list_chats(self) -> None:
+    def _list_chats(self, *, refresh: bool = False, cached: bool = False) -> None:
         try:
             chats: list[dict[str, Any]] = []
             page_token = None
             seen_tokens: set[str] = set()
             while True:
-                result = self.server.service.list_chats(
+                list_method = (
+                    self.server.service.list_cached_chats
+                    if cached
+                    else self.server.service.list_chats
+                )
+                result = list_method(
                     page_size=100,
                     page_token=page_token,
                     include_avatar_uris=True,
+                    **({"refresh": True} if refresh and not cached and page_token is None else {}),
                 )
                 chats.extend(result["items"])
                 if len(chats) > MAX_CHAT_CATALOG_SIZE:
@@ -587,6 +598,7 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
                     "count": len(chats),
                     "database_notice": getattr(self.server.service, "database_notice", None),
                     "account": account_payload,
+                    "source": "cache" if cached else "teams",
                 },
             )
         except AuthenticationRequiredError as exc:
