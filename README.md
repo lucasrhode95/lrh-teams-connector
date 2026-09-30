@@ -8,6 +8,12 @@ Sign-in is handled by Microsoft/Teams. The user enters a password and completes 
 
 The backend also exposes read-only operations through a standard MCP server over `stdio`, which MCP clients launch on demand. Search uses a persistent local SQLite archive; results include coverage information for the chats and dates actually indexed. See the [MCP server guide](docs/teams-mcp-server.md) for setup and the [product roadmap](docs/teams-exporter-roadmap.md) for scope and retention limits.
 
+## Local export page
+
+Start the local page from the repository root with `python -m teams_exporter serve` (add `--port 8765` to choose a port), then open `http://127.0.0.1:8765`. It lists conversations in activity order and lets you filter by name, choose a local start date and a per-chat message limit, then download one chat as text or multiple chats as a ZIP. Leave the count blank for all matching messages. The ZIP can contain one text file per chat or one combined text file. The server listens only on loopback; stop it with Ctrl+C.
+
+If the page reports that sign-in is needed, run `python -m teams_exporter auth` from the repository root, finish Microsoft's device-code flow, then refresh the page. The local page and its APIs are read-only and do not mark conversations as read.
+
 ## More information
 
 - [Teams API research](docs/teams-api-research.md)

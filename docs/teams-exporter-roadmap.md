@@ -4,7 +4,7 @@
 
 This file tracks product requirements that remain incomplete or partially implemented, in implementation order. API routes, observed payloads, authentication details, and confidence notes belong in [Teams API research](teams-api-research.md).
 
-The project uses app-owned Microsoft authentication and read-only Teams requests for its current export flow. The current implementation is a local Python backend with no user-facing web UI.
+The project uses app-owned Microsoft authentication and read-only Teams requests for its current export flow. It provides both client-independent MCP access and a small local export page.
 
 ## Current implementation snapshot
 
@@ -20,7 +20,7 @@ The project uses app-owned Microsoft authentication and read-only Teams requests
 | Fixture-based tests for connector, filtering, formatting, and export | Implemented |
 | Client-independent MCP access over stdio | Implemented; see Phase 2 status |
 | Persistent local SQLite/FTS5 message index | Implemented; bounded and resumable, but no scheduled refresh is configured |
-| Local web UI for sign-in, chat selection, filters, and downloads | Not implemented |
+| Local loopback web UI for chat selection, date/count filters, and text/ZIP downloads | Implemented; basic export flow only |
 | CSA delta synchronization for partial/incremental catalogs | Not implemented |
 
 ## Phase 1 — complete the local exporter
@@ -63,28 +63,32 @@ Acceptance:
 
 ### P1.3 Build the local web UI and export flow
 
-**Status:** Not implemented.
+**Status:** Implemented as a small, single-page local interface served by Python's standard-library HTTP server. It lists the activity-ordered catalog, filters the list by chat name, supports one inclusive local-calendar start date and an optional per-chat message limit, exports one selected chat as text, and exports multiple selected chats as a ZIP. The ZIP contains one text file per chat by default, or one combined text file when requested. A blank message limit means all matching messages. The server binds to loopback only. When authentication is missing, it shows the separate interactive sign-in command and can reload the catalog after sign-in. The UI does not mark chats or messages read.
 
 User flow:
 
-1. Open a local page and see the available chats.
+1. Start the local server and open the page to see the available chats.
 2. Select one or more chats.
-3. Choose a message count, a date boundary, or both; provide an explicit unlimited option where useful.
-4. Download the selected exports.
-5. If authentication is missing, show a sign-in action and the device-code instructions. After sign-in completes, let the user reload or refresh the chat list.
+3. Optionally choose a start date and a maximum message count per chat; a blank count means unlimited.
+4. Optionally combine multiple selected chats into one text file inside the ZIP.
+5. Download the selected exports.
+6. If authentication is missing, show the separate sign-in command. After sign-in completes, let the user refresh the chat list.
 
 Requirements:
 
-- Keep authentication, pagination, filtering, and export logic in the backend services.
+- Keep authentication, pagination, filtering, and export logic in shared backend code.
 - Use the existing `TeamsConnector`, `TeamsMessageFormatter`, and `TeamsExporter` APIs.
-- Show progress and clear errors for login, catalog loading, and exports.
+- Show loading state and clear errors for sign-in, catalog loading, and exports.
 - Avoid marking chats read as a side effect of listing, selecting, or exporting.
+- Bind the HTTP server to loopback and keep access tokens out of browser code and responses.
 
 Acceptance:
 
-- A user can complete the flow locally without using a terminal after starting the app.
-- A user can export a selected chat with count-only, date-only, and combined filters.
-- The UI displays an explicit authentication-needed state and can refresh after device-code sign-in.
+- A user can select one chat and download a text export, or select multiple chats and download a ZIP.
+- A multiple-chat ZIP contains per-chat text files by default and one combined text file when concatenation is selected.
+- A user can combine an inclusive start-date filter with an optional per-chat message limit; leaving the limit blank retrieves all matching messages.
+- The UI displays an explicit authentication-needed state and reloads the catalog after the separate device-code sign-in completes.
+- Listing and exporting remain read-only, and the HTTP listener is reachable only on the local machine.
 
 ## Phase 2 — MCP client access and local message archive
 
