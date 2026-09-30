@@ -22,6 +22,8 @@ from teams_exporter.teams_search_index import TeamsSearchIndex
 MAX_LIST_PAGE_SIZE = 100
 MAX_HISTORY_PAGE_SIZE = 50
 MAX_MESSAGE_CONTENT_CHARS = 1_200
+MAX_SEND_MESSAGE_CHARS = 10_000
+MAX_USER_CONFIRMATION_CHARS = 1_000
 MAX_SEARCH_RESULTS = 50
 MAX_SEARCH_CHATS = 100
 MAX_SYNC_MESSAGES = 5_000
@@ -44,7 +46,7 @@ class _Cursor:
 
 
 class TeamsService:
-    """Reusable read-only Teams operations shared by MCP and future interfaces."""
+    """Reusable Teams operations shared by MCP and future interfaces."""
 
     def __init__(
         self,
@@ -170,6 +172,77 @@ class TeamsService:
                 "total_chats": len(chats),
                 "returned_this_page": len(page),
             },
+        }
+
+    def send_message(
+        self,
+        conversation_id: str,
+        expected_chat_name: str,
+        text: str,
+        *,
+        user_confirmation: str,
+    ) -> dict[str, Any]:
+        """Send one message after the caller has recorded explicit user consent.
+
+        ``user_confirmation`` is required as a safeguard against accidental
+        calls, but its presence alone is not authorization. MCP instructions
+        require the caller to obtain consent for this recipient and content.
+        The value is neither logged nor stored.
+        """
+        if not isinstance(conversation_id, str) or not conversation_id.strip():
+            raise ValueError("conversation_id must be a non-empty string.")
+        if not isinstance(expected_chat_name, str) or not expected_chat_name.strip():
+            raise ValueError("expected_chat_name must be a non-empty string.")
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("text must be a non-empty string.")
+        if len(text) > MAX_SEND_MESSAGE_CHARS:
+            raise ValueError(
+                f"text must contain at most {MAX_SEND_MESSAGE_CHARS:,} characters."
+            )
+        if "\x00" in text:
+            raise ValueError("text cannot contain a null character.")
+        if (
+            not isinstance(user_confirmation, str)
+            or not user_confirmation.strip()
+            or len(user_confirmation) > MAX_USER_CONFIRMATION_CHARS
+        ):
+            raise ValueError(
+                "user_confirmation must contain the user's explicit send authorization."
+            )
+
+        self._ensure_session()
+        chat_id = conversation_id.strip()
+        chat = next(
+            (
+                candidate
+                for candidate in self._get_chats(refresh=True)
+                if candidate.id == chat_id
+            ),
+            None,
+        )
+        if chat is None:
+            raise ValueError("conversation_id was not found in the current Teams chat catalog.")
+        actual_name = " ".join(chat.display_name.split()).casefold()
+        expected_name = " ".join(expected_chat_name.split()).casefold()
+        if actual_name != expected_name:
+            raise ValueError(
+                "expected_chat_name does not match the current Teams chat catalog entry."
+            )
+
+        send = getattr(self.connector, "send_message", None)
+        if not callable(send):
+            raise RuntimeError("This Teams connector does not support message sending.")
+        result = send(chat_id, text)
+        if not isinstance(result, dict):
+            raise RuntimeError("Teams did not return a valid message-send result.")
+        return {
+            "conversation_id": chat.id,
+            "chat_name": chat.display_name,
+            "message_id": result.get("message_id"),
+            "client_message_id": result.get("client_message_id"),
+            "sent_at": result.get("sent_at"),
+            "submitted_characters": len(text),
+            "delivery_status": "accepted",
         }
 
     def search_chats(

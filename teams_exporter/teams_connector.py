@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 import os
 import urllib.error
@@ -59,6 +60,7 @@ class TeamsConnector:
         self._chat_service_url: str | None = None
         self._middle_tier_url: str | None = None
         self._auth_sources: dict[str, str] = {}
+        self._last_client_message_id = 0
 
     def login(self, *, interactive: bool = True) -> None:
         """Restore the cached session, optionally starting device-code login.
@@ -784,6 +786,79 @@ class TeamsConnector:
                         break
         return resolved_members
 
+    def send_message(self, conversation_id: str, text: str) -> dict[str, Any]:
+        """Send one plain-text message through the Teams Chat Service.
+
+        The caller must obtain explicit user authorization before calling this
+        method. This method makes one POST attempt and never retries, because a
+        network failure can leave delivery status uncertain.
+        """
+        self._require_logged_in()
+        if not isinstance(conversation_id, str) or not conversation_id.strip():
+            raise ValueError("conversation_id must be a non-empty string.")
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("text must be a non-empty string.")
+        if len(text) > 10_000:
+            raise ValueError("text must contain at most 10,000 characters.")
+        if "\x00" in text:
+            raise ValueError("text cannot contain a null character.")
+
+        now = datetime.now(timezone.utc)
+        candidate_id = self._epoch_milliseconds(now)
+        self._last_client_message_id = max(
+            candidate_id, self._last_client_message_id + 1
+        )
+        client_message_id = str(self._last_client_message_id)
+        normalized_text = text.replace("\r\n", "\n").replace("\r", "\n")
+        escaped_lines = [
+            html.escape(line, quote=False) for line in normalized_text.split("\n")
+        ]
+        content = "<p>" + "<br>".join(escaped_lines) + "</p>"
+        sender_name = (
+            self._spaces_claims.get("name")
+            or self._spaces_claims.get("preferred_username")
+            or ""
+        )
+        if not isinstance(sender_name, str):
+            sender_name = ""
+        payload = {
+            "content": content,
+            "messagetype": "RichText/Html",
+            "contenttype": "text",
+            "clientmessageid": client_message_id,
+            "imdisplayname": sender_name,
+            "properties": {"importance": "", "subject": None},
+        }
+        response = self._request_chat_service(
+            self._messages_url(conversation_id.strip()),
+            method="POST",
+            body=payload,
+        )
+        if response.get("error") or response.get("isError") is True:
+            raise RuntimeError("Teams rejected the message send request.")
+
+        response_message = response.get("message")
+        if not isinstance(response_message, dict):
+            response_message = response
+        message_id = next(
+            (
+                str(response_message[key])
+                for key in ("id", "Id", "messageId", "MessageId")
+                if response_message.get(key) is not None
+            ),
+            None,
+        )
+        sent_at = self._message_datetime(response_message)
+        return {
+            "message_id": message_id,
+            "client_message_id": client_message_id,
+            "sent_at": (
+                sent_at.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                if sent_at
+                else None
+            ),
+        }
+
     @staticmethod
     def _validate_bound(name: str, value: datetime | None) -> datetime | None:
         if value is None:
@@ -926,12 +1001,15 @@ class TeamsConnector:
             raise RuntimeError(
                 f"Teams request failed for {location}: {exc.reason}"
             ) from exc
-        try:
-            payload = json.loads(response_text)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(
-                f"Teams returned a non-JSON response for {self._safe_location(url)}."
-            ) from exc
+        if not response_text.strip():
+            payload = {}
+        else:
+            try:
+                payload = json.loads(response_text)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"Teams returned a non-JSON response for {self._safe_location(url)}."
+                ) from exc
         if not isinstance(payload, dict):
             raise RuntimeError("Teams returned a JSON value that was not an object.")
         return payload
@@ -1056,7 +1134,11 @@ class TeamsConnector:
     @classmethod
     def _message_datetime(cls, message: dict[str, Any]) -> datetime | None:
         for key in (
-            "originalArrivalTime", "originalarrivaltime", "composeTime", "composetime"
+            "OriginalArrivalTime",
+            "originalArrivalTime",
+            "originalarrivaltime",
+            "composeTime",
+            "composetime",
         ):
             value = message.get(key)
             if isinstance(value, datetime):

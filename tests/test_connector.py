@@ -119,6 +119,62 @@ class TeamsConnectorTests(unittest.TestCase):
         )
         self.assertEqual(len(client.requests), 1)
 
+    def test_send_message_posts_escaped_plain_text_with_chat_service_credentials(self):
+        client = StubConnector(
+            [{"id": "sent-message-id", "OriginalArrivalTime": 1790123456789}]
+        )
+        client._spaces_claims["name"] = "Taylor Example"
+
+        result = client.send_message(
+            "19:chat@thread.v2",
+            "Hello <Teams> & friends\nsecond line",
+        )
+
+        url, method, body, headers = client.requests[0]
+        self.assertEqual(
+            url,
+            "https://chat.example.test/v1/users/ME/conversations/"
+            "19%3Achat%40thread.v2/messages",
+        )
+        self.assertEqual(method, "POST")
+        self.assertEqual(
+            body["content"],
+            "<p>Hello &lt;Teams&gt; &amp; friends<br>second line</p>",
+        )
+        self.assertEqual(body["messagetype"], "RichText/Html")
+        self.assertEqual(body["contenttype"], "text")
+        self.assertTrue(body["clientmessageid"].isdigit())
+        self.assertEqual(body["imdisplayname"], "Taylor Example")
+        self.assertEqual(body["properties"], {"importance": "", "subject": None})
+        self.assertEqual(headers["Authentication"], "skypetoken=skype-test-token")
+        self.assertNotIn("Authorization", headers)
+        self.assertEqual(result["message_id"], "sent-message-id")
+        self.assertEqual(result["client_message_id"], body["clientmessageid"])
+        self.assertEqual(result["sent_at"], "2026-09-23T00:30:56.789Z")
+
+    def test_send_message_rejects_empty_or_oversized_text_without_request(self):
+        client = StubConnector()
+
+        for text in ("  ", "x" * 10_001, "bad\x00text"):
+            with self.subTest(length=len(text)):
+                with self.assertRaises(ValueError):
+                    client.send_message("19:chat@thread.v2", text)
+
+        self.assertEqual(client.requests, [])
+
+    def test_http_client_accepts_an_empty_successful_response(self):
+        client = TeamsConnector()
+        with patch("urllib.request.urlopen") as open_url:
+            open_url.return_value.__enter__.return_value.read.return_value = b""
+
+            result = client._http_json(
+                "https://chat.example.test/send",
+                method="POST",
+                body={"content": "sanitized test"},
+            )
+
+        self.assertEqual(result, {})
+
     def test_members_enrich_blank_display_names_from_middle_tier_profiles(self):
         client = StubConnector(
             [{"members": [{"id": "8:orgid:ABC123", "displayName": ""}]}]

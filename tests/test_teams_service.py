@@ -44,6 +44,7 @@ class ServiceConnector(TeamsConnector):
         self.page_calls = []
         self.login_calls = 0
         self.auth_required = False
+        self.sent_messages = []
 
     def login(self, *, interactive=True):
         self.login_calls += 1
@@ -72,6 +73,14 @@ class ServiceConnector(TeamsConnector):
         if conversation_id not in self.members:
             raise RuntimeError("roster unavailable")
         return self.members[conversation_id]
+
+    def send_message(self, conversation_id, text):
+        self.sent_messages.append((conversation_id, text))
+        return {
+            "message_id": "sent-message-id",
+            "client_message_id": "1790123456789",
+            "sent_at": "2026-09-22T00:30:56.789Z",
+        }
 
 
 class TeamsServiceTests(unittest.TestCase):
@@ -323,6 +332,55 @@ class TeamsServiceTests(unittest.TestCase):
             self.service.list_chats()
 
         self.assertEqual(self.connector.login_calls, 1)
+
+    def test_send_message_requires_authorization_and_catalog_name_match(self):
+        with self.assertRaisesRegex(ValueError, "explicit send authorization"):
+            self.service.send_message(
+                "19:alpha@thread.v2",
+                "Alpha",
+                "Hello",
+                user_confirmation="",
+            )
+        self.assertEqual(self.connector.login_calls, 0)
+
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            self.service.send_message(
+                "19:alpha@thread.v2",
+                "Beta",
+                "Hello",
+                user_confirmation="User explicitly authorized this message.",
+            )
+        self.assertEqual(self.connector.sent_messages, [])
+
+    def test_send_message_rejects_conversation_missing_from_live_catalog(self):
+        with self.assertRaisesRegex(ValueError, "not found in the current Teams chat catalog"):
+            self.service.send_message(
+                "19:missing@thread.v2",
+                "Missing chat",
+                "Hello",
+                user_confirmation="User explicitly authorized sending this message.",
+            )
+
+        self.assertEqual(self.connector.sent_messages, [])
+
+    def test_send_message_targets_the_verified_chat_and_returns_sanitized_receipt(self):
+        result = self.service.send_message(
+            "19:alpha@thread.v2",
+            "Alpha",
+            "Hello from an authorized test.",
+            user_confirmation="User explicitly authorized sending this test to Alpha.",
+        )
+
+        self.assertEqual(
+            self.connector.sent_messages,
+            [("19:alpha@thread.v2", "Hello from an authorized test.")],
+        )
+        self.assertEqual(result["conversation_id"], "19:alpha@thread.v2")
+        self.assertEqual(result["chat_name"], "Alpha")
+        self.assertEqual(result["message_id"], "sent-message-id")
+        self.assertEqual(result["client_message_id"], "1790123456789")
+        self.assertEqual(result["delivery_status"], "accepted")
+        self.assertNotIn("user_confirmation", result)
 
     def test_local_search_does_not_start_authentication_or_wait_for_sign_in(self):
         result = self.service.search_messages("anything")
