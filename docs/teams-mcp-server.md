@@ -1,6 +1,6 @@
 # Teams MCP server
 
-This repository provides a client-independent, read-only MCP server over standard input/output (`stdio`). MCP clients launch the process when they connect, so no always-on HTTP listener is needed. The same `TeamsService` and SQLite index can also be used by a future local interface.
+This repository provides a client-independent MCP server over standard input/output (`stdio`). MCP clients launch the process when they connect, so no always-on HTTP listener is needed. The same `TeamsService` and SQLite index can also be used by a future local interface. Read tools do not change Teams state; the `send_message` tool is the only write operation.
 
 ## Install and sign in
 
@@ -38,7 +38,7 @@ The SQLite archive can support long retention after a full backfill, but this re
 
 ## Tools
 
-Every tool is read-only. The MCP input and output schemas are typed, results have bounded page sizes, and search responses state whether the indexed chats and requested dates are fully covered.
+The MCP input and output schemas are typed, results have bounded page sizes, and search responses state whether the indexed chats and requested dates are fully covered. All tools except `send_message` are read-only.
 
 - `list_chats`: page through the live chat catalog, ordered by activity.
 - `search_chats`: find chats by participant-name substring in locally indexed rosters. Use `sync_search_index` first; coverage reports missing rosters and unresolved names.
@@ -46,6 +46,15 @@ Every tool is read-only. The MCP input and output schemas are typed, results hav
 - `search_messages`: search locally indexed content with exact token-phrase or all-terms matching, optionally scoped to one chat and/or date range. Follow `next_cursor` for more matches.
 - `sync_search_index`: fetch bounded history and participant rosters into the persistent local archive. Calls continue saved history links and rotate fairly across chats. Completed histories refresh their newest page while preserving older messages.
 - `get_search_index_status`: inspect per-chat history and roster progress and requested-range coverage.
+- `send_message`: send plain text to an existing chat ID. The tool verifies the live chat ID and expected chat name before making one POST attempt. Its required `user_confirmation` argument records the user's authorization for the recipient and content.
+
+The send tool can target only conversations present in the live API catalog. A row shown in the Teams interface without a stable ID in that catalog cannot be selected by this tool.
+
+### Sending safety
+
+`send_message` creates an external side effect. An MCP client or agent must call it only when the user explicitly authorized sending that content to that chat, either in the current request or after the agent asked and received a clear yes. If authorization is absent or ambiguous, ask the user and wait. The required `user_confirmation` value is an audit assertion; filling it in does not grant permission. For a scheduled task, the task instructions themselves must explicitly authorize the destination and sending scope. Authorization for one test or one message does not grant ongoing permission. Searching, summarizing, exporting, or finding a pending task never implies permission to send. The server does not log or store the confirmation text, and does not forward it to Microsoft. The MCP client may handle tool arguments according to its own logging policy.
+
+The message request is attempted once and is not retried automatically. If a connection error occurs after Teams may have accepted the request, verify the chat before trying again to avoid duplicates. Message content is plain text and HTML-escaped before it is sent.
 
 The service does not use a verified server-side message search route. Search results cover only messages already in the local FTS5 index. An empty result with incomplete coverage is not evidence that Teams has no matching message. Participant search likewise depends on the rosters successfully indexed.
 

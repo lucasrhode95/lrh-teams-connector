@@ -95,7 +95,7 @@ Acceptance:
 
 Expose a standard, client-independent Python MCP server over `stdio`. MCP clients start it on demand; it does not need a continuously running HTTP listener. Keep chat listing, search, formatting, indexing, and retrieval in shared application services so a future local UI can reuse them. Reuse the app-owned sign-in and connector without a separate Microsoft app registration.
 
-**Status:** Implemented for read-only MCP access. The six tools are `list_chats`, `search_chats`, `search_messages`, `get_messages`, `sync_search_index`, and `get_search_index_status`. Their MCP input and output schemas are typed. Message and participant searches use a persistent SQLite database with FTS5 and per-chat coverage state. `sync_search_index` fetches bounded batches, stores opaque history continuations in SQLite, and rotates through the chat catalog so repeated calls can reach older chats as well as recent ones. Completed histories refresh their newest page while retaining older indexed messages.
+**Status:** Implemented for read/search MCP access, with `send_message` as an explicitly authorized write tool. The seven tools are `list_chats`, `search_chats`, `search_messages`, `get_messages`, `sync_search_index`, `get_search_index_status`, and `send_message`. Their MCP input and output schemas are typed. Message and participant searches use a persistent SQLite database with FTS5 and per-chat coverage state. `sync_search_index` fetches bounded batches, stores opaque history continuations in SQLite, and rotates through the chat catalog so repeated calls can reach older chats as well as recent ones. Completed histories refresh their newest page while retaining older indexed messages. The MCP server instructs agents to ask for user authorization before every send; the required confirmation field records the authorization but is not itself permission. The local UI does not expose sending.
 
 ### Search backend findings
 
@@ -122,7 +122,7 @@ For a 1+ year retention goal, the persistent archive provides the storage and de
 
 MCP and archive requirements:
 
-- Keep all MCP tools read-only. Listing, searching, syncing, and retrieving must not mark chats/messages read or change Teams state.
+- Keep listing, searching, syncing, and retrieving read-only; these operations must not mark chats/messages read or change Teams state. `send_message` is the sole write tool and requires explicit user authorization for the destination and content.
 - Reuse the app-owned MSAL cache. MCP startup and calls use silent authentication only and return an actionable authentication-needed error; they never wait for device-code login or print protocol diagnostics to stdout.
 - Return stable chat/message IDs, authors, timestamps, useful excerpts, and explicit index or retrieval coverage.
 - Bound tool inputs/results and support continuation for long chat lists, histories, and search results.
@@ -137,7 +137,7 @@ These are the main user outcomes for the Phase 2 interface:
 1. **Recurring attention summaries:** Let an AI run on a daily schedule to summarize pending tasks, requests, and recent topic updates that may need the user's direct or indirect attention. Each summary should link its findings to the source chat and message so the user can verify the context.
 2. **Ad-hoc topic research:** Let the user ask a question about a subject across their Teams messages, optionally calling out a conversation to prioritize (for example, searching all chats about Analytics deployment while giving special attention to Analytics Chat). Return relevant findings with source chats, authors, timestamps, and enough surrounding context to check the interpretation.
 
-Both workflows must state the search scope and any coverage limits. They are read-only: they must not send messages or change chat state. Summaries and research answers must be grounded in retrieved messages and distinguish explicit requests from inferred action items.
+Both workflows must state the search scope and any coverage limits. Automated summaries and research answers must not send messages or change chat state. A separate direct request can use `send_message` after explicit user authorization. Summaries and research answers must be grounded in retrieved messages and distinguish explicit requests from inferred action items.
 
 Required read capabilities:
 
@@ -182,7 +182,9 @@ Resolve sender profile images and display them alongside messages in the UI. Kee
 
 ### N4. Send a message to a selected chat
 
-Allow the user to compose and send a message to an explicitly selected chat. Require a clear user action for each send, show the destination and message before submission, and report service errors. Do not add automatic sending or sending during search/export.
+**Status:** Partially implemented through the MCP `send_message` tool. It verifies the chat ID and expected name against the live catalog, accepts plain text only, and requires the calling agent to record explicit user authorization. The MCP server instructs agents to ask and wait when authorization is missing or ambiguous. Scheduled tasks may send only when their own instructions clearly authorize the destination and sending scope. Only conversations present in the live API catalog are targetable; a Teams UI row without a stable catalog ID cannot be selected. The local UI does not expose sending yet.
+
+The eventual UI should require a clear user action for each send, show the destination and message before submission, and report service errors. Search, summaries, and exports must never send automatically.
 
 ### N5. Show Favorites/pinned chats in a separate first section
 

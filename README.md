@@ -6,7 +6,7 @@ The Teams connector is the interface this application uses to communicate with M
 
 Sign-in is handled by Microsoft/Teams. The user enters a password and completes any required verification on the identity provider's own sign-in experience; this application never sees or stores the user's password. After authentication, Microsoft provides opaque access tokens and manages refresh credentials as needed; the connector uses authorization tokens for API requests. The specific sign-in experience and application features may evolve.
 
-The backend also exposes read-only operations through a standard MCP server over `stdio`, which MCP clients launch on demand. Search uses a persistent, account-bound SQLite archive that can be backed up and moved with the same Teams account. See the [MCP server guide](docs/teams-mcp-server.md) for setup and the [product roadmap](docs/teams-exporter-roadmap.md) for scope and retention limits.
+The backend exposes typed read and search tools through a standard MCP server over `stdio`, which MCP clients launch on demand. It also has a message-send tool that requires explicit user authorization for each send. Search uses a persistent, account-bound SQLite archive that can be backed up and moved with the same Teams account. See the [MCP server guide](docs/teams-mcp-server.md) for setup and the [product roadmap](docs/teams-exporter-roadmap.md) for scope and retention limits.
 
 ## Local export page
 

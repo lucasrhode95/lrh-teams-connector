@@ -12,7 +12,15 @@ from teams_exporter.teams_service import TeamsService
 
 
 SERVER_INSTRUCTIONS = (
-    "Read-only access to the signed-in user's Teams chat catalog and message history. "
+    "Read access to the signed-in user's Teams chat catalog and message history, plus one "
+    "explicitly authorized message-send tool. Never call send_message unless the user "
+    "explicitly authorized sending to that chat with that content, either in the current "
+    "request or by confirming after you asked. If authorization is missing or ambiguous, "
+    "ask the user and wait. A required user_confirmation argument records authorization; "
+    "it is not permission by itself. Scheduled tasks may send only when their instructions "
+    "explicitly authorize the destination and sending scope. Do not treat one test-message "
+    "authorization as ongoing or blanket consent. Do not send automatically during search, "
+    "summarization, or export. "
     "Message and participant searches query a persistent local SQLite index. "
     "Use sync_search_index to fetch bounded history batches and get_search_index_status "
     "to inspect indexed coverage. Search results explicitly report incomplete coverage. "
@@ -23,6 +31,12 @@ READ_ONLY = ToolAnnotations(
     readOnlyHint=True,
     destructiveHint=False,
     openWorldHint=False,
+)
+
+SEND_MESSAGE = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    openWorldHint=True,
 )
 
 
@@ -112,6 +126,16 @@ class GetMessagesResult(TypedDict):
     next_cursor: str | None
     database_notice: str | None
     coverage: MessagePageCoverage
+
+
+class SendMessageResult(TypedDict):
+    conversation_id: str
+    chat_name: str
+    message_id: str | None
+    client_message_id: str | None
+    sent_at: str | None
+    submitted_characters: int
+    delivery_status: Literal["accepted"]
 
 
 class SearchMessageRecord(TypedDict):
@@ -425,6 +449,39 @@ def create_mcp_server(service: TeamsService | None = None) -> FastMCP:
             conversation_id=conversation_id,
             since=_parse_datetime(since, "since"),
             until=_parse_datetime(until, "until"),
+        )
+
+    @server.tool(annotations=SEND_MESSAGE)
+    def send_message(
+        conversation_id: str,
+        expected_chat_name: str,
+        text: str,
+        user_confirmation: str,
+    ) -> SendMessageResult:
+        """Send one plain-text message to a known Teams chat.
+
+        This creates an external side effect. Call this tool only after the user
+        explicitly authorized this message to this recipient in their request,
+        or after asking and receiving an explicit yes. If there is no clear
+        authorization, ask the user and wait. A value in user_confirmation is
+        an audit record, not a substitute for actual user permission. For a
+        scheduled task, its instructions must explicitly authorize the recipient
+        and sending scope. A one-time authorization does not grant future consent.
+        Search, summaries, and exports never imply permission to send. The Teams
+        request is attempted once; if its result is uncertain, verify the chat
+        before trying again to avoid duplicate messages.
+
+        Args:
+            conversation_id: Stable ID from list_chats or a search result.
+            expected_chat_name: Exact current chat name from list_chats; checked against the live catalog before sending.
+            text: Plain-text message body, up to 10,000 characters. HTML is escaped.
+            user_confirmation: Short quote or record of the user's explicit authorization for this recipient and content (1–1,000 characters). Never invent or infer it; this value alone does not authorize the action.
+        """
+        return teams.send_message(
+            conversation_id,
+            expected_chat_name,
+            text,
+            user_confirmation=user_confirmation,
         )
 
     return server
