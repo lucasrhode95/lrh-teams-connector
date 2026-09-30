@@ -91,6 +91,41 @@ class TeamsConnectorTests(unittest.TestCase):
         )
         self.assertEqual(client.requests, [])
 
+    def test_profile_picture_uses_authenticated_middle_tier_request(self):
+        client = StubConnector()
+        uri = client.get_profile_picture_uri()
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.headers = {
+            "Content-Type": "image/png; charset=binary",
+            "Content-Length": "4",
+        }
+        response.read.return_value = b"PNG!"
+        opener = Mock()
+        opener.open.return_value = response
+
+        with patch("urllib.request.build_opener", return_value=opener):
+            image, content_type = client.get_profile_picture(uri)
+
+        self.assertEqual(image, b"PNG!")
+        self.assertEqual(content_type, "image/png")
+        request = opener.open.call_args.args[0]
+        self.assertEqual(request.get_header("Authorization"), "Bearer spaces-test-token")
+        self.assertIn("image/", request.get_header("Accept"))
+
+    def test_profile_picture_fetch_rejects_urls_outside_middle_tier(self):
+        client = StubConnector()
+
+        with self.assertRaisesRegex(RuntimeError, "outside the configured Middle Tier"):
+            client.get_profile_picture("https://images.example.test/profilepicturev2/user")
+
+        self.assertFalse(
+            client.can_fetch_profile_picture(
+                "https://middle.example.test/beta/users/me/profilepicturev2/../../messages"
+            )
+        )
+
     def test_chat_rows_use_backend_avatar_urls_or_one_to_one_picture_uri(self):
         client = StubConnector([{
             "chats": [

@@ -49,12 +49,18 @@ class ServiceConnector(TeamsConnector):
         self.interactive_login_values = []
         self.auth_required = False
         self.sent_messages = []
+        self.profile_picture_calls = []
 
     def login(self, *, interactive=True):
         self.login_calls += 1
         self.interactive_login_values.append(interactive)
         if self.auth_required:
             raise AuthenticationRequiredError("sign-in needed")
+        self._spaces_access_token = "sanitized-spaces-token"
+        self._csa_access_token = "sanitized-csa-token"
+        self._skype_token = "sanitized-skype-token"
+        self._chat_service_url = "https://chat.example.test"
+        self._middle_tier_url = "https://middle.example.test"
 
     def list_chats(self):
         return self.chats
@@ -129,6 +135,10 @@ class ServiceConnector(TeamsConnector):
             "sent_at": "2026-09-22T00:30:56.789Z",
         }
 
+    def get_profile_picture(self, url):
+        self.profile_picture_calls.append(url)
+        return b"sanitized-image", "image/png"
+
 
 class TeamsServiceTests(unittest.TestCase):
     def setUp(self):
@@ -140,11 +150,18 @@ class TeamsServiceTests(unittest.TestCase):
 
     def test_authentication_check_does_not_load_chat_catalog(self):
         result = self.service.check_authentication()
+        self.service.check_authentication()
 
         self.assertEqual(result, {"authenticated": True})
         self.assertEqual(self.connector.login_calls, 1)
         self.assertEqual(self.connector.interactive_login_values, [False])
+        self.assertTrue(self.service.has_recent_connection)
         self.assertIsNone(self.service._chats_cache)
+
+        self.connector.invalidate_session()
+        self.assertFalse(self.service.has_recent_connection)
+        self.service.check_authentication()
+        self.assertEqual(self.connector.login_calls, 2)
 
     def test_authentication_check_uses_noninteractive_sign_in(self):
         self.connector.auth_required = True
@@ -155,6 +172,19 @@ class TeamsServiceTests(unittest.TestCase):
         self.assertEqual(self.connector.login_calls, 1)
         self.assertEqual(self.connector.interactive_login_values, [False])
         self.assertEqual(self.connector.page_calls, [])
+
+    def test_profile_picture_uses_shared_authentication_hook(self):
+        image, content_type = self.service.get_profile_picture(
+            "https://middle.example.test/profilepicturev2/safe-id"
+        )
+
+        self.assertEqual((image, content_type), (b"sanitized-image", "image/png"))
+        self.assertEqual(self.connector.login_calls, 1)
+        self.assertEqual(self.connector.interactive_login_values, [False])
+        self.assertEqual(
+            self.connector.profile_picture_calls,
+            ["https://middle.example.test/profilepicturev2/safe-id"],
+        )
 
     def test_list_chats_returns_bounded_pages_and_coverage(self):
         self.connector.catalog_coverage = ChatCatalogCoverage(

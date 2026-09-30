@@ -38,6 +38,10 @@ class ExportConnector:
         self.last_message_read_coverage = {"retry_count": 0}
 
     @staticmethod
+    def can_fetch_profile_picture(url):
+        return url.startswith("https://images.example.test/")
+
+    @staticmethod
     def _message(message_id: str, timestamp: str, content: str, author: str = "Taylor"):
         return {
             "id": message_id,
@@ -114,6 +118,14 @@ class ExportService:
         ]
         self.list_calls = []
         self.archive: dict[str, dict[str, dict]] = {}
+        self.picture_calls = []
+        self.auth_checks = 0
+        self.connection_recent = False
+        self.connection_error = None
+
+    @property
+    def has_recent_connection(self):
+        return self.connection_recent
 
     def list_chats(self, *, page_size=50, page_token=None, include_avatar_uris=False):
         if self.auth_required:
@@ -137,9 +149,18 @@ class ExportService:
         }
 
     def check_authentication(self):
+        self.auth_checks += 1
+        if self.connection_error is not None:
+            raise self.connection_error
         if self.auth_required:
             raise AuthenticationRequiredError("Teams sign-in is required.")
         return {"authenticated": True}
+
+    def get_profile_picture(self, url):
+        if self.auth_required:
+            raise AuthenticationRequiredError("not signed in")
+        self.picture_calls.append(url)
+        return b"sanitized-test-image", "image/png"
 
     def _messages_in_range(self, conversation_id, *, since=None, until=None):
         messages = list(self.archive.get(conversation_id, {}).values())
@@ -296,20 +317,37 @@ class LocalTeamsServerTests(unittest.TestCase):
         self.assertIn(b"Loading conversations", page)
         self.assertIn(b"class=\"spinner\"", page)
         self.assertEqual(page_headers["Content-Security-Policy"].split(";", 1)[0], "default-src 'none'")
-        self.assertIn("img-src 'self'", page_headers["Content-Security-Policy"])
+        self.assertIn("img-src 'self' https:", page_headers["Content-Security-Policy"])
         self.assertIn("style-src 'self'; script-src 'self'", page_headers["Content-Security-Policy"])
 
         status, headers, body = self.request("GET", "/api/chats")
         result = json.loads(body)
         self.assertEqual(status, 200)
         self.assertEqual(result["count"], 2)
-        self.assertEqual(result["account"], self.service.account_info)
+        self.assertEqual(result["account"]["name"], self.service.account_info["name"])
+        self.assertEqual(result["account"]["email"], self.service.account_info["email"])
         self.assertEqual(result["database_notice"], self.service.database_notice)
         self.assertEqual([chat["name"] for chat in result["chats"]], ["Alpha", "Beta"])
-        self.assertEqual(result["chats"][0]["avatar_url"], "https://images.example.test/alpha.png")
-        self.assertEqual(result["account"]["picture_url"], "https://images.example.test/taylor.png")
+        self.assertRegex(result["chats"][0]["avatar_url"], r"^/api/profile-picture/[0-9a-f]{64}$")
+        self.assertRegex(result["account"]["picture_url"], r"^/api/profile-picture/[0-9a-f]{64}$")
+        self.assertNotIn("images.example.test", body.decode("utf-8"))
         self.assertEqual(headers["Cache-Control"], "no-store")
         self.assertEqual(self.service.list_calls, [(100, None, True)])
+
+        image_status, _, image_body = self.request(
+            "GET",
+            result["chats"][0]["avatar_url"],
+            extra_headers={"Origin": "https://remote.example.test"},
+        )
+        self.assertEqual(image_status, 403)
+        self.assertEqual(self.service.picture_calls, [])
+
+        image_status, image_headers, image_body = self.request("GET", result["chats"][0]["avatar_url"])
+        self.assertEqual(image_status, 200)
+        self.assertEqual(image_headers["Content-Type"], "image/png")
+        self.assertEqual(image_headers["Cache-Control"], "no-store")
+        self.assertEqual(image_body, b"sanitized-test-image")
+        self.assertEqual(self.service.picture_calls, ["https://images.example.test/alpha.png"])
 
     def test_auth_landing_explains_sign_in_and_gates_the_chat_page(self):
         self.service.auth_required = True
@@ -329,6 +367,25 @@ class LocalTeamsServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(b"python -m teams_exporter auth", body)
 
+    def test_recent_connection_skips_the_landing_page(self):
+        self.service.connection_recent = True
+
+        status, headers, _ = self.request("GET", "/")
+
+        self.assertEqual(status, 303)
+        self.assertEqual(headers["Location"], "/chats")
+        self.assertEqual(self.service.auth_checks, 0)
+
+    def test_connection_guard_stops_api_request_before_loading_chats(self):
+        self.service.connection_error = ConnectionError("name resolution failed")
+
+        status, _, body = self.request("GET", "/api/chats")
+
+        self.assertEqual(status, 502)
+        self.assertEqual(json.loads(body)["error"]["code"], "connection_failed")
+        self.assertIn("name resolution failed", json.loads(body)["error"]["message"])
+        self.assertEqual(self.service.list_calls, [])
+
     def test_local_avatar_assets_are_available_and_unknown_assets_are_rejected(self):
         for asset in ("avatar-person.svg", "chat-call.svg", "chat-group.svg"):
             with self.subTest(asset=asset):
@@ -341,8 +398,33 @@ class LocalTeamsServerTests(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertEqual(json.loads(body)["error"]["code"], "not_found")
 
+    def test_profile_picture_route_only_serves_registered_ids(self):
+        status, _, body = self.request("GET", "/api/profile-picture/" + ("a" * 64))
+        self.assertEqual(status, 404)
+        self.assertEqual(json.loads(body)["error"]["code"], "not_found")
+
+        status, _, body = self.request("GET", "/api/profile-picture/invalid")
+        self.assertEqual(status, 404)
+        self.assertEqual(json.loads(body)["error"]["code"], "not_found")
+
+    def test_profile_picture_route_reports_expired_authentication(self):
+        status, _, body = self.request("GET", "/api/chats")
+        self.assertEqual(status, 200)
+        picture_path = json.loads(body)["chats"][0]["avatar_url"]
+        self.service.auth_required = True
+
+        status, _, body = self.request("GET", picture_path)
+
+        self.assertEqual(status, 401)
+        self.assertEqual(json.loads(body)["error"]["code"], "authentication_required")
+        self.assertEqual(self.service.picture_calls, [])
+
     def test_page_static_assets_are_available_and_unknown_files_are_rejected(self):
-        for asset, content_type in (("app.css", "text/css"), ("app.js", "text/javascript")):
+        for asset, content_type in (
+            ("app.css", "text/css"),
+            ("app.js", "text/javascript"),
+            ("auth.js", "text/javascript"),
+        ):
             with self.subTest(asset=asset):
                 status, headers, body = self.request("GET", f"/static/{asset}")
                 self.assertEqual(status, 200)

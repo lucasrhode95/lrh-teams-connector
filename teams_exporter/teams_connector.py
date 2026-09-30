@@ -16,7 +16,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from threading import Event
 from typing import Any, Callable, Iterator
-from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsplit
 
 import msal
 
@@ -119,8 +119,33 @@ class _TransientTeamsRequestError(RuntimeError):
         self.retry_after = retry_after
 
 
+class _MiddleTierRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Follow picture redirects only when they stay on the token's host."""
+
+    def __init__(self, middle_tier_url: str) -> None:
+        super().__init__()
+        self._middle_tier_netloc = urlsplit(middle_tier_url).netloc.lower()
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target = urlsplit(urljoin(req.full_url, newurl))
+        if (
+            target.scheme != "https"
+            or target.netloc.lower() != self._middle_tier_netloc
+            or target.username
+            or target.password
+        ):
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 class TeamsConnector:
     """Read chat catalogs and message history through Teams service APIs."""
+
+    PROFILE_PICTURE_PATH = re.compile(
+        r"(?:^|/)users/[A-Za-z0-9:@._-]+/profilepicturev2"
+        r"(?:/[A-Za-z0-9:@._-]+)?$",
+        re.IGNORECASE,
+    )
 
     TEAMS_CLIENT_ID = "1fec8e78-bce4-4aaf-ab1b-5451cc387264"
     SPACES_SCOPE = "https://api.spaces.skype.com/.default"
@@ -313,6 +338,86 @@ class TeamsConnector:
         query = urlencode({"displayname": name or "", "size": "HR64x64"})
         return urlunsplit((middle_tier.scheme, middle_tier.netloc, picture_path, query, ""))
 
+    def can_fetch_profile_picture(self, url: str) -> bool:
+        """Whether this profile-picture URL belongs to the authenticated Middle Tier."""
+        if not isinstance(url, str):
+            return False
+        expected = urlsplit(self._middle_tier_url or "")
+        actual = urlsplit(url)
+        return (
+            actual.scheme == "https"
+            and bool(expected.netloc)
+            and actual.netloc.lower() == expected.netloc.lower()
+            and bool(self.PROFILE_PICTURE_PATH.search(actual.path))
+        )
+
+    def get_profile_picture(self, url: str) -> tuple[bytes, str]:
+        """Fetch one profile picture with the saved Teams Web bearer token."""
+        self._require_logged_in()
+        if not self.can_fetch_profile_picture(url):
+            raise RuntimeError("Refusing a profile picture URL outside the configured Middle Tier.")
+        self._validate_service_url(url, self._middle_tier_url, "Middle Tier")
+
+        request = urllib.request.Request(
+            url,
+            method="GET",
+            headers={
+                "Authorization": f"Bearer {self._spaces_access_token}",
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                "User-Agent": "Microsoft Teams compatible client",
+            },
+        )
+        opener = urllib.request.build_opener(
+            _MiddleTierRedirectHandler(self._middle_tier_url or "")
+        )
+        max_image_bytes = 2_000_000
+        for attempt in range(1, self.READ_REQUEST_MAX_ATTEMPTS + 1):
+            retry_after = None
+            try:
+                with opener.open(request, timeout=self.REQUEST_TIMEOUT_SECONDS) as response:
+                    content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+                    if not content_type.startswith("image/"):
+                        raise RuntimeError("Teams returned a non-image profile picture response.")
+                    content_length = response.headers.get("Content-Length")
+                    if content_length and int(content_length) > max_image_bytes:
+                        raise RuntimeError("Teams profile picture exceeded the image size limit.")
+                    content = response.read(max_image_bytes + 1)
+                    if len(content) > max_image_bytes:
+                        raise RuntimeError("Teams profile picture exceeded the image size limit.")
+                    return content, content_type
+            except urllib.error.HTTPError as exc:
+                if exc.code in {401, 403}:
+                    exc.close()
+                    self._clear_session()
+                    raise AuthenticationRequiredError(
+                        "Teams no longer accepts the stored credentials for this request. "
+                        "Run `python -m teams_exporter auth` and retry."
+                    ) from None
+                if exc.code not in self.RETRYABLE_HTTP_STATUSES:
+                    status = exc.code
+                    exc.close()
+                    raise RuntimeError(
+                        f"Teams profile picture request failed with HTTP {status}."
+                    ) from None
+                retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                exc.close()
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                if attempt >= self.READ_REQUEST_MAX_ATTEMPTS:
+                    raise RuntimeError(
+                        "Teams profile picture request failed after "
+                        f"{self.READ_REQUEST_MAX_ATTEMPTS} attempts: "
+                        f"{self._safe_exception_detail(exc)}"
+                    ) from None
+
+            if attempt >= self.READ_REQUEST_MAX_ATTEMPTS:
+                raise RuntimeError(
+                    "Teams profile picture request failed after "
+                    f"{self.READ_REQUEST_MAX_ATTEMPTS} attempts."
+                ) from None
+            time.sleep(self._read_retry_delay(attempt, retry_after))
+
+        raise RuntimeError("Teams profile picture request failed without a response.")
+
     def get_cached_account_metadata(self) -> dict[str, Any] | None:
         """Return the first cached MSAL account without making network requests.
 
@@ -354,6 +459,17 @@ class TeamsConnector:
             "region": self._authz_response.get("region"),
             "region_gtms": self._authz_response.get("regionGtms"),
         }
+
+    @property
+    def has_active_session(self) -> bool:
+        """Whether this connector currently holds a completed Teams session."""
+        return bool(
+            self._spaces_access_token
+            and self._csa_access_token
+            and self._skype_token
+            and self._chat_service_url
+            and self._middle_tier_url
+        )
 
     def list_chats(self) -> list[ChatSummary]:
         """Return a normalized chat catalog in Teams-visible activity order."""
@@ -1478,6 +1594,7 @@ class TeamsConnector:
                 location = self._safe_location(url)
                 if exc.code in {401, 403}:
                     exc.close()
+                    self._clear_session()
                     raise AuthenticationRequiredError(
                         "Teams no longer accepts the stored credentials for this request. "
                         "Run `python -m teams_exporter auth` and retry."
@@ -1816,12 +1933,22 @@ class TeamsConnector:
         return f"{parts.scheme}://{host}{parts.path}"
 
     def _require_logged_in(self) -> None:
-        if not (
-            self._spaces_access_token
-            and self._csa_access_token
-            and self._skype_token
-        ):
+        if not self.has_active_session:
             raise RuntimeError("Call TeamsConnector.login() before using the connector.")
+
+    def _clear_session(self) -> None:
+        self._spaces_access_token = None
+        self._csa_access_token = None
+        self._skype_token = None
+        self._spaces_claims = {}
+        self._authz_response = {}
+        self._chat_service_url = None
+        self._middle_tier_url = None
+        self._auth_sources = {}
+
+    def invalidate_session(self) -> None:
+        """Forget the in-memory session after credentials are rejected."""
+        self._clear_session()
 
     def _validate_service_url(
         self,

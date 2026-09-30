@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -29,6 +30,7 @@ from teams_exporter.teams_service import TeamsService
 MAX_REQUEST_BYTES = 1_000_000
 MAX_CHAT_CATALOG_SIZE = 10_000
 MAX_MESSAGE_LIMIT = 1_000_000
+MAX_PROFILE_IMAGE_BYTES = 2_000_000
 DOWNLOAD_CHUNK_SIZE = 64 * 1024
 LOCAL_IMAGE_ASSETS = {
     "avatar-person.svg",
@@ -88,6 +90,8 @@ class LocalTeamsHTTPServer(ThreadingHTTPServer):
         )
         self._jobs: dict[str, DownloadJob] = {}
         self._jobs_lock = threading.RLock()
+        self._avatar_urls: dict[str, str] = {}
+        self._avatar_lock = threading.RLock()
         super().__init__(server_address, LocalTeamsRequestHandler)
 
     def start_download(self, request: DownloadRequest) -> DownloadJob:
@@ -110,6 +114,22 @@ class LocalTeamsHTTPServer(ThreadingHTTPServer):
         with self._jobs_lock:
             self._prune_jobs_locked()
             return self._jobs.get(request_id)
+
+    def register_avatar_uris(self, urls: list[str | None]) -> dict[str, str]:
+        """Make authenticated Middle Tier picture URLs available by opaque local IDs."""
+        can_fetch = getattr(self.service.connector, "can_fetch_profile_picture", None)
+        registered: dict[str, str] = {}
+        routes: dict[str, str] = {}
+        if callable(can_fetch):
+            for url in urls:
+                if not isinstance(url, str) or not can_fetch(url):
+                    continue
+                key = hashlib.sha256(url.encode("utf-8")).hexdigest()
+                registered[key] = url
+                routes[url] = f"/api/profile-picture/{key}"
+        with self._avatar_lock:
+            self._avatar_urls = registered
+        return routes
 
     def _run_download(self, job: DownloadJob, request: DownloadRequest) -> None:
         artifact_directory = Path(tempfile.mkdtemp(prefix="teams-export-job-"))
@@ -266,41 +286,62 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
         parsed_target = urlsplit(self.path)
         path = parsed_target.path
         if path == "/":
+            if getattr(self.server.service, "has_recent_connection", False):
+                self._redirect_to_chats()
+                return
             self._send_html_template("auth.html")
             return
+        if self._get_path_requires_connection(path) and not self._check_connection(
+            page_request=path == "/chats"
+        ):
+            return
         if path == "/chats":
-            try:
-                self.server.service.check_authentication()
-            except AuthenticationRequiredError:
-                self.send_response(303)
-                self._security_headers("text/plain; charset=utf-8")
-                self.send_header("Location", "/")
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-                return
-            except Exception:
-                self.send_response(303)
-                self._security_headers("text/plain; charset=utf-8")
-                self.send_header("Location", "/")
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-                return
             self._send_html_template("chats.html")
             return
         if path == "/api/auth-status":
-            try:
-                self.server.service.check_authentication()
+            if self._check_connection():
                 self._send_json(200, {"authenticated": True})
+            return
+        if path.startswith("/api/profile-picture/"):
+            if not self._origin_is_local():
+                self._send_json(403, self._error("origin_rejected", "The request origin is not allowed."))
+                return
+            image_key = path.removeprefix("/api/profile-picture/")
+            if not re.fullmatch(r"[0-9a-f]{64}", image_key):
+                self._send_json(404, self._error("not_found", "Not found."))
+                return
+            with self.server._avatar_lock:
+                image_url = self.server._avatar_urls.get(image_key)
+            if image_url is None:
+                self._send_json(404, self._error("not_found", "Not found."))
+                return
+            try:
+                image, content_type = self.server.service.get_profile_picture(image_url)
             except AuthenticationRequiredError as exc:
                 self._send_json(401, self._error("authentication_required", str(exc)))
+                return
             except Exception as exc:
                 self._send_json(
                     502,
                     self._error(
-                        "connection_failed",
-                        f"Could not confirm the Teams sign-in: {TeamsService._safe_error(exc)}",
+                        "profile_picture_failed",
+                        f"Could not load profile picture: {TeamsService._safe_error(exc)}",
                     ),
                 )
+                return
+            if (
+                not isinstance(image, bytes)
+                or len(image) > MAX_PROFILE_IMAGE_BYTES
+                or not isinstance(content_type, str)
+                or not content_type.startswith("image/")
+            ):
+                self._send_json(502, self._error("profile_picture_failed", "Teams returned an invalid image."))
+                return
+            self.send_response(200)
+            self._security_headers(content_type)
+            self.send_header("Content-Length", str(len(image)))
+            self.end_headers()
+            self.wfile.write(image)
             return
         if path.startswith("/static/"):
             asset_name = path.removeprefix("/static/")
@@ -388,12 +429,64 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
         self._security_headers("text/html; charset=utf-8")
         self.send_header(
             "Content-Security-Policy",
-            "default-src 'none'; img-src 'self'; style-src 'self'; script-src 'self'; "
+            "default-src 'none'; img-src 'self' https:; style-src 'self'; script-src 'self'; "
             "connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
         )
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    @staticmethod
+    def _get_path_requires_connection(path: str) -> bool:
+        return path in {
+            "/chats",
+            "/api/chats",
+            "/api/download-status",
+            "/api/download-file",
+        } or path.startswith("/api/profile-picture/")
+
+    def _check_connection(self, *, page_request: bool = False) -> bool:
+        try:
+            self.server.service.check_authentication()
+            return True
+        except AuthenticationRequiredError as exc:
+            self._invalidate_service_authentication()
+            if page_request:
+                self._redirect_to_authentication()
+            else:
+                self._send_json(401, self._error("authentication_required", str(exc)))
+            return False
+        except Exception as exc:
+            if page_request:
+                self._redirect_to_authentication()
+            else:
+                self._send_json(
+                    502,
+                    self._error(
+                        "connection_failed",
+                        f"Could not confirm the Teams connection: {TeamsService._safe_error(exc)}",
+                    ),
+                )
+            return False
+
+    def _invalidate_service_authentication(self) -> None:
+        invalidate = getattr(self.server.service, "invalidate_authentication", None)
+        if callable(invalidate):
+            invalidate()
+
+    def _redirect_to_authentication(self) -> None:
+        self.send_response(303)
+        self._security_headers("text/plain; charset=utf-8")
+        self.send_header("Location", "/")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _redirect_to_chats(self) -> None:
+        self.send_response(303)
+        self._security_headers("text/plain; charset=utf-8")
+        self.send_header("Location", "/chats")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def do_POST(self) -> None:
         if not self._request_is_local():
@@ -405,6 +498,8 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path not in {"/api/download", "/api/cancel"}:
             self._send_json(404, self._error("not_found", "Not found."))
+            return
+        if not self._check_connection():
             return
         try:
             payload = self._read_json_body()
@@ -471,13 +566,27 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
                     raise RuntimeError("Teams returned an invalid chat-list continuation.")
                 seen_tokens.add(next_token)
                 page_token = next_token
+            account = getattr(self.server.service, "account_info", None)
+            account_payload = dict(account) if isinstance(account, dict) else account
+            avatar_uris = [chat.get("avatar_url") for chat in chats]
+            if isinstance(account_payload, dict):
+                avatar_uris.append(account_payload.get("picture_url"))
+            avatar_routes = self.server.register_avatar_uris(avatar_uris)
+            for chat in chats:
+                source_uri = chat.get("avatar_url")
+                if source_uri in avatar_routes:
+                    chat["avatar_url"] = avatar_routes[source_uri]
+            if isinstance(account_payload, dict):
+                source_uri = account_payload.get("picture_url")
+                if source_uri in avatar_routes:
+                    account_payload["picture_url"] = avatar_routes[source_uri]
             self._send_json(
                 200,
                 {
                     "chats": chats,
                     "count": len(chats),
                     "database_notice": getattr(self.server.service, "database_notice", None),
-                    "account": getattr(self.server.service, "account_info", None),
+                    "account": account_payload,
                 },
             )
         except AuthenticationRequiredError as exc:

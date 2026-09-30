@@ -5,6 +5,7 @@ import json
 import os
 import re
 import tempfile
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -39,6 +40,7 @@ MAX_EXPORT_RESOURCE_BYTES = 100_000
 MAX_MESSAGE_CONTENT_PAGE_CHARS = 50_000
 DEFAULT_MESSAGE_RESPONSE_CHARS = 30_000
 MAX_MESSAGE_RESPONSE_CHARS = 100_000
+AUTH_CHECK_TTL_SECONDS = 30
 CURSOR_TTL_SECONDS = 30 * 60
 MAX_ACTIVE_CURSORS = 256
 
@@ -83,6 +85,8 @@ class TeamsService:
         self._cursors: dict[str, _Cursor] = {}
         self._chats_cache: list[ChatSummary] | None = None
         self._chats_cache_until = 0.0
+        self._auth_check_lock = threading.RLock()
+        self._auth_checked_until = 0.0
 
     @property
     def index(self) -> TeamsSearchIndex:
@@ -100,14 +104,52 @@ class TeamsService:
 
     def _ensure_session(self) -> None:
         # Only the separate `python -m teams_exporter auth` command is interactive.
-        self.connector.login(interactive=False)
-        if not self._index_is_injected:
-            self._select_index_for_account(self.connector.get_user_metadata())
+        with self._auth_check_lock:
+            now = time.monotonic()
+            active_session = getattr(self.connector, "has_active_session", None)
+            if callable(active_session):
+                active_session = active_session()
+            if now < self._auth_checked_until and active_session is not False:
+                return
+            try:
+                self.connector.login(interactive=False)
+                if not self._index_is_injected:
+                    self._select_index_for_account(self.connector.get_user_metadata())
+            except AuthenticationRequiredError:
+                self._auth_checked_until = 0.0
+                invalidate = getattr(self.connector, "invalidate_session", None)
+                if callable(invalidate):
+                    invalidate()
+                raise
+            self._auth_checked_until = time.monotonic() + AUTH_CHECK_TTL_SECONDS
+
+    def invalidate_authentication(self) -> None:
+        """Force the next app request to revalidate Teams credentials."""
+        with self._auth_check_lock:
+            self._auth_checked_until = 0.0
+
+    @property
+    def has_recent_connection(self) -> bool:
+        """Whether a recent check confirmed that the connector still has a session."""
+        if time.monotonic() >= self._auth_checked_until:
+            return False
+        active_session = getattr(self.connector, "has_active_session", None)
+        if callable(active_session):
+            active_session = active_session()
+        return active_session is not False
 
     def check_authentication(self) -> dict[str, Any]:
         """Confirm the saved Teams session without loading the chat catalog."""
         self._ensure_session()
         return {"authenticated": True}
+
+    def get_profile_picture(self, url: str) -> tuple[bytes, str]:
+        """Fetch one picture through the authenticated connector without caching it."""
+        self._ensure_session()
+        fetch_picture = getattr(self.connector, "get_profile_picture", None)
+        if not callable(fetch_picture):
+            raise RuntimeError("The configured Teams connector cannot fetch profile pictures.")
+        return fetch_picture(url)
 
     def _select_index_for_account(self, metadata: dict[str, Any]) -> None:
         if self._index_is_injected:
