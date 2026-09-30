@@ -53,14 +53,14 @@ This order puts shared retrieval/storage foundations before optional attachment 
 
 ## P1.3 Self-chat discovery and sender identity
 
-**Status: Missing first-class self-chat handling; identity enrichment proposed.**
+**Status: Implemented for the self-chat observed in the signed-in Teams account.**
 
-- Known: the connector exposes the signed-in account's user/tenant IDs. Normalized message records currently expose an author name, without a normalized sender ID or self flag. Sending requires a destination present in the live API catalog.
-- Unknown: how Teams represents the self-chat in catalog responses and direct history requests, whether it is omitted by the currently used listing path, and which identifiers or flags reliably distinguish it. The earlier marker message and send attempts do not establish a general discovery contract.
-- Proposed path: compare existing catalog evidence with the self-chat opened in Teams Web; capture the requests caused by opening it and reading history. Inspect corresponding Web code and the referenced teams-api implementation. Compare the thread ID, roster, explicit self-chat flags if present, and authenticated account identity. Replay the verified read request using app-owned authentication.
-- Identity handling: distinguish a conversation with oneself from a message authored by oneself inside another chat. Normalize stable sender identifiers; matching display names alone is insufficient. Keep the real name/ID in records even if presentation uses "You." Existing archive records without sender IDs may need enrichment or must retain unknown classification.
-- Completion evidence: self-chat can be listed or explicitly resolved, read and targeted across restarts; a normal direct chat is not misclassified. Any send to it must verify the actual destination, including when it is absent from the normal catalog. Missing evidence yields a clear error.
-- Possible user help: open the self-chat and identify an existing marker message/time if traffic cannot be mapped automatically. A new test message is a separate, explicitly authorized action.
+- Evidence: Teams Web showed the current user's self-chat as a one-member conversation with ID 48:notes. The complete CSA startup catalog omitted it, while the paginated Chat Service catalog included it. Direct read-only message history retrieval by 48:notes succeeded.
+- Implementation: the connector includes the special self-chat in the normalized catalog, identifies it with is_self_chat, and places it first so it appears in the initial MCP/UI page. Existing send authorization and destination checks can now resolve it by its listed ID and display name. No message was sent as part of implementation.
+- Sender identity: live Chat Service messages expose from as a composite string that contains the sender's 8:orgid object ID. The connector extracts that stable identity; MCP get_messages and local indexed search return author_id and is_self when known. Message sync now stores sender IDs. Existing archive rows have no sender ID until that message is fetched again; their is_self value remains unknown.
+- Identity handling compares stable identifiers with the authenticated account's object ID. Display-name matching is never used to mark a message as the user's own. A direct conversation with another person is not classified as the self-chat.
+- Limitation: 48:notes is a private Teams convention, not a documented Microsoft API contract, and the live evidence covers one tenant/build. Keep the special ID isolated so it can be replaced. The standard thread-members route returned an error for this ID in the observed account; self-chat listing and history do not depend on it.
+- Remaining validation: a live send to self still requires a separate explicit user authorization. No additional user action is needed for read/list behavior.
 
 ## P1.5 Send attachments
 

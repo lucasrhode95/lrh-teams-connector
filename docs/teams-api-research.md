@@ -1938,6 +1938,39 @@ A read-only Regional Chat Service request for a conversation’s message history
 
 The message endpoint uses a conversation ID in its path, so retrieving history does not require a conversation-list URL to be present. Returned messages and pages may contain timestamps, sequence IDs, message types, HTML content, and pagination metadata as described above.
 
+## Self chat and sender identity — 2026-09-30
+
+Read-only inspection of the signed-in Teams Web session showed a self-chat row
+labelled with the current user's name and “(You)”. Its selected conversation
+header identified the thread as 48:notes; the participant list contained only
+the signed-in user. No message was sent or edited.
+
+Using the app-owned Teams session:
+
+- The complete CSA startup result contained 943 rows and did not include
+  48:notes.
+- The paginated Chat Service catalog contained 960 rows and did include
+  48:notes.
+- A direct read of message history for 48:notes succeeded even though it was
+  absent from CSA.
+- In the returned message shape, from was a composite string rather than a
+  bare ID. It contained 8:orgid followed by the account object ID, which
+  matched the signed-in account's MSAL object ID. This provides a stable
+  identity check that does not rely on display-name equality.
+- The standard Chat Service conversation-members request returned an error for
+  48:notes in this session. Its status and response body were not retained, so
+  the exact failure reason is unknown.
+
+The connector synthesizes a normalized self-chat row when CSA omits it and
+extracts the sender's canonical MRI from the composite from field. These are
+private Teams API observations from one account and build, not a Microsoft
+contract. Public third-party code also uses 48:notes for Teams self-chat, but
+that is corroboration rather than a guarantee that the private identifier will
+remain stable.
+An example of third-party corroboration is the
+[msgvault Teams package](https://pkg.go.dev/go.kenn.io/msgvault%40v0.20.0/internal/teams),
+which names that self-chat ID; it is not an official Microsoft API reference.
+
 ## Server-side filtering and pagination probe
 
 Read-only live requests on 2026-09-29 tested the private Chat Service routes
