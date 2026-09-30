@@ -46,7 +46,7 @@ INDEX_HTML = r"""<!doctype html>
     p { margin: 8px 0 0; color: var(--muted); }
     .eyebrow { margin: 0 0 6px; color: var(--teams-purple); font-size: .75rem; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
     header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
-    .account-info { display: flex; align-items: center; gap: 9px; padding-top: 3px; text-align: right; }
+    .account-info { display: flex; align-items: center; gap: 8px; padding-top: 3px; text-align: left; }
     .account-copy { display: grid; gap: 2px; }
     .account-info strong { color: var(--text); font-size: .9rem; font-weight: 700; }
     .account-info .account-email { color: var(--muted); font-size: .78rem; font-weight: 400; }
@@ -123,7 +123,7 @@ INDEX_HTML = r"""<!doctype html>
     <div class="filter-field range-picker" id="range-picker">
       <span class="field-label">Message date range</span>
       <button id="range-toggle" class="range-toggle" type="button" aria-haspopup="dialog" aria-expanded="false">
-        <span id="range-label">Any date</span><span aria-hidden="true">⌄</span>
+        <span id="range-label">Unlimited</span><span aria-hidden="true">⌄</span>
       </button>
       <div id="calendar" class="calendar" role="dialog" aria-label="Choose an inclusive message date range" hidden>
         <div class="calendar-header">
@@ -134,7 +134,7 @@ INDEX_HTML = r"""<!doctype html>
         <div class="weekdays" aria-hidden="true"><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span><span>S</span></div>
         <div id="calendar-days" class="calendar-days"></div>
         <div class="calendar-footer">
-          <button id="clear-dates" class="secondary" type="button">Clear</button>
+          <button id="clear-dates" class="secondary" type="button" aria-label="Clear date range (unlimited)">Clear</button>
           <span id="calendar-hint" class="calendar-hint">Click once for one day; click again to set the end date.</span>
           <button id="calendar-done" class="secondary" type="button">Done</button>
         </div>
@@ -142,7 +142,7 @@ INDEX_HTML = r"""<!doctype html>
       <input id="from-date" type="hidden">
       <input id="to-date" type="hidden">
     </div>
-    <label for="message-limit">Maximum messages per chat <input id="message-limit" type="number" min="1" step="1" placeholder="Unlimited"></label>
+    <label for="message-limit">Maximum messages per chat <input id="message-limit" type="number" min="1" max="1000000" step="1" placeholder="Unlimited"></label>
     <label class="combine"><input id="combine" type="checkbox" disabled><span>Combine selected conversations into one text file</span></label>
   </section>
   <section aria-label="Conversation selection">
@@ -166,6 +166,7 @@ INDEX_HTML = r"""<!doctype html>
   const selected = new Set();
   const list = document.getElementById('chat-list');
   const search = document.getElementById('chat-search');
+  const messageLimitInput = document.getElementById('message-limit');
   const count = document.getElementById('selection-count');
   const downloadButton = document.getElementById('download');
   const combineInput = document.getElementById('combine');
@@ -201,7 +202,7 @@ INDEX_HTML = r"""<!doctype html>
 
   function updateRangeLabel() {
     if (!fromDateInput.value) {
-      rangeLabel.textContent = 'Any date';
+      rangeLabel.textContent = 'Unlimited';
       return;
     }
     rangeLabel.textContent = fromDateInput.value === toDateInput.value
@@ -424,14 +425,42 @@ INDEX_HTML = r"""<!doctype html>
     return plain ? plain[1] : 'teams-export';
   }
 
+  function getMessageLimit() {
+    const limitText = messageLimitInput.value.trim();
+    if (
+      messageLimitInput.validity.badInput ||
+      messageLimitInput.validity.stepMismatch ||
+      messageLimitInput.validity.rangeUnderflow ||
+      messageLimitInput.validity.rangeOverflow
+    ) {
+      return { valid: false, value: null };
+    }
+    if (!limitText) return { valid: true, value: null };
+    if (!/^[0-9]+$/.test(limitText)) return { valid: false, value: null };
+    const value = Number(limitText);
+    return {
+      valid: Number.isSafeInteger(value) && value >= 1 && value <= 1000000,
+      value: value
+    };
+  }
+
   async function downloadSelected() {
     if (!selected.size) return;
+    const parsedLimit = getMessageLimit();
+    if (!parsedLimit.valid) {
+      messageLimitInput.setCustomValidity(
+        'Enter a positive whole number, or leave the field blank for unlimited.'
+      );
+      messageLimitInput.reportValidity();
+      setStatus('Maximum messages per chat must be a positive whole number or blank.', true);
+      return;
+    }
+    messageLimitInput.setCustomValidity('');
     authHelp.hidden = true;
     downloadButton.dataset.busy = 'true';
     downloadButton.textContent = 'Preparing…';
     updateControls();
     setStatus('Retrieving and formatting the selected conversations…', false);
-    const limitText = document.getElementById('message-limit').value.trim();
     try {
       const response = await fetch('/api/download', {
         method: 'POST',
@@ -442,7 +471,7 @@ INDEX_HTML = r"""<!doctype html>
           to_date: toDateInput.value || null,
           from_utc_offset_minutes: fromDateInput.value ? browserUtcOffsetMinutes(fromDateInput.value, false) : null,
           to_utc_offset_minutes: toDateInput.value ? browserUtcOffsetMinutes(toDateInput.value, true) : null,
-          message_limit: limitText || null,
+          message_limit: parsedLimit.value,
           concatenate: combineInput.checked
         })
       });
@@ -471,6 +500,12 @@ INDEX_HTML = r"""<!doctype html>
   }
 
   search.addEventListener('input', renderChats);
+  messageLimitInput.addEventListener('input', function () {
+    const parsedLimit = getMessageLimit();
+    messageLimitInput.setCustomValidity(
+      parsedLimit.valid ? '' : 'Enter a positive whole number, or leave the field blank for unlimited.'
+    );
+  });
   rangeToggle.addEventListener('click', function () { setCalendarOpen(calendar.hidden); });
   document.getElementById('previous-month').addEventListener('click', function () {
     calendarMonth.setMonth(calendarMonth.getMonth() - 1);

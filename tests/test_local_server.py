@@ -296,13 +296,15 @@ class LocalTeamsServerTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(json.loads(body)["error"]["code"], "invalid_request")
 
-        status, _, body = self.request(
-            "POST",
-            "/api/download",
-            {"chat_ids": ["19:alpha@thread.v2"], "message_limit": "0"},
-        )
-        self.assertEqual(status, 400)
-        self.assertEqual(json.loads(body)["error"]["code"], "invalid_request")
+        for invalid_limit in ("0", 0, "-1", -1, "1.5", 1.5, True, "1e3"):
+            with self.subTest(message_limit=invalid_limit):
+                status, _, body = self.request(
+                    "POST",
+                    "/api/download",
+                    {"chat_ids": ["19:alpha@thread.v2"], "message_limit": invalid_limit},
+                )
+                self.assertEqual(status, 400)
+                self.assertEqual(json.loads(body)["error"]["code"], "invalid_request")
         self.assertEqual(self.service.connector.calls, [])
 
 
