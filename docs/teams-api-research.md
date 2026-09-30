@@ -525,6 +525,16 @@ metadata.hasMoreChats
 
 This suggests CSA may support a persistent local chat catalog that is updated incrementally rather than repeatedly rebuilt from `/users/ME/conversations`.
 
+**Read-only live probe (2026-09-30):** a fresh startup request returned 944
+chats with `isPartialData=false` and `hasMoreChats=false` in about 4.7 seconds.
+The `GET /api/csa/api/v1/teams/users/me/updates` request accepted that startup
+response's `metadata.syncToken` in `x-ms-synctoken`. It returned empty arrays
+for `chats`, `teams`, `users`, `channels`, and `privateFeeds`, with
+`isPartialData=false`, `hasMoreChats=false`, and a present `syncToken` equal to
+the request token. This verifies the route and an empty-delta response shape;
+no nonempty change or token rotation was observed. Stale-token recovery,
+deletions, and update-application semantics remain unverified.
+
 ---
 
 ## Other known CSA route templates
@@ -575,7 +585,10 @@ The detailed request/response contracts for these routes remain unverified.
 
 The live startup response and sidebar comparison are documented under [Live observations and confidence](#live-observations-and-confidence-2026-09-29). In that session, CSA returned a complete catalog, its array order differed from the sidebar, and sorting by descending `lastMessage.originalArrivalTime` matched the observed visible order. The result is account- and time-scoped; the API does not declare that ordering as a contract.
 
-The startup response also exposes synchronization metadata, but the live behavior of the delta route is not established here. See the route templates above and the confidence notes below.
+The startup response also exposes synchronization metadata. A live read-only
+request to the delta route accepted the startup token and returned a complete
+empty result; behavior for nonempty changes and token recovery remains
+unverified. See the route templates above and the confidence notes below.
 
 ---
 
@@ -1990,6 +2003,24 @@ that the browser's requests were intercepted.
   and an opaque `backwardLink`. A full traversal with `pageSize=500` returned
   960 unique rows across three pages. No server-side conversation-name, type,
   or activity-date filter was identified in the tested request shape.
+- A read-only probe on 2026-09-30 requested `pageSize=25`; the response had 24
+  conversation rows and an opaque `backwardLink`. Following that exact link
+  returned 24 more rows with no overlap. The two requests took about 1.5 and
+  1.3 seconds in this session. This verifies cursor-based incremental page
+  retrieval for the tested account/build; it does not establish universal
+  ordering, row counts, or page-size behavior.
+- The conversation-index page sequence was not compared across the full
+  traversal against last-activity timestamps or the Teams sidebar. Do not
+  assume raw cursor order is the desired display order; sort the normalized
+  catalog locally when activity ordering is required.
+- Full-traversal timings on 2026-09-30: with `pageSize=500`, three sequential
+  pages returned 961 unique raw rows in 6.67 seconds of page requests (2.88,
+  2.47, and 1.31 seconds); authentication took 1.69 seconds, for 8.36 seconds
+  total. With `pageSize=25`, 42 pages returned the same 961 unique raw rows in
+  55.44 seconds of page requests (mean 1.32 seconds, range 0.84–1.57);
+  authentication took 2.28 seconds, for 57.73 seconds total. Neither run
+  needed a retry. These are single-session timings for the raw catalog, which
+  may contain non-chat rows; they are not a universal performance guarantee.
 - The CSA startup response returned 943 chats and reported `isPartialData=false`
   and `hasMoreChats=false`; every CSA ID was present in the raw Chat Service
   list. The raw list had 17 additional rows: one notes-to-self conversation
@@ -2063,7 +2094,13 @@ contract. See [Graph list chat messages (beta)](https://learn.microsoft.com/en-u
 
 ## Delta synchronization and open uncertainties
 
-The CSA response exposes `metadata.syncToken` and public captures show an `x-ms-synctoken` request header for `teams/users/me/updates`. The delta route and its token progression were not verified in the live session described above.
+The CSA response exposes `metadata.syncToken` and public captures show an
+`x-ms-synctoken` request header for `teams/users/me/updates`. A live read-only
+GET accepted the fresh startup token and returned a complete empty delta (all
+five catalog arrays empty, `isPartialData=false`, and `hasMoreChats=false`).
+The response included the same `syncToken`; no token rotation occurred in
+this no-change sample. This verifies the route and empty response shape, but
+not delivery or application of actual changes.
 
 The following details remain unverified or may vary by tenant/build:
 
@@ -2075,6 +2112,8 @@ The following details remain unverified or may vary by tenant/build:
 - whether `lastCompleteSegmentStartTime` and `lastCompleteSegmentEndTime` can safely terminate date-bounded history retrieval;
 - exact page-size limits and whether all continuation links retain the original requested page size;
 - which CSA headers beyond the resource bearer token and Skype token are mandatory across tenants.
+- how nonempty delta responses represent added, changed, or removed chats, and whether they can be paginated;
+- how the client should recover from an expired, rejected, or otherwise unusable sync token.
 
 For the catalog implementation, `catalog_complete` is intentionally scoped:
 it means CSA reported complete, or that a paginated fallback finished without
@@ -2092,7 +2131,7 @@ is bounded, and the catalog coverage reports unresolved fallback names.
 Primary sources used for these notes:
 
 1. A production Teams Web JavaScript build and HTML entry document collected on **2026-09-28**, inspected for route templates, resource names, headers, and client behavior.
-2. Read-only live requests made with an explicitly authenticated Teams session on **2026-09-29**, including CSA startup, Middle Tier profile lookup, and Regional Chat Service message history.
+2. Read-only live requests made with an explicitly authenticated Teams session on **2026-09-29** and **2026-09-30**, including CSA startup and delta, Regional Chat Service catalog pagination and message history, and Middle Tier profile lookup.
 3. The independent reverse-engineered project [Maxim-Mazurok/teams-api](https://github.com/Maxim-Mazurok/teams-api), used as corroborating implementation evidence.
 4. Teams Web IndexedDB architecture notes from [gediz/teams-web-chat-exporter](https://github.com/gediz/teams-web-chat-exporter).
 5. Public references including AADInternals, purple-teams, Microsoft Learn/Q&A, Microsoft Tech Community, and SkPy discussions.

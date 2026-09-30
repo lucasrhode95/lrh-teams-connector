@@ -4,18 +4,18 @@
 
 This is the consolidated register of gaps between the current application and the intended product. It replaces the separate lists of open work previously scattered through this roadmap. Endpoint facts and captured payloads remain in [Teams API research](teams-api-research.md); module responsibilities are in [Project architecture](project-architecture.md); usage is in [MCP server guide](teams-mcp-server.md).
 
-This revision records the P2.1, P2.2 and P2.3 implementation and one live, read-only local catalog smoke test. It did not perform a new browser capture or online search, and it sent no message or changed Teams state. Remaining investigation paths below are proposals unless identified as observed evidence.
+This status snapshot was reviewed against the current implementation and sanitized functional tests on 2026-09-30. The review did not make a live Teams request, capture browser traffic or search online, and it sent no message or changed Teams state. Live observations below are dated and scoped; remaining investigation paths are proposals unless identified as observed evidence.
 
 Status terms:
 
 - **Implemented:** documented application behavior exists; this does not establish universal behavior across Microsoft tenants or all chat types.
 - **Partial:** a useful part exists, with a specific remaining gap.
-- **Missing:** the requested capability is absent.
+- **Pending:** the requested capability is not implemented yet.
 - **Unverified:** available evidence is insufficient. Suspected failure cases listed below require validation and are not newly confirmed bugs.
 
 ## Intended product
 
-- Retrieve relevant one-to-one, group, meeting, and self conversations with stable identities, honest coverage, reliable pagination, and inclusive date/count filters.
+- Retrieve relevant one-to-one, group, meeting, and self conversations with stable identities and honest catalog coverage. Retrieve message history with reliable pagination and inclusive date/count filters.
 - Offer a simple local page for manual text/ZIP exports without an AI client. Retrieving new Teams data still requires connectivity and authentication.
 - Expose the same engine through client-independent MCP for listing, participant/content search, and complete conversation or surrounding-context retrieval.
 - Support explicitly authorized text and attachment sending through MCP using files already on the host computer, including requests made remotely from a phone.
@@ -39,17 +39,17 @@ Status terms:
 
 This order puts shared retrieval/storage foundations before optional attachment sending. Work IDs preserve earlier references; P1.4 was removed because phone-to-host file transfer is outside the requested workflow. Independent investigations can proceed without waiting for unrelated work.
 
-| Order | Work | What it unlocks |
-|---|---|---|
-| 1 | P1.3 Self-chat discovery and sender identity | Reliable retrieval and targeting of the user's own chat; useful sending test destination. |
-| 2 | P1.1 Catalog completeness and ordering | A trustworthy scope for listing, retrieval and search. |
-| 3 | P1.2 Long-history filtering and export reliability | Correct, recoverable retrieval of requested intervals. |
-| 4 | P2.1 Lazy indefinite message storage | **Partial:** shared fetch/upsert/query is implemented; live edit/delete semantics need validation. |
-| 5 | P2.3 Complete MCP content and continuation | **Implemented:** bounded inline continuation and snapshot Resources; clients drive additional calls. |
-| 6 | P2.2 Search coverage and Teams search research | **Implemented locally:** explicit date/chat scope and SQL matching; native Teams search remains unverified. |
-| 7 | P2.4 Scheduled AI workflows | Optional client-driven summaries using on-demand retrieval; not configured in this application. |
-| Optional | P1.5 Attachment upload, access and delivery | Send a host-computer file with a message; a nice-to-have alongside existing text sending. |
-| Later | Nice-to-haves | Attachments in exports, indicators, message pictures, viewing and Favorites. |
+| Order | Work | What it unlocks | Status |
+|---|---|---|---|
+| 1 | P1.3 Self-chat discovery and sender identity | Reliable retrieval and targeting of the user's own chat; useful sending test destination. | **Implemented** for the observed signed-in account; broader tenant behavior remains unverified. |
+| 2 | P1.1 Catalog completeness and ordering | A trustworthy scope for listing, retrieval and search. | **Partial** — catalog normalization and coverage are implemented; self-chat activity ordering and cache-first UI refresh remain. |
+| 3 | P1.2 Long-history filtering and export reliability | Correct, recoverable retrieval of requested intervals. | **Partial** — bounded retries, filtering, spooling and cancellation exist; exports do not resume after restart, and very long live histories need more validation. |
+| 4 | P2.1 Lazy indefinite message storage | Retain fetched messages and reconcile fresh Teams records with the local archive. | **Partial** — shared fetch/upsert/query is implemented; live edit/deletion semantics remain unverified. |
+| 5 | P2.3 Complete MCP content and continuation | Retrieve complete content through bounded calls or MCP Resources. | **Implemented** for the current generic MCP client contract; client support for Resources can vary. |
+| 6 | P2.2 Search coverage and Teams search research | Search messages and participants with honest, explicit coverage. | **Partial** — scoped local SQL and participant search are implemented; the native Teams search contract remains unverified and unused. |
+| 7 | P2.4 Scheduled AI workflows | Find pending tasks and topic updates on a recurring or ad-hoc basis. | **Partial** — retrieval primitives exist; this application does not configure a summarizer, schedule or delivery destination. |
+| Optional | P1.5 Attachment upload, access and delivery | Send a host-computer file with a message; a nice-to-have alongside existing text sending. | **Pending** — candidate routes are documented, but end-to-end upload and delivery are not implemented or verified. |
+| Later | Nice-to-haves | Attachments in exports, indicators, message pictures, viewing and Favorites. | **Partial / pending** — see the item-level status table below. |
 
 ## P1.3 Self-chat discovery and sender identity
 
@@ -64,7 +64,7 @@ This order puts shared retrieval/storage foundations before optional attachment 
 
 ## P1.5 Send attachments
 
-**Status: Missing. Research contains candidate upload shapes, not a verified end-to-end implementation.**
+**Status: Pending. Research contains candidate upload shapes, not a verified end-to-end implementation.**
 
 - Requested flow: while remotely controlling the agent from a phone, ask it to send a message to oneself or another specified Teams recipient and attach an existing file on the host computer. The server reads that local file and uploads it to Teams. Phone file upload/download and a separate file-transfer interface are not requirements. This is a nice-to-have extension to text sending.
 - Known: current sending is plain text. Existing research distinguishes ordinary SharePoint/OneDrive files from AMS inline images. It records candidate upload/link routes, file metadata fields and AMS references.
@@ -77,13 +77,16 @@ This order puts shared retrieval/storage foundations before optional attachment 
 
 ## P1.1 Catalog completeness, names and ordering
 
-**Status: Implemented for the observed chat/meeting scope; tenant-wide visibility remains unverified.**
+**Status: Partial — catalog scope is implemented for observed data; ordering and cache-first refresh fixes remain.**
 
 - Catalog rules: preserve CSA rows and their richer UI fields; use the fully paginated Chat Service feed when CSA reports partial data or omits either completeness flag. Merge by conversation ID and admit only recognized chat, one-to-one, meeting, and the known notes-to-self row. Exclude known team/channel entities and service streams. Unknown raw-only types are excluded and make coverage incomplete rather than silently disappearing.
-- Names and ordering: use names/topics exposed by the source rows. For fallback-only untitled one-to-one chats, attempt a bounded roster lookup and report how many remain unnamed. Put the known self-chat first, then sort by descending last activity; preserve source order for timestamp ties and put missing timestamps last.
+- Names and ordering: use names/topics exposed by the source rows. For fallback-only untitled one-to-one chats, attempt a bounded roster lookup and report how many remain unnamed. **Ordering fix:** the current connector prioritizes the known self-chat; remove that special priority and sort every chat, including self-chat, by descending last activity. Preserve source order for timestamp ties and put missing timestamps last. Add a regression case where a less-recent self-chat appears below chats with newer activity.
 - Coverage: `list_chats` reports the source, defined scope, CSA partial flag, raw unique row count, fallback rows added, known non-chat and unclassified rows excluded, and unresolved fallback names. `catalog_complete` means CSA explicitly reported complete, or fallback pagination finished without an unclassified raw-only row; it is limited to `catalog_scope`, not a claim about every Teams-visible or tenant-retained object. Malformed catalog rows now fail explicitly instead of being silently skipped.
 - Live evidence (2026-09-30): CSA returned 943 rows with both completeness flags false; the paginated Chat Service feed returned 960 unique rows and contained every CSA ID. Its 17 raw-only rows were the known self-chat plus 16 team/channel and service-stream rows; no additional ordinary chat or meeting type appeared in this account snapshot. This supports the scoped type filter for that session, not a universal completeness guarantee.
-- Remaining uncertainty: other tenants/builds, hidden or archived items, additional catalog views, and whether private service flags consistently mean complete. CSA delta/sync-token behavior is unverified; it is not used for listing, which performs a full CSA read and only pages the fallback when needed.
+- Incremental-discovery evidence (2026-09-30): a Chat Service request with `pageSize=25` returned 24 rows and an opaque `backwardLink`; following that exact link returned 24 more with no overlap. A later CSA startup request returned 944 chats with `isPartialData=false` and `hasMoreChats=false` in about 4.7 seconds. The CSA updates route accepted its `metadata.syncToken` and returned a complete empty delta with the same token. No nonempty delta or token rotation was observed.
+- Full-traversal timing (2026-09-30): the raw catalog returned 961 unique rows in three `pageSize=500` requests, taking 6.67 seconds for the pages and 8.36 seconds including 1.69 seconds for authentication. At `pageSize=25`, it took 42 pages and 55.44 seconds for the pages, or 57.73 seconds including 2.28 seconds for authentication; no retries occurred. In this sample, small pages improve availability of an early page but make a full traversal much slower. The raw catalog includes non-chat rows, so these timings compare request strategies rather than normalized UI catalog construction.
+- Startup/cache behavior (chosen approach; no page-by-page UI loading): persist an account-bound snapshot of the full conversation list. On page load, React should immediately request the fresh full list and render the cached list first when one exists, with a visible refresh indicator. If there is no cached list, keep the existing loading state until the response arrives. Replace/update the list when the fresh full response arrives; preserve the selected conversation by stable chat ID if it remains in the new list. Use CSS transitions for added and reordered rows to reduce visual jumps, respecting reduced-motion preferences. Keep a cached list visible and indicate refresh failure if the background request fails. The observed raw-feed pagination is retained as API evidence, but is not the UI startup plan: full traversal took 6.67 seconds with `pageSize=500` and 55.44 seconds with `pageSize=25`, while a complete CSA startup request took about 4.7 seconds. These are account/session-specific measurements and the raw feed includes non-chat rows. The CSA delta route returned an empty result only; the UI refresh should request the current full list rather than depend on unverified delta semantics.
+- Remaining uncertainty: other tenants/builds, hidden or archived items, additional catalog views, and whether private service flags consistently mean complete. The empty CSA delta route is verified but is not used for listing; nonempty delta semantics and token recovery remain unverified. Normal listing still performs a full CSA read and only pages the raw fallback when needed.
 - Further evidence would come from comparing a small, user-identified set of visible/hidden/direct/group/meeting chats and checking naturally occurring metadata changes. No deliberate hide, pin, membership or message-state mutation is required. The user can identify any expected chat missing from the result.
 
 ## P1.2 Long-history filtering and export reliability
@@ -170,15 +173,15 @@ This order puts shared retrieval/storage foundations before optional attachment 
 
 These and P1.5 attachment sending remain optional, below core retrieval, MCP and lazy storage. Attachment downloading remains optional; Favorites remains last.
 
-| Item | Current gap | Proposed path and completion evidence |
-|---|---|---|
-| N1. Download attachments/images in exports | Markers/links exist; binary downloads do not. | Verify file/AMS download authentication from existing attachment metadata, redirects, expired links and names; package safe relative paths and report individual failures without losing text. A restored export must open its included files. |
-| N2. Remote read/unread indicators | CSA has an unread value; UI does not display it. | Compare existing remote values to the Teams UI, including missing/stale values. Show only verified states. Do not invoke mark-read endpoints to test this feature. |
-| N3. Pictures on messages | Account/chat picture URI fallback exists; message sender pictures do not. | Build on verified sender identity, compare available URI behavior and authentication, and preserve generic fallbacks. Direct URIs are preferred over local image downloads. |
-| N4. Conversation viewer and rendering fidelity | No viewer; export/formatting exist. | Reuse retrieval; use sanitized examples for mentions, replies, multiline text, rich/system messages and missing metadata. Preserve raw/unknown event meaning rather than inventing an actor/action. Verify functionality and shared formatting; appearance tests are not required. |
-| N5. Optional presence indicator | No status displayed; a usable presence source is unverified. | Inspect existing account data and Web presence usage only if inexpensive and accessible with available authentication. Otherwise defer, as permitted. Profile failure must not block the UI. |
-| N7. Optional Markdown input parsing for outgoing messages | The existing output formatter converts Teams messages to readable text, but send_message treats input as plain text, so Markdown fences are sent literally. | Add an input-parser flag controlled by the requester; it defaults to enabled and can be disabled per request. Version 1 recognizes only code fences delimited by three backticks, with an optional language tag after the opening fence. Version 2 adds ordered and unordered lists. Leave other Markdown untouched. Convert supported syntax into Teams-supported rich text safely, preserve code/list content and surrounding text, and verify how the generated payload renders in Teams. |
-| N6. Favorites/pinned section | isSticky is not a verified Favorites marker. | Compare already configured Favorites with Web responses/call sites. Once mapped, display the section first without changing Teams state. This remains the lowest priority. |
+| Item | Status | Current gap | Proposed path and completion evidence |
+|---|---|---|---|
+| N1. Download attachments/images in exports | **Partial** | Markers/links exist; binary downloads do not. | Verify file/AMS download authentication from existing attachment metadata, redirects, expired links and names; package safe relative paths and report individual failures without losing text. A restored export must open its included files. |
+| N2. Remote read/unread indicators | **Partial** | The catalog exposes an unread value, but the UI does not display it. Remote freshness and exact semantics are not validated. | Compare existing remote values to the Teams UI, including missing/stale values. Show only verified states. Do not invoke mark-read endpoints to test this feature. |
+| N3. Pictures on messages | **Partial** | Account/chat picture URI fallback exists; message sender pictures do not. | Build on verified sender identity, compare available URI behavior and authentication, and preserve generic fallbacks. Direct URIs are preferred over local image downloads. |
+| N4. Conversation viewer and rendering fidelity | **Partial** | There is no viewer; export and shared message formatting exist. | Reuse retrieval; use sanitized examples for mentions, replies, multiline text, rich/system messages and missing metadata. Preserve raw/unknown event meaning rather than inventing an actor/action. Verify functionality and shared formatting; appearance tests are not required. |
+| N5. Optional presence indicator | **Pending / unverified** | No status is displayed, and a usable presence source is unverified. | Inspect existing account data and Web presence usage only if inexpensive and accessible with available authentication. Otherwise defer, as permitted. Profile failure must not block the UI. |
+| N7. Optional Markdown input parsing for outgoing messages | **Pending** | `send_message` treats input as plain text, so Markdown fences are sent literally. | Add an input-parser flag controlled by the requester; it defaults to enabled and can be disabled per request. Version 1 recognizes only code fences delimited by three backticks, with an optional language tag after the opening fence. Version 2 adds ordered and unordered lists. Leave other Markdown untouched. Convert supported syntax into Teams-supported rich text safely, preserve code/list content and surrounding text, and verify how the generated payload renders in Teams. |
+| N6. Favorites/pinned section | **Pending / unverified** | Favorites presentation is absent; `isSticky` is not a verified Favorites marker. | Compare already configured Favorites with Web responses/call sites. Once mapped, display the section first without changing Teams state. This remains the lowest priority. |
 
 ## How future investigations should be conducted
 
