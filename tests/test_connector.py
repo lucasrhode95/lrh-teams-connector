@@ -55,6 +55,70 @@ class TeamsConnectorTests(unittest.TestCase):
         self.assertEqual(metadata["user_id"], "user-guid")
         cache.find.assert_called_once_with("Account")
 
+    def test_profile_picture_uri_uses_teams_web_route_without_fetching_an_image(self):
+        client = StubConnector()
+        client._spaces_claims["name"] = "Taylor Example"
+
+        uri = client.get_profile_picture_uri()
+
+        self.assertIsNotNone(uri)
+        parts = urlsplit(uri)
+        self.assertEqual(parts.netloc, "middle.example.test")
+        self.assertEqual(
+            parts.path,
+            "/beta/users/self-guid/profilepicturev2/8:orgid:self-guid",
+        )
+        self.assertEqual(
+            parse_qs(parts.query),
+            {"displayname": ["Taylor Example"], "size": ["HR64x64"]},
+        )
+        self.assertEqual(client.requests, [])
+
+    def test_chat_rows_use_backend_avatar_urls_or_one_to_one_picture_uri(self):
+        client = StubConnector([{
+            "chats": [
+                {
+                    "id": "19:group@thread.v2",
+                    "title": "Group",
+                    "chatType": "group",
+                    "avatarUrl": "https://images.example.test/group.png",
+                    "lastMessage": {},
+                },
+                {
+                    "id": "19:direct@thread.v2",
+                    "title": "Taylor Example",
+                    "chatType": "chat",
+                    "isOneOnOne": True,
+                    "members": [
+                        {"objectId": "self-guid", "mri": "8:orgid:self-guid"},
+                        {
+                            "objectId": "peer-guid",
+                            "mri": "8:orgid:peer-guid",
+                            "displayName": "Jordan Example",
+                        },
+                    ],
+                    "lastMessage": {},
+                },
+            ],
+            "metadata": {"isPartialData": False, "hasMoreChats": False},
+        }])
+
+        chats = {chat.id: chat for chat in client.list_chats()}
+
+        self.assertEqual(
+            chats["19:group@thread.v2"].avatar_url,
+            "https://images.example.test/group.png",
+        )
+        direct_picture = urlsplit(chats["19:direct@thread.v2"].avatar_url)
+        self.assertEqual(
+            direct_picture.path,
+            "/beta/users/self-guid/profilepicturev2/8:orgid:peer-guid",
+        )
+        self.assertEqual(
+            parse_qs(direct_picture.query)["displayname"], ["Jordan Example"]
+        )
+        self.assertEqual(len(client.requests), 1)
+
     def test_members_enrich_blank_display_names_from_middle_tier_profiles(self):
         client = StubConnector(
             [{"members": [{"id": "8:orgid:ABC123", "displayName": ""}]}]

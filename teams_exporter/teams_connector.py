@@ -23,6 +23,7 @@ class ChatSummary:
     last_message_preview: str | None = None
     unread: bool | None = None
     chat_type: str | None = None
+    avatar_url: str | None = None
 
 
 class AuthenticationRequiredError(RuntimeError):
@@ -124,6 +125,45 @@ class TeamsConnector:
             "tenant_country": claims.get("tenant_ctry"),
         }
 
+    def get_profile_picture_uri(
+        self,
+        user_id: str | None = None,
+        display_name: str | None = None,
+    ) -> str | None:
+        """Build the Teams Web profile-picture URI without fetching the image."""
+        current_user_id = self._profile_identifier(self._spaces_claims.get("oid"))
+        target_id = user_id or current_user_id
+        if not isinstance(target_id, str):
+            return None
+        target_id = target_id.strip()
+        middle_tier = urlsplit(self._middle_tier_url or "")
+        if not target_id or middle_tier.scheme != "https" or not middle_tier.netloc:
+            return None
+
+        if target_id.lower().startswith("8:orgid:"):
+            target_mri = "8:orgid:" + target_id.split(":", 2)[2]
+        elif ":" in target_id:
+            return None
+        else:
+            target_mri = f"8:orgid:{target_id}"
+
+        base_path = middle_tier.path.rstrip("/")
+        if current_user_id:
+            picture_path = (
+                f"{base_path}/beta/users/{quote(current_user_id, safe='')}"
+                f"/profilepicturev2/{quote(target_mri, safe=':')}"
+            )
+        else:
+            picture_path = (
+                f"{base_path}/beta/users/{quote(target_mri, safe=':')}"
+                "/profilepicturev2"
+            )
+        name = display_name
+        if name is None and target_id == current_user_id:
+            name = self._spaces_claims.get("name")
+        query = urlencode({"displayname": name or "", "size": "HR64x64"})
+        return urlunsplit((middle_tier.scheme, middle_tier.netloc, picture_path, query, ""))
+
     def get_cached_account_metadata(self) -> dict[str, Any] | None:
         """Return the first cached MSAL account without making network requests.
 
@@ -211,6 +251,7 @@ class TeamsConnector:
                     last_message_preview=preview,
                     unread=unread,
                     chat_type=chat_type,
+                    avatar_url=self._avatar_url_from_rows(chat),
                 )
             )
         self._resolve_untitled_one_to_one_names(
@@ -218,6 +259,7 @@ class TeamsConnector:
             normalized,
             payload.get("users"),
         )
+        self._add_one_to_one_profile_picture_uris(chats, normalized)
         if is_partial:
             known_ids = {chat.id for chat in normalized}
             for row in self._list_chat_service_conversations():
@@ -316,7 +358,69 @@ class TeamsConnector:
             last_message_at=last_message_at,
             last_message_preview=preview,
             chat_type=chat_type if isinstance(chat_type, str) else None,
+            avatar_url=self._avatar_url_from_rows(
+                conversation, properties, thread_properties
+            ),
         )
+
+    def _add_one_to_one_profile_picture_uris(
+        self,
+        raw_chats: list[Any],
+        summaries: list[ChatSummary],
+    ) -> None:
+        own_id = self._profile_identifier(self._spaces_claims.get("oid"))
+        if not own_id:
+            return
+        summaries_by_id = {summary.id: summary for summary in summaries}
+        for row in raw_chats:
+            if not isinstance(row, dict) or self._optional_bool(row.get("isOneOnOne")) is not True:
+                continue
+            chat_id = row.get("id")
+            summary = summaries_by_id.get(chat_id) if isinstance(chat_id, str) else None
+            if summary is None or summary.avatar_url:
+                continue
+            members = row.get("members")
+            if not isinstance(members, list):
+                continue
+            peers: dict[str, tuple[str, str | None]] = {}
+            for member in members:
+                if not isinstance(member, dict):
+                    continue
+                identifiers = [(value, self._profile_identifier(value)) for value in (
+                    member.get("mri"), member.get("objectId")
+                )]
+                name = member.get("displayName") or member.get("name")
+                for value, identifier in identifiers:
+                    if identifier and identifier != own_id:
+                        current = peers.get(identifier)
+                        source_id = value if isinstance(value, str) else identifier
+                        resolved_name = name.strip() if isinstance(name, str) and name.strip() else None
+                        peers[identifier] = (
+                            current[0] if current else source_id,
+                            resolved_name or (current[1] if current else None),
+                        )
+            if len(peers) != 1:
+                continue
+            peer_id, (source_id, member_name) = next(iter(peers.items()))
+            display_name = member_name or summary.display_name
+            summary.avatar_url = self.get_profile_picture_uri(
+                source_id, display_name
+            )
+
+    @staticmethod
+    def _avatar_url_from_rows(*rows: dict[str, Any]) -> str | None:
+        for row in rows:
+            for key in ("avatarUrl", "avatarURL", "profilePictureUrl", "imageUri", "imageUrl"):
+                value = row.get(key)
+                if isinstance(value, dict):
+                    value = value.get("webUrl") or value.get("url")
+                if not isinstance(value, str) or len(value) > 2048:
+                    continue
+                candidate = value.strip()
+                parsed = urlsplit(candidate)
+                if parsed.scheme == "https" and parsed.netloc and not parsed.username and not parsed.password:
+                    return candidate
+        return None
 
     def _resolve_untitled_one_to_one_names(
         self,
