@@ -82,7 +82,7 @@ class TeamsExporter:
         exported: list[Path] = []
         used_names: set[str] = set()
         for chat in chats:
-            base = self._filename_stem(chat)
+            base = self.filename_stem(chat)
             stem = base
             suffix = 2
             while stem.casefold() in used_names:
@@ -120,7 +120,7 @@ class TeamsExporter:
         return TeamsConnector._message_datetime(message)
 
     @staticmethod
-    def _filename_stem(chat: ChatSummary) -> str:
+    def filename_stem(chat: ChatSummary) -> str:
         label = re.sub(r"[<>:\"/\\|?*\x00-\x1f]+", "_", chat.display_name)
         label = re.sub(r"\s+", " ", label).strip(" ._")[:70] or "chat"
         chat_id = re.sub(r"[^A-Za-z0-9]+", "-", chat.id).strip("-")[:32]
