@@ -53,6 +53,14 @@ class MCPContractTests(unittest.TestCase):
                         catalog_schema = str(tools_by_name["list_chats"].outputSchema)
                         self.assertIn("catalog_scope", catalog_schema)
                         self.assertIn("unclassified_service_rows_excluded", catalog_schema)
+                        self.assertIn(
+                            "retry_count_this_call",
+                            str(tools_by_name["get_messages"].outputSchema),
+                        )
+                        self.assertIn(
+                            "message_retries_this_call",
+                            str(tools_by_name["sync_search_index"].outputSchema),
+                        )
 
                         search_tool = tools_by_name["search_messages"]
                         self.assertEqual(

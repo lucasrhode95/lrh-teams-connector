@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import html
+import http.client
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any
+from threading import Event
+from typing import Any, Callable, Iterator
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import msal
@@ -49,6 +53,16 @@ class AuthenticationRequiredError(RuntimeError):
     """Raised when the cached Microsoft session needs an interactive sign-in."""
 
 
+class ExtractionCancelled(RuntimeError):
+    """Raised when a caller asks an in-progress history read to stop."""
+
+
+class _TransientTeamsRequestError(RuntimeError):
+    def __init__(self, message: str, retry_after: str | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 class TeamsConnector:
     """Read chat catalogs and message history through Teams service APIs."""
 
@@ -80,6 +94,11 @@ class TeamsConnector:
         "streamofgeneric",
     }
     MAX_FALLBACK_NAME_LOOKUPS = 20
+    READ_REQUEST_MAX_ATTEMPTS = 4
+    READ_RETRY_BASE_SECONDS = 0.25
+    READ_RETRY_MAX_SECONDS = 8.0
+    READ_RETRY_AFTER_MAX_SECONDS = 10.0
+    RETRYABLE_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
     _MESSAGE_AUTHOR_MRI = re.compile(
         r"(?i)(?<![a-z0-9])(8:orgid:[0-9a-f]{8}-[0-9a-f]{4}-"
         r"[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?![0-9a-f])"
@@ -107,6 +126,16 @@ class TeamsConnector:
         self._middle_tier_url: str | None = None
         self._auth_sources: dict[str, str] = {}
         self._last_client_message_id = 0
+        self.last_request_retry_count = 0
+        self.last_message_read_coverage: dict[str, Any] = {
+            "complete": False,
+            "pages_fetched": 0,
+            "raw_items_scanned": 0,
+            "messages_retrieved": 0,
+            "duplicate_messages_skipped": 0,
+            "missing_timestamp_messages_excluded": 0,
+            "retry_count": 0,
+        }
         self.catalog_coverage = ChatCatalogCoverage(
             catalog_complete=False,
             catalog_source="not loaded",
@@ -847,15 +876,45 @@ class TeamsConnector:
         limit: int | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
+        cancel_event: Event | None = None,
+        progress_callback: Callable[[int, int, int], None] | None = None,
     ) -> list[dict[str, Any]]:
-        """Read messages for a chat ID and return them oldest to newest.
+        """Read matching history and return it oldest to newest.
 
-        The service returns history through opaque ``backwardLink`` URLs. Date
-        bounds are inclusive. ``since`` is also sent as the observed server-side
-        ``startTime`` lower bound; local checks remain authoritative. ``until``
-        is applied locally because ``endTime`` edge behavior is inconsistent.
-        Segment metadata is not used as a stopping condition until its semantics
-        are verified.
+        Date bounds are inclusive. ``since`` is also sent as the observed
+        server-side ``startTime`` lower bound; local checks remain authoritative.
+        ``until`` stays local because server-side ``endTime`` behavior is
+        inconsistent. Segment metadata is not used as an early-stop condition.
+        """
+        messages = [
+            message
+            for page in self.iter_message_pages(
+                conversation_id,
+                limit=limit,
+                since=since,
+                until=until,
+                cancel_event=cancel_event,
+                progress_callback=progress_callback,
+            )
+            for message in page
+        ]
+        return sorted(messages, key=self._message_order_key)
+
+    def iter_message_pages(
+        self,
+        conversation_id: str,
+        *,
+        limit: int | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        cancel_event: Event | None = None,
+        progress_callback: Callable[[int, int, int], None] | None = None,
+    ) -> Iterator[list[dict[str, Any]]]:
+        """Yield deduplicated chronological pages while traversing newest first.
+
+        Each yielded page is oldest to newest, while successive pages move from
+        newer history to older history. Exporters can spool pages and replay
+        them in reverse without retaining every message body in memory.
         """
         self._require_logged_in()
         if not isinstance(conversation_id, str) or not conversation_id.strip():
@@ -864,20 +923,8 @@ class TeamsConnector:
             isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0
         ):
             raise ValueError("limit must be a positive integer or None.")
-        if since is not None and not isinstance(since, datetime):
-            raise TypeError("since must be a datetime or None.")
-        if until is not None and not isinstance(until, datetime):
-            raise TypeError("until must be a datetime or None.")
-        if since is not None and (
-            since.tzinfo is None or since.utcoffset() is None
-        ):
-            raise ValueError("since must include a timezone.")
-        if until is not None and (
-            until.tzinfo is None or until.utcoffset() is None
-        ):
-            raise ValueError("until must include a timezone.")
-        since_utc = since.astimezone(timezone.utc) if since else None
-        until_utc = until.astimezone(timezone.utc) if until else None
+        since_utc = self._validate_bound("since", since)
+        until_utc = self._validate_bound("until", until)
         if since_utc is not None and until_utc is not None and since_utc > until_utc:
             raise ValueError("since must be earlier than or equal to until.")
 
@@ -886,74 +933,145 @@ class TeamsConnector:
             self.MESSAGE_PAGE_SIZE,
             limit if limit is not None else self.MESSAGE_PAGE_SIZE,
         )
-        start_time = (
-            str(self._epoch_milliseconds(since_utc))
-            if since_utc is not None
-            else "0"
-        )
         url = self._set_query_parameters(
             endpoint,
-            startTime=start_time,
+            startTime=(
+                str(self._epoch_milliseconds(since_utc))
+                if since_utc is not None
+                else "0"
+            ),
             pageSize=str(first_page_size),
             view="msnp24Equivalent",
         )
 
-        results: list[dict[str, Any]] = []
         seen_message_ids: set[str] = set()
         seen_urls: set[str] = set()
         pages_without_new_messages = 0
+        pages_fetched = 0
+        raw_items_scanned = 0
+        messages_retrieved = 0
+        duplicate_messages_skipped = 0
+        missing_timestamp_messages_excluded = 0
+        retry_count = 0
+        limit_reached = False
+        history_complete = False
+        self.last_message_read_coverage = {
+            "complete": False,
+            "pages_fetched": 0,
+            "raw_items_scanned": 0,
+            "messages_retrieved": 0,
+            "duplicate_messages_skipped": 0,
+            "missing_timestamp_messages_excluded": 0,
+            "retry_count": 0,
+            "limit_reached": False,
+            "since": since_utc.isoformat().replace("+00:00", "Z") if since_utc else None,
+            "until": until_utc.isoformat().replace("+00:00", "Z") if until_utc else None,
+        }
 
-        while url:
-            self._validate_service_url(url, self._chat_service_url, "Chat Service")
-            if url in seen_urls:
-                raise RuntimeError("Teams repeated a message continuation link.")
-            seen_urls.add(url)
+        try:
+            while url:
+                self._raise_if_cancelled(cancel_event)
+                self._validate_service_url(url, self._chat_service_url, "Chat Service")
+                if url in seen_urls:
+                    raise RuntimeError("Teams repeated a message continuation link.")
+                seen_urls.add(url)
+                try:
+                    payload = self._request_chat_service(
+                        url,
+                        cancel_event=cancel_event,
+                    )
+                except Exception:
+                    retry_count += self.last_request_retry_count
+                    if progress_callback is not None:
+                        progress_callback(
+                            pages_fetched, messages_retrieved, retry_count
+                        )
+                    raise
+                retry_count += self.last_request_retry_count
 
-            payload = self._request_chat_service(url)
-            page = payload.get("messages")
-            if not isinstance(page, list) or any(
-                not isinstance(message, dict) for message in page
-            ):
-                raise RuntimeError("Unexpected Teams messages response.")
+                page = payload.get("messages")
+                if not isinstance(page, list) or any(
+                    not isinstance(message, dict) for message in page
+                ):
+                    raise RuntimeError("Unexpected Teams messages response.")
 
-            new_ids_on_page = 0
-            for message in sorted(page, key=self._message_order_key, reverse=True):
-                message_id = message.get("id")
-                if message_id is not None:
-                    message_id = str(message_id)
-                    if message_id in seen_message_ids:
+                raw_items_scanned += len(page)
+                new_ids_on_page = 0
+                selected_descending: list[dict[str, Any]] = []
+                for message in sorted(page, key=self._message_order_key, reverse=True):
+                    message_id = message.get("id")
+                    if message_id is not None:
+                        message_id = str(message_id)
+                        if message_id in seen_message_ids:
+                            duplicate_messages_skipped += 1
+                            continue
+                        seen_message_ids.add(message_id)
+                        new_ids_on_page += 1
+
+                    timestamp = self._message_datetime(message)
+                    if (since_utc is not None or until_utc is not None) and timestamp is None:
+                        missing_timestamp_messages_excluded += 1
                         continue
-                    seen_message_ids.add(message_id)
-                    new_ids_on_page += 1
+                    if since_utc is not None and timestamp < since_utc:
+                        continue
+                    if until_utc is not None and timestamp > until_utc:
+                        continue
+                    selected_descending.append(message)
+                    messages_retrieved += 1
+                    if limit is not None and messages_retrieved >= limit:
+                        limit_reached = True
+                        break
 
-                timestamp = self._message_datetime(message)
-                if (since_utc is not None or until_utc is not None) and timestamp is None:
-                    continue
-                if since_utc is not None and timestamp < since_utc:
-                    continue
-                if until_utc is not None and timestamp > until_utc:
-                    continue
-                results.append(message)
+                pages_fetched += 1
+                metadata = self._mapping(payload.get("_metadata"))
+                backward_link = metadata.get("backwardLink")
+                if backward_link is not None and not isinstance(backward_link, str):
+                    raise RuntimeError("Unexpected Teams message continuation link.")
+                next_url = backward_link or None
+                if next_url:
+                    self._validate_service_url(
+                        next_url,
+                        self._chat_service_url,
+                        "Chat Service",
+                    )
 
-            if limit is not None and len(results) >= limit:
-                results = results[:limit]
-                break
-
-            pages_without_new_messages = (
-                0 if new_ids_on_page else pages_without_new_messages + 1
-            )
-            if pages_without_new_messages >= 3:
-                raise RuntimeError(
-                    "Teams returned three message pages without new message IDs."
+                pages_without_new_messages = (
+                    0 if new_ids_on_page else pages_without_new_messages + 1
                 )
+                if pages_without_new_messages >= 3 and not limit_reached:
+                    raise RuntimeError(
+                        "Teams returned three message pages without new message IDs."
+                    )
+                if progress_callback is not None:
+                    progress_callback(pages_fetched, messages_retrieved, retry_count)
+                if selected_descending:
+                    yield list(reversed(selected_descending))
 
-            metadata = self._mapping(payload.get("_metadata"))
-            backward_link = metadata.get("backwardLink")
-            if backward_link is not None and not isinstance(backward_link, str):
-                raise RuntimeError("Unexpected Teams message continuation link.")
-            url = backward_link or None
+                if limit_reached or next_url is None:
+                    history_complete = next_url is None
+                    break
+                if next_url in seen_urls:
+                    raise RuntimeError("Teams repeated a message continuation link.")
+                url = next_url
 
-        return sorted(results, key=self._message_order_key)
+            self.last_message_read_coverage["complete"] = history_complete
+        finally:
+            self.last_message_read_coverage.update(
+                {
+                    "pages_fetched": pages_fetched,
+                    "raw_items_scanned": raw_items_scanned,
+                    "messages_retrieved": messages_retrieved,
+                    "duplicate_messages_skipped": duplicate_messages_skipped,
+                    "missing_timestamp_messages_excluded": missing_timestamp_messages_excluded,
+                    "retry_count": retry_count,
+                    "limit_reached": limit_reached,
+                }
+            )
+
+    @staticmethod
+    def _raise_if_cancelled(cancel_event: Event | None) -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            raise ExtractionCancelled("Extraction was cancelled by the caller.")
 
     def get_messages_page(
         self,
@@ -1183,6 +1301,8 @@ class TeamsConnector:
         url: str,
         method: str = "GET",
         body: Any | None = None,
+        *,
+        cancel_event: Event | None = None,
     ) -> dict[str, Any]:
         self._require_logged_in()
         self._validate_service_url(url, self._chat_service_url, "Chat Service")
@@ -1194,6 +1314,7 @@ class TeamsConnector:
                 "Authentication": f"skypetoken={self._skype_token}",
                 "Accept": "application/json",
             },
+            cancel_event=cancel_event,
         )
 
     def _request_middle_tier(
@@ -1255,8 +1376,9 @@ class TeamsConnector:
         method: str = "GET",
         body: Any | None = None,
         headers: dict[str, str] | None = None,
+        cancel_event: Event | None = None,
     ) -> dict[str, Any]:
-        """Send JSON without selecting credentials; callers choose service auth."""
+        """Send JSON with bounded retries for idempotent read requests only."""
         data: bytes | None
         request_headers = dict(headers or {})
         if isinstance(body, bytes):
@@ -1267,24 +1389,70 @@ class TeamsConnector:
         else:
             data = None
         request_headers.setdefault("User-Agent", "Microsoft Teams compatible client")
-        request = urllib.request.Request(
-            url, data=data, method=method, headers=request_headers
-        )
-        try:
-            with urllib.request.urlopen(
-                request, timeout=self.REQUEST_TIMEOUT_SECONDS
-            ) as response:
-                response_text = response.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            location = self._safe_location(url)
-            raise RuntimeError(
-                f"Teams request failed with HTTP {exc.code} for {location}."
-            ) from exc
-        except urllib.error.URLError as exc:
-            location = self._safe_location(url)
-            raise RuntimeError(
-                f"Teams request failed for {location}: {exc.reason}"
-            ) from exc
+        read_request = method.upper() in {"GET", "HEAD"}
+        max_attempts = self.READ_REQUEST_MAX_ATTEMPTS if read_request else 1
+        self.last_request_retry_count = 0
+        transient_error: _TransientTeamsRequestError | None = None
+
+        for attempt in range(1, max_attempts + 1):
+            self._raise_if_cancelled(cancel_event)
+            request = urllib.request.Request(
+                url, data=data, method=method, headers=request_headers
+            )
+            try:
+                with urllib.request.urlopen(
+                    request, timeout=self.REQUEST_TIMEOUT_SECONDS
+                ) as response:
+                    response_text = response.read().decode("utf-8")
+                self._raise_if_cancelled(cancel_event)
+                break
+            except urllib.error.HTTPError as exc:
+                location = self._safe_location(url)
+                if read_request and exc.code in self.RETRYABLE_HTTP_STATUSES:
+                    retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                    transient_error = _TransientTeamsRequestError(
+                        f"Teams request failed with HTTP {exc.code} for {location}.",
+                        retry_after,
+                    )
+                    exc.close()
+                else:
+                    error = RuntimeError(
+                        f"Teams request failed with HTTP {exc.code} for {location}."
+                    )
+                    exc.close()
+                    raise error from exc
+            except urllib.error.URLError as exc:
+                location = self._safe_location(url)
+                transient_error = _TransientTeamsRequestError(
+                    f"Teams request failed for {location}: {exc.reason}"
+                )
+            except (http.client.IncompleteRead, TimeoutError, OSError) as exc:
+                location = self._safe_location(url)
+                transient_error = _TransientTeamsRequestError(
+                    f"Teams request failed for {location}: {exc.__class__.__name__}"
+                )
+
+            if transient_error is None:
+                raise RuntimeError("Teams request failed without an error detail.")
+            if attempt >= max_attempts:
+                raise RuntimeError(
+                    f"{transient_error} Read request exhausted its {max_attempts}-attempt limit."
+                ) from transient_error
+
+            self.last_request_retry_count += 1
+            delay = self._read_retry_delay(
+                self.last_request_retry_count,
+                transient_error.retry_after,
+            )
+            if cancel_event is not None:
+                if cancel_event.wait(delay):
+                    raise ExtractionCancelled("Extraction was cancelled during retry backoff.")
+            else:
+                time.sleep(delay)
+            transient_error = None
+        else:
+            raise RuntimeError("Teams request failed without a response.")
+
         if not response_text.strip():
             payload = {}
         else:
@@ -1297,6 +1465,26 @@ class TeamsConnector:
         if not isinstance(payload, dict):
             raise RuntimeError("Teams returned a JSON value that was not an object.")
         return payload
+
+    @classmethod
+    def _read_retry_delay(cls, retry_number: int, retry_after: str | None) -> float:
+        if retry_after:
+            try:
+                delay = float(retry_after)
+            except ValueError:
+                try:
+                    retry_at = parsedate_to_datetime(retry_after)
+                    if retry_at.tzinfo is None:
+                        retry_at = retry_at.replace(tzinfo=timezone.utc)
+                    delay = (retry_at - datetime.now(timezone.utc)).total_seconds()
+                except (TypeError, ValueError, OverflowError):
+                    delay = -1
+            if delay >= 0:
+                return min(delay, cls.READ_RETRY_AFTER_MAX_SECONDS)
+        return min(
+            cls.READ_RETRY_BASE_SECONDS * (2 ** max(0, retry_number - 1)),
+            cls.READ_RETRY_MAX_SECONDS,
+        )
 
     def _acquire_resource_token(
         self,

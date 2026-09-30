@@ -1,11 +1,13 @@
 import json
+import threading
+import urllib.error
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
 
-from teams_exporter.teams_connector import ChatSummary, TeamsConnector
+from teams_exporter.teams_connector import ChatSummary, ExtractionCancelled, TeamsConnector
 from teams_exporter.teams_exporter import TeamsExporter
 from teams_exporter.teams_message_formatter import TeamsHtmlParser, TeamsMessageFormatter
 
@@ -30,8 +32,17 @@ class StubConnector(TeamsConnector):
         self.responses = list(responses)
         self.requests = []
 
-    def _http_json(self, url, *, method="GET", body=None, headers=None):
+    def _http_json(
+        self,
+        url,
+        *,
+        method="GET",
+        body=None,
+        headers=None,
+        cancel_event=None,
+    ):
         self.requests.append((url, method, body, dict(headers or {})))
+        self.last_request_retry_count = 0
         if self.responses:
             return self.responses.pop(0)
         return {}
@@ -574,6 +585,101 @@ class TeamsConnectorTests(unittest.TestCase):
         messages = client.get_messages("19:fixture@thread.v2", limit=1)
         self.assertEqual([message["id"] for message in messages], ["message-3"])
         self.assertEqual(len(client.requests), 1)
+        self.assertTrue(client.last_message_read_coverage["limit_reached"])
+        self.assertFalse(client.last_message_read_coverage["complete"])
+
+    def test_read_requests_retry_transient_http_failures_and_count_retries(self):
+        client = TeamsConnector()
+        unavailable = urllib.error.HTTPError(
+            "https://chat.example.test/messages",
+            503,
+            "Service Unavailable",
+            {"Retry-After": "0"},
+            None,
+        )
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = b'{"ok": true}'
+        with patch("urllib.request.urlopen", side_effect=[unavailable, response]) as urlopen:
+            with patch("time.sleep"):
+                payload = client._http_json("https://chat.example.test/messages")
+
+        self.assertEqual(payload, {"ok": True})
+        self.assertEqual(urlopen.call_count, 2)
+        self.assertEqual(client.last_request_retry_count, 1)
+
+    def test_read_retry_budget_is_four_total_attempts(self):
+        client = TeamsConnector()
+        failures = [
+            urllib.error.HTTPError(
+                "https://chat.example.test/messages", 503, "Unavailable", {}, None
+            )
+            for _ in range(client.READ_REQUEST_MAX_ATTEMPTS)
+        ]
+        with patch("urllib.request.urlopen", side_effect=failures) as urlopen:
+            with patch("time.sleep"):
+                with self.assertRaisesRegex(RuntimeError, "4-attempt limit"):
+                    client._http_json("https://chat.example.test/messages")
+
+        self.assertEqual(urlopen.call_count, 4)
+        self.assertEqual(client.last_request_retry_count, 3)
+
+    def test_failed_page_reports_retries_without_discarding_prior_progress_count(self):
+        client = StubConnector()
+        progress = []
+
+        def fail_page(_url, *, cancel_event=None):
+            client.last_request_retry_count = 3
+            raise RuntimeError("sanitized exhausted request")
+
+        client._request_chat_service = fail_page
+        with self.assertRaisesRegex(RuntimeError, "exhausted"):
+            list(
+                client.iter_message_pages(
+                    "19:fixture@thread.v2",
+                    progress_callback=lambda pages, messages, retries: progress.append(
+                        (pages, messages, retries)
+                    ),
+                )
+            )
+
+        self.assertEqual(progress, [(0, 0, 3)])
+        self.assertEqual(client.last_message_read_coverage["retry_count"], 3)
+
+    def test_write_requests_are_not_retried(self):
+        client = TeamsConnector()
+        failure = urllib.error.HTTPError(
+            "https://chat.example.test/send", 503, "Unavailable", {}, None
+        )
+        with patch("urllib.request.urlopen", side_effect=failure) as urlopen:
+            with self.assertRaisesRegex(RuntimeError, "HTTP 503"):
+                client._http_json(
+                    "https://chat.example.test/send", method="POST", body=b"{}"
+                )
+
+        self.assertEqual(urlopen.call_count, 1)
+        self.assertEqual(client.last_request_retry_count, 0)
+
+    def test_retry_after_and_exponential_delays_are_bounded(self):
+        self.assertEqual(TeamsConnector._read_retry_delay(1, "1000"), 10.0)
+        self.assertEqual(TeamsConnector._read_retry_delay(2, "invalid"), 0.5)
+
+    def test_cancellation_interrupts_retry_backoff(self):
+        client = TeamsConnector()
+        cancel_event = threading.Event()
+        failure = urllib.error.HTTPError(
+            "https://chat.example.test/messages", 503, "Unavailable", {}, None
+        )
+        with patch("urllib.request.urlopen", side_effect=failure) as urlopen:
+            with patch.object(cancel_event, "wait", return_value=True):
+                with self.assertRaisesRegex(ExtractionCancelled, "cancelled"):
+                    client._http_json(
+                        "https://chat.example.test/messages",
+                        cancel_event=cancel_event,
+                    )
+
+        self.assertEqual(urlopen.call_count, 1)
 
     def test_connection_metadata_never_contains_token_values(self):
         client = StubConnector()
@@ -694,11 +800,20 @@ class TeamsExporterTests(unittest.TestCase):
             def __init__(self):
                 self.calls = []
 
-            def get_messages(
-                self, conversation_id, *, limit=None, since=None, until=None
+            last_message_read_coverage = {"retry_count": 0}
+
+            def iter_message_pages(
+                self,
+                conversation_id,
+                *,
+                limit=None,
+                since=None,
+                until=None,
+                cancel_event=None,
+                progress_callback=None,
             ):
                 self.calls.append((conversation_id, limit, since, until))
-                return [{
+                page = [{
                     "id": "one",
                     "sequenceId": 1,
                     "originalarrivaltime": "2026-09-28T13:00:00+03:00",
@@ -706,6 +821,9 @@ class TeamsExporterTests(unittest.TestCase):
                     "messagetype": "RichText/Html",
                     "content": "<p>Hi <b>there</b></p>",
                 }]
+                if progress_callback:
+                    progress_callback(1, len(page), 0)
+                yield page
 
         connector = FakeConnector()
         exporter = TeamsExporter(connector, TeamsMessageFormatter())
@@ -731,6 +849,79 @@ class TeamsExporterTests(unittest.TestCase):
             self.assertEqual(
                 connector.calls[0], ("19:fake", None, since, until)
             )
+        finally:
+            destination.unlink(missing_ok=True)
+
+    def test_large_export_spools_pages_to_disk_and_replays_chronologically(self):
+        class LargeConnector:
+            last_message_read_coverage = {"retry_count": 0}
+
+            def iter_message_pages(self, *_args, **_kwargs):
+                for index in reversed(range(80)):
+                    yield [{
+                        "id": f"message-{index}",
+                        "sequenceId": index,
+                        "originalarrivaltime": (
+                            f"2026-09-28T10:{index // 60:02d}:{index % 60:02d}Z"
+                        ),
+                        "imdisplayname": f"Author {index}",
+                        "messagetype": "Text",
+                        "content": "x" * 20_000,
+                    }]
+
+        import teams_exporter.teams_exporter as exporter_module
+
+        original_spool = exporter_module.tempfile.SpooledTemporaryFile
+        spools = []
+
+        def tracked_spool(*args, **kwargs):
+            spool = original_spool(*args, **kwargs)
+            spools.append(spool)
+            return spool
+
+        destination = Path(self.id().replace(".", "_") + ".large.txt")
+        exporter = TeamsExporter(LargeConnector(), TeamsMessageFormatter())
+        try:
+            with patch(
+                "teams_exporter.teams_exporter.tempfile.SpooledTemporaryFile",
+                side_effect=tracked_spool,
+            ):
+                exporter.export_chat(ChatSummary("19:large", "Large"), destination)
+            content = destination.read_text(encoding="utf-8")
+            self.assertTrue(spools[0]._rolled)
+            self.assertGreater(destination.stat().st_size, 1_000_000)
+            self.assertLess(content.index("[2026-09-28T10:00:00Z] Author 0"),
+                            content.index("[2026-09-28T10:01:19Z] Author 79"))
+        finally:
+            destination.unlink(missing_ok=True)
+
+    def test_cancelled_export_keeps_existing_destination_intact(self):
+        class CancelConnector:
+            last_message_read_coverage = {"retry_count": 0}
+
+            def iter_message_pages(self, *_args, **kwargs):
+                yield [{
+                    "id": "finished-page",
+                    "originalarrivaltime": "2026-09-28T10:00:00Z",
+                    "imdisplayname": "Taylor",
+                    "messagetype": "Text",
+                    "content": "already fetched",
+                }]
+                kwargs["cancel_event"].set()
+                raise ExtractionCancelled("cancelled")
+
+        destination = Path(self.id().replace(".", "_") + ".cancel.txt")
+        destination.write_text("previous export", encoding="utf-8")
+        try:
+            exporter = TeamsExporter(CancelConnector(), TeamsMessageFormatter())
+            with self.assertRaises(ExtractionCancelled):
+                exporter.export_chat(
+                    ChatSummary("19:cancel", "Cancel"),
+                    destination,
+                    cancel_event=threading.Event(),
+                )
+            self.assertEqual(destination.read_text(encoding="utf-8"), "previous export")
+            self.assertEqual(list(destination.parent.glob(f".{destination.name}.*.tmp")), [])
         finally:
             destination.unlink(missing_ok=True)
 

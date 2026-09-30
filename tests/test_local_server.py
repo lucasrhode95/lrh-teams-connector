@@ -3,13 +3,19 @@ from __future__ import annotations
 import http.client
 import json
 import threading
+import time as time_module
 import unittest
 import zipfile
 from datetime import date, datetime, time, timedelta, timezone
 from io import BytesIO
 
 from teams_exporter.local_server import LocalTeamsHTTPServer
-from teams_exporter.teams_connector import AuthenticationRequiredError, ChatSummary, TeamsConnector
+from teams_exporter.teams_connector import (
+    AuthenticationRequiredError,
+    ChatSummary,
+    ExtractionCancelled,
+    TeamsConnector,
+)
 from teams_exporter.teams_message_formatter import TeamsMessageFormatter
 
 
@@ -26,6 +32,10 @@ class ExportConnector:
             ],
         }
         self.calls = []
+        self.block_after_first_page = False
+        self.waiting_for_cancel = threading.Event()
+        self.resume = threading.Event()
+        self.last_message_read_coverage = {"retry_count": 0}
 
     @staticmethod
     def _message(message_id: str, timestamp: str, content: str, author: str = "Taylor"):
@@ -37,7 +47,16 @@ class ExportConnector:
             "content": content,
         }
 
-    def get_messages(self, conversation_id, *, limit=None, since=None, until=None):
+    def iter_message_pages(
+        self,
+        conversation_id,
+        *,
+        limit=None,
+        since=None,
+        until=None,
+        cancel_event=None,
+        progress_callback=None,
+    ):
         self.calls.append((conversation_id, limit, since, until))
         messages = self.chats[conversation_id]
         if since is not None:
@@ -46,7 +65,31 @@ class ExportConnector:
             messages = [m for m in messages if TeamsConnector._message_datetime(m) <= until]
         if limit is not None:
             messages = messages[-limit:]
-        return messages
+        pages = []
+        end = len(messages)
+        while end:
+            start = max(0, end - 2)
+            pages.append(messages[start:end])
+            end = start
+        pages_fetched = 0
+        messages_retrieved = 0
+        for page_index, page in enumerate(pages):
+            if page_index == 1 and self.block_after_first_page:
+                self.waiting_for_cancel.set()
+                while not self.resume.wait(0.01):
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise ExtractionCancelled("cancelled")
+            if cancel_event is not None and cancel_event.is_set():
+                raise ExtractionCancelled("cancelled")
+            pages_fetched += 1
+            messages_retrieved += len(page)
+            if progress_callback is not None:
+                progress_callback(pages_fetched, messages_retrieved, 0)
+            yield page
+        self.last_message_read_coverage = {
+            "retry_count": 0,
+            "missing_timestamp_messages_excluded": 0,
+        }
 
 
 class ExportService:
@@ -120,6 +163,26 @@ class LocalTeamsServerTests(unittest.TestCase):
         connection.close()
         return result
 
+    def download_request(self, payload):
+        status, _, body = self.request("POST", "/api/download", payload)
+        self.assertEqual(status, 202, body.decode("utf-8"))
+        request_id = json.loads(body)["request_id"]
+        deadline = time_module.monotonic() + 5
+        while time_module.monotonic() < deadline:
+            status, _, body = self.request(
+                "GET", f"/api/download-status?request_id={request_id}"
+            )
+            self.assertEqual(status, 200)
+            job = json.loads(body)
+            if job["status"] == "complete":
+                return self.request(
+                    "GET", f"/api/download-file?request_id={request_id}"
+                )
+            if job["status"] in {"failed", "cancelled"}:
+                self.fail(f"export ended as {job['status']}: {job.get('error')}")
+            time_module.sleep(0.01)
+        self.fail("export did not finish before test timeout")
+
     def test_page_and_chat_api_are_local_and_typed(self):
         self.service.database_notice = "An unverified archive was preserved."
         page_status, page_headers, page = self.request("GET", "/")
@@ -171,9 +234,7 @@ class LocalTeamsServerTests(unittest.TestCase):
         )
 
     def test_single_chat_download_applies_local_date_and_latest_message_limit(self):
-        status, headers, body = self.request(
-            "POST",
-            "/api/download",
+        status, headers, body = self.download_request(
             {
                 "chat_ids": ["19:alpha@thread.v2"],
                 "from_date": "2026-09-28",
@@ -195,9 +256,7 @@ class LocalTeamsServerTests(unittest.TestCase):
         self.assertIsNotNone(since.utcoffset())
 
     def test_multiple_chats_download_as_zip_with_one_text_per_chat(self):
-        status, headers, body = self.request(
-            "POST",
-            "/api/download",
+        status, headers, body = self.download_request(
             {"chat_ids": ["19:beta@thread.v2", "19:alpha@thread.v2"]},
         )
         self.assertEqual(status, 200)
@@ -211,9 +270,7 @@ class LocalTeamsServerTests(unittest.TestCase):
         self.assertTrue(all(call[1] is None for call in self.service.connector.calls))
 
     def test_combined_chats_download_as_plain_text_in_selection_order(self):
-        status, headers, body = self.request(
-            "POST",
-            "/api/download",
+        status, headers, body = self.download_request(
             {
                 "chat_ids": ["19:beta@thread.v2", "19:alpha@thread.v2"],
                 "concatenate": True,
@@ -226,9 +283,7 @@ class LocalTeamsServerTests(unittest.TestCase):
         self.assertLess(text.index("Conversation: Beta"), text.index("Conversation: Alpha"))
 
     def test_date_range_is_inclusive_and_uses_the_browser_timezone(self):
-        status, _, body = self.request(
-            "POST",
-            "/api/download",
+        status, _, body = self.download_request(
             {
                 "chat_ids": ["19:alpha@thread.v2"],
                 "from_date": "2026-09-28",
@@ -265,6 +320,50 @@ class LocalTeamsServerTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(json.loads(body)["error"]["code"], "invalid_request")
         self.assertEqual(self.service.connector.calls, [])
+
+    def test_download_progress_and_cancel_preserve_completed_page_counts(self):
+        connector = self.service.connector
+        connector.block_after_first_page = True
+        status, _, body = self.request(
+            "POST", "/api/download", {"chat_ids": ["19:alpha@thread.v2"]}
+        )
+        self.assertEqual(status, 202)
+        request_id = json.loads(body)["request_id"]
+        self.assertTrue(connector.waiting_for_cancel.wait(2))
+
+        status, _, body = self.request(
+            "GET", f"/api/download-status?request_id={request_id}"
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["progress"]["pages_fetched"], 1)
+
+        status, _, body = self.request("POST", "/api/cancel", {"request_id": request_id})
+        self.assertEqual(status, 202)
+        self.assertTrue(json.loads(body)["cancellation_requested"])
+
+        deadline = time_module.monotonic() + 3
+        while time_module.monotonic() < deadline:
+            status, _, body = self.request(
+                "GET", f"/api/download-status?request_id={request_id}"
+            )
+            job = json.loads(body)
+            if job["status"] == "cancelled":
+                break
+            time_module.sleep(0.01)
+        self.assertEqual(job["status"], "cancelled")
+        self.assertEqual(job["progress"]["pages_fetched"], 1)
+
+    def test_download_routes_reject_invalid_and_unknown_request_ids(self):
+        for path, expected_status in (
+            ("/api/download-status?request_id=../secret", 400),
+            ("/api/download-file?request_id=00000000000000000000000000000000", 404),
+        ):
+            with self.subTest(path=path):
+                status, _, body = self.request("GET", path)
+                self.assertEqual(status, expected_status)
+                self.assertIn(
+                    json.loads(body)["error"]["code"], {"invalid_request", "not_found"}
+                )
 
     def test_authentication_needed_and_invalid_origin_are_clear(self):
         self.service.auth_required = True

@@ -43,6 +43,7 @@ class ServiceConnector(TeamsConnector):
         self.pages = {}
         self.members = {}
         self.page_calls = []
+        self.retry_counts = []
         self.login_calls = 0
         self.auth_required = False
         self.sent_messages = []
@@ -65,6 +66,9 @@ class ServiceConnector(TeamsConnector):
         continuation_url=None,
     ):
         self.page_calls.append((conversation_id, page_size, since, until, continuation_url))
+        self.last_request_retry_count = (
+            self.retry_counts.pop(0) if self.retry_counts else 0
+        )
         pages = self.pages.get(conversation_id, [([], None)])
         index = 0 if continuation_url is None else int(continuation_url.rsplit(":", 1)[1])
         page, next_url = pages[index]
@@ -158,6 +162,21 @@ class TeamsServiceTests(unittest.TestCase):
         self.assertTrue(second["coverage"]["complete"])
         self.assertEqual(second["coverage"]["raw_items_scanned_total"], 4)
 
+    def test_get_messages_reports_retry_count_for_each_page_request(self):
+        self.connector.pages["19:alpha@thread.v2"] = [
+            ([message("m2", 2, "second")], "page:1"),
+            ([message("m1", 1, "first")], None),
+        ]
+        self.connector.retry_counts = [2, 1]
+
+        first = self.service.get_messages("19:alpha@thread.v2")
+        second = self.service.get_messages(
+            "19:alpha@thread.v2", cursor=first["next_cursor"]
+        )
+
+        self.assertEqual(first["coverage"]["retry_count_this_call"], 2)
+        self.assertEqual(second["coverage"]["retry_count_this_call"], 1)
+
     def test_get_messages_marks_per_message_content_truncation_explicitly(self):
         long_body = "x" * 1_250
         self.connector.pages["19:alpha@thread.v2"] = [
@@ -199,6 +218,7 @@ class TeamsServiceTests(unittest.TestCase):
         self.connector.members["19:alpha@thread.v2"] = [
             {"id": "8:orgid:1", "userDisplayName": "Taylor Example"}
         ]
+        self.connector.retry_counts = [2, 1, 0]
 
         first = self.service.sync_search_index(
             conversation_id="19:alpha@thread.v2",
@@ -218,8 +238,10 @@ class TeamsServiceTests(unittest.TestCase):
 
         self.assertFalse(first["items"][0]["message_history_complete"])
         self.assertEqual(first["items"][0]["messages_added_this_call"], 2)
+        self.assertEqual(first["items"][0]["message_retries_this_call"], 2)
         self.assertTrue(second["items"][0]["message_history_complete"])
         self.assertEqual(second["items"][0]["messages_added_this_call"], 1)
+        self.assertEqual(second["items"][0]["message_retries_this_call"], 1)
         self.assertEqual(second["items"][0]["messages_stored_total"], 3)
         self.assertEqual(third["items"][0]["messages_added_this_call"], 0)
         self.assertTrue(third["items"][0]["message_history_complete"])

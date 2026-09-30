@@ -370,6 +370,7 @@ class TeamsService:
             until=until_utc,
             continuation_url=request_url,
         )
+        retry_count = int(getattr(self.connector, "last_request_retry_count", 0))
         if next_url and next_url in state["seen_continuation_urls"]:
             raise RuntimeError("Teams repeated a message continuation link.")
         state["continuation_url"] = next_url
@@ -421,6 +422,7 @@ class TeamsService:
                 "page_size": page_size,
                 "raw_items_scanned_total": state["raw_items_scanned"],
                 "missing_timestamp_items_excluded_total": state["missing_timestamp_items"],
+                "retry_count_this_call": retry_count,
                 "since": self._bound_key(since_utc) or None,
                 "until": self._bound_key(until_utc) or None,
                 "ordering": "oldest to newest within each returned page",
@@ -616,6 +618,7 @@ class TeamsService:
             history_complete = bool(state["message_history_complete"])
             message_pages = 0
             message_items = 0
+            message_retries = 0
             message_error = None
             if page_budget > 0 and message_budget > 0 and (not history_complete or refresh_latest):
                 is_latest_refresh = history_complete
@@ -639,10 +642,19 @@ class TeamsService:
                             )
                         )
                     except AuthenticationRequiredError:
+                        message_retries += int(
+                            getattr(self.connector, "last_request_retry_count", 0)
+                        )
                         raise
                     except (RuntimeError, ValueError) as exc:
+                        message_retries += int(
+                            getattr(self.connector, "last_request_retry_count", 0)
+                        )
                         message_error = self._safe_error(exc)
                         break
+                    message_retries += int(
+                        getattr(self.connector, "last_request_retry_count", 0)
+                    )
                     saved_next_url = None if is_latest_refresh else next_url
                     new_state = self.index.save_message_page(
                         chat.id,
@@ -672,6 +684,7 @@ class TeamsService:
                     "chat_name": chat.display_name,
                     "messages_added_this_call": message_items,
                     "message_pages_fetched": message_pages,
+                    "message_retries_this_call": message_retries,
                     "message_history_complete": bool(final_state["message_history_complete"]),
                     "messages_stored_total": final_state["messages_stored"],
                     "oldest_indexed_message_at": final_state["oldest_message_at"],

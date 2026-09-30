@@ -131,6 +131,7 @@ class MessagePageCoverage(TypedDict):
     page_size: int
     raw_items_scanned_total: int
     missing_timestamp_items_excluded_total: int
+    retry_count_this_call: int
     since: str | None
     until: str | None
     ordering: str
@@ -213,6 +214,7 @@ class SyncedChatRecord(TypedDict):
     chat_name: str
     messages_added_this_call: int
     message_pages_fetched: int
+    message_retries_this_call: int
     message_history_complete: bool
     messages_stored_total: int
     oldest_indexed_message_at: str | None
@@ -363,6 +365,7 @@ def create_mcp_server(service: TeamsService | None = None) -> FastMCP:
         sender identity. Results are ordered oldest to newest within each page.
         The continuation cursor fetches older history. Date values must be
         ISO-8601 timestamps with a timezone; pass the same bounds when continuing.
+        Coverage reports transient read retries for the current page request.
 
         Args:
             conversation_id: Stable Teams conversation ID from list_chats/search results. The self chat uses 48:notes.
@@ -428,7 +431,8 @@ def create_mcp_server(service: TeamsService | None = None) -> FastMCP:
 
         Repeated calls resume older history from saved service continuation links.
         Once a chat is fully indexed, calls refresh its newest message page while
-        retaining older messages. This tool reads Teams but does not change state.
+        retaining older messages. Per-chat results report read retries in this
+        call. This tool reads Teams but does not change state.
 
         Args:
             conversation_id: Sync just this known chat, or null for recent chats.

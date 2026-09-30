@@ -5,13 +5,21 @@ import re
 import shutil
 import tempfile
 import zipfile
+import threading
+import time as time_module
+import uuid
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
-from teams_exporter.teams_connector import AuthenticationRequiredError, ChatSummary
+from teams_exporter.teams_connector import (
+    AuthenticationRequiredError,
+    ChatSummary,
+    ExtractionCancelled,
+)
 from teams_exporter.teams_exporter import TeamsExporter
 from teams_exporter.teams_service import TeamsService
 
@@ -74,6 +82,7 @@ INDEX_HTML = r"""<!doctype html>
     .empty { padding: 20px; color: var(--muted); text-align: center; }
     .database-notice { padding: 11px 12px; border-radius: 7px; background: var(--notice-bg); color: var(--notice-text); }
     .actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; }
+    .action-buttons { display: flex; align-items: center; gap: 8px; }
     button { min-height: 40px; border: 0; border-radius: 4px; padding: 9px 15px; font: inherit; font-weight: 650; cursor: pointer; }
     button.primary { color: white; background: var(--teams-purple); }
     button.primary:hover:not(:disabled) { background: var(--teams-purple-dark); }
@@ -154,8 +163,9 @@ INDEX_HTML = r"""<!doctype html>
   </section>
   <div class="actions">
     <p id="status" role="status" aria-live="polite"></p>
-    <div>
+    <div class="action-buttons">
       <button id="refresh" class="secondary" type="button">Refresh chats</button>
+      <button id="cancel-export" class="secondary" type="button" hidden>Cancel export</button>
       <button id="download" class="primary" type="button" disabled>Download</button>
     </div>
   </div>
@@ -169,6 +179,7 @@ INDEX_HTML = r"""<!doctype html>
   const messageLimitInput = document.getElementById('message-limit');
   const count = document.getElementById('selection-count');
   const downloadButton = document.getElementById('download');
+  const cancelButton = document.getElementById('cancel-export');
   const combineInput = document.getElementById('combine');
   const statusText = document.getElementById('status');
   const authHelp = document.getElementById('auth-help');
@@ -186,6 +197,7 @@ INDEX_HTML = r"""<!doctype html>
   calendarMonth.setDate(1);
   let choosingEnd = false;
   let rangeStartDraft = null;
+  let activeDownloadId = null;
 
   function dateKey(date) {
     return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
@@ -329,6 +341,8 @@ INDEX_HTML = r"""<!doctype html>
   function updateControls() {
     count.textContent = selected.size + ' selected';
     downloadButton.disabled = selected.size === 0 || downloadButton.dataset.busy === 'true';
+    cancelButton.hidden = downloadButton.dataset.busy !== 'true';
+    cancelButton.disabled = !activeDownloadId;
     combineInput.disabled = selected.size < 2 || downloadButton.dataset.busy === 'true';
     if (combineInput.disabled) combineInput.checked = false;
   }
@@ -444,6 +458,26 @@ INDEX_HTML = r"""<!doctype html>
     };
   }
 
+  function wait(milliseconds) {
+    return new Promise(function (resolve) { window.setTimeout(resolve, milliseconds); });
+  }
+
+  function describeProgress(progress) {
+    if (!progress) return 'Export is running…';
+    const parts = [];
+    if (progress.chat_index && progress.chats_total) {
+      parts.push('chat ' + progress.chat_index + ' of ' + progress.chats_total);
+    }
+    if (progress.pages_fetched) parts.push(progress.pages_fetched + ' pages');
+    if (progress.messages_retrieved) parts.push(progress.messages_retrieved + ' messages retrieved');
+    if (progress.phase === 'formatting' && progress.messages_written) {
+      parts.push(progress.messages_written + ' messages written');
+    }
+    if (progress.retry_count) parts.push(progress.retry_count + ' retries');
+    return (progress.phase === 'formatting' ? 'Formatting' : 'Retrieving') +
+      (parts.length ? ' · ' + parts.join(' · ') : '…');
+  }
+
   async function downloadSelected() {
     if (!selected.size) return;
     const parsedLimit = getMessageLimit();
@@ -462,7 +496,7 @@ INDEX_HTML = r"""<!doctype html>
     updateControls();
     setStatus('Retrieving and formatting the selected conversations…', false);
     try {
-      const response = await fetch('/api/download', {
+      const startResponse = await fetch('/api/download', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -475,6 +509,43 @@ INDEX_HTML = r"""<!doctype html>
           concatenate: combineInput.checked
         })
       });
+      const startBody = await startResponse.json();
+      if (!startResponse.ok) {
+        showApiError(startResponse, startBody);
+        return;
+      }
+      activeDownloadId = startBody.request_id;
+      updateControls();
+      let job;
+      while (activeDownloadId === startBody.request_id) {
+        const statusResponse = await fetch(
+          '/api/download-status?request_id=' + encodeURIComponent(startBody.request_id),
+          { cache: 'no-store' }
+        );
+        job = await statusResponse.json();
+        if (!statusResponse.ok) {
+          showApiError(statusResponse, job);
+          return;
+        }
+        if (job.status === 'complete') break;
+        if (job.status === 'cancelled') {
+          setStatus('Export stopped. ' + (job.progress?.pages_fetched || 0) + ' pages had completed.', false);
+          return;
+        }
+        if (job.status === 'failed') {
+          if (job.error?.code === 'authentication_required') authHelp.hidden = false;
+          setStatus(job.error?.message || 'The export failed.', true);
+          return;
+        }
+        setStatus(describeProgress(job.progress), false);
+        await wait(500);
+      }
+      if (!job || job.status !== 'complete') return;
+      setStatus('Preparing the download…', false);
+      const response = await fetch(
+        '/api/download-file?request_id=' + encodeURIComponent(startBody.request_id),
+        { cache: 'no-store' }
+      );
       if (!response.ok) {
         const body = await response.json();
         showApiError(response, body);
@@ -495,7 +566,27 @@ INDEX_HTML = r"""<!doctype html>
     } finally {
       delete downloadButton.dataset.busy;
       downloadButton.textContent = 'Download';
+      activeDownloadId = null;
       updateControls();
+    }
+  }
+
+  async function cancelDownload() {
+    if (!activeDownloadId) return;
+    cancelButton.disabled = true;
+    setStatus('Requesting cancellation…', false);
+    try {
+      const response = await fetch('/api/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ request_id: activeDownloadId })
+      });
+      const body = await response.json();
+      if (!response.ok) showApiError(response, body);
+      else setStatus('Stopping after the current network request or page.', false);
+    } catch (_) {
+      setStatus('Could not reach the local server to cancel the export.', true);
+      cancelButton.disabled = false;
     }
   }
 
@@ -530,6 +621,7 @@ INDEX_HTML = r"""<!doctype html>
   });
   document.getElementById('refresh').addEventListener('click', loadChats);
   downloadButton.addEventListener('click', downloadSelected);
+  cancelButton.addEventListener('click', cancelDownload);
   loadChats();
 </script>
 </body>
@@ -537,13 +629,205 @@ INDEX_HTML = r"""<!doctype html>
 """
 
 
-class LocalTeamsHTTPServer(HTTPServer):
-    """Single-threaded loopback HTTP server for the local export page."""
+@dataclass(frozen=True)
+class DownloadRequest:
+    chats: list[dict[str, Any]]
+    since: datetime | None
+    until: datetime | None
+    limit: int | None
+    concatenate: bool
+
+
+@dataclass
+class DownloadJob:
+    request_id: str
+    cancel_event: threading.Event = field(default_factory=threading.Event)
+    finished_at: float | None = None
+    status: str = "queued"
+    progress: dict[str, Any] = field(default_factory=dict)
+    error: dict[str, str] | None = None
+    filename: str | None = None
+    content_type: str | None = None
+    output_path: Path | None = None
+    artifact_directory: Path | None = None
+
+
+class LocalTeamsHTTPServer(ThreadingHTTPServer):
+    """Loopback server with background, observable export jobs."""
+
+    daemon_threads = True
+    block_on_close = False
+    JOB_RETENTION_SECONDS = 60 * 60
 
     def __init__(self, server_address: tuple[str, int], service: TeamsService | None = None):
         self.service = service or TeamsService()
         self.exporter = TeamsExporter(self.service.connector, self.service.formatter)
+        self._jobs: dict[str, DownloadJob] = {}
+        self._jobs_lock = threading.RLock()
         super().__init__(server_address, LocalTeamsRequestHandler)
+
+    def start_download(self, request: DownloadRequest) -> DownloadJob:
+        with self._jobs_lock:
+            self._prune_jobs_locked()
+            if any(job.status in {"queued", "running"} for job in self._jobs.values()):
+                raise RuntimeError("Another export is already running. Wait for it or cancel it first.")
+            job = DownloadJob(request_id=uuid.uuid4().hex)
+            self._jobs[job.request_id] = job
+            worker = threading.Thread(
+                target=self._run_download,
+                args=(job, request),
+                name=f"teams-export-{job.request_id[:8]}",
+                daemon=True,
+            )
+            worker.start()
+            return job
+
+    def get_download_job(self, request_id: str) -> DownloadJob | None:
+        with self._jobs_lock:
+            self._prune_jobs_locked()
+            return self._jobs.get(request_id)
+
+    def _run_download(self, job: DownloadJob, request: DownloadRequest) -> None:
+        artifact_directory = Path(tempfile.mkdtemp(prefix="teams-export-job-"))
+        with self._jobs_lock:
+            job.artifact_directory = artifact_directory
+            job.status = "running"
+
+        def report_progress(update: dict[str, Any]) -> None:
+            with self._jobs_lock:
+                if job.status in {"queued", "running"}:
+                    job.progress = {
+                        key: value
+                        for key, value in update.items()
+                        if key in {
+                            "phase",
+                            "chat_index",
+                            "chats_total",
+                            "pages_fetched",
+                            "messages_retrieved",
+                            "messages_written",
+                            "retry_count",
+                        }
+                    }
+
+        try:
+            filename, content_type, output_path = self._build_download(
+                request,
+                artifact_directory,
+                cancel_event=job.cancel_event,
+                progress_callback=report_progress,
+            )
+            if job.cancel_event.is_set():
+                raise ExtractionCancelled("Export cancelled.")
+            with self._jobs_lock:
+                job.filename = filename
+                job.content_type = content_type
+                job.output_path = output_path
+                job.status = "complete"
+                job.finished_at = time_module.monotonic()
+        except ExtractionCancelled:
+            with self._jobs_lock:
+                job.status = "cancelled"
+                job.finished_at = time_module.monotonic()
+            shutil.rmtree(artifact_directory, ignore_errors=True)
+        except AuthenticationRequiredError:
+            with self._jobs_lock:
+                job.status = "failed"
+                job.error = {
+                    "code": "authentication_required",
+                    "message": "Teams sign-in is required.",
+                }
+                job.finished_at = time_module.monotonic()
+            shutil.rmtree(artifact_directory, ignore_errors=True)
+        except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            with self._jobs_lock:
+                job.status = "failed"
+                job.error = {"code": "invalid_request", "message": str(exc)}
+                job.finished_at = time_module.monotonic()
+            shutil.rmtree(artifact_directory, ignore_errors=True)
+        except Exception as exc:
+            with self._jobs_lock:
+                job.status = "failed"
+                job.error = {
+                    "code": "export_failed",
+                    "message": f"Teams export failed ({type(exc).__name__}).",
+                }
+                job.finished_at = time_module.monotonic()
+            shutil.rmtree(artifact_directory, ignore_errors=True)
+
+    def _build_download(
+        self,
+        request: DownloadRequest,
+        temp_dir: Path,
+        *,
+        cancel_event: threading.Event,
+        progress_callback,
+    ) -> tuple[str, str, Path]:
+        self._raise_if_cancelled(cancel_event)
+        if len(request.chats) == 1:
+            chat = LocalTeamsRequestHandler._summary(request.chats[0])
+            output_path = self.exporter.export_chat(
+                chat,
+                temp_dir / f"{self.exporter.filename_stem(chat)}.txt",
+                limit=request.limit,
+                since=request.since,
+                until=request.until,
+                cancel_event=cancel_event,
+                progress_callback=progress_callback,
+            )
+            return output_path.name, "text/plain; charset=utf-8", output_path
+
+        files_dir = temp_dir / "chats"
+        files_dir.mkdir()
+        exported = self.exporter.export_chats(
+            [LocalTeamsRequestHandler._summary(chat) for chat in request.chats],
+            files_dir,
+            limit=request.limit,
+            since=request.since,
+            until=request.until,
+            cancel_event=cancel_event,
+            progress_callback=progress_callback,
+        )
+        self._raise_if_cancelled(cancel_event)
+        if request.concatenate:
+            combined_path = temp_dir / "conversations.txt"
+            with combined_path.open("wb") as combined:
+                for index, path in enumerate(exported):
+                    self._raise_if_cancelled(cancel_event)
+                    if index:
+                        combined.write(b"\n")
+                    with path.open("rb") as source:
+                        while chunk := source.read(DOWNLOAD_CHUNK_SIZE):
+                            self._raise_if_cancelled(cancel_event)
+                            combined.write(chunk)
+            return combined_path.name, "text/plain; charset=utf-8", combined_path
+
+        archive_path = temp_dir / "teams-conversations.zip"
+        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for path in exported:
+                self._raise_if_cancelled(cancel_event)
+                with path.open("rb") as source, archive.open(path.name, "w") as target:
+                    while chunk := source.read(DOWNLOAD_CHUNK_SIZE):
+                        self._raise_if_cancelled(cancel_event)
+                        target.write(chunk)
+        return archive_path.name, "application/zip", archive_path
+
+    @staticmethod
+    def _raise_if_cancelled(cancel_event: threading.Event) -> None:
+        if cancel_event.is_set():
+            raise ExtractionCancelled("Export cancelled.")
+
+    def _prune_jobs_locked(self) -> None:
+        now = time_module.monotonic()
+        for request_id, job in list(self._jobs.items()):
+            if (
+                job.status not in {"queued", "running"}
+                and job.finished_at is not None
+                and now - job.finished_at > self.JOB_RETENTION_SECONDS
+            ):
+                if job.artifact_directory is not None:
+                    shutil.rmtree(job.artifact_directory, ignore_errors=True)
+                del self._jobs[request_id]
 
 
 class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
@@ -555,7 +839,8 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
         if not self._request_is_local():
             self._send_json(403, self._error("local_only", "This server accepts local browser requests only."))
             return
-        path = urlsplit(self.path).path
+        parsed_target = urlsplit(self.path)
+        path = parsed_target.path
         if path == "/":
             body = INDEX_HTML.encode("utf-8")
             self.send_response(200)
@@ -567,6 +852,46 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/chats":
             self._list_chats()
+            return
+        if path == "/api/download-status":
+            request_id = self._query_request_id(parsed_target.query)
+            if request_id is None:
+                self._send_json(400, self._error("invalid_request", "A valid request_id is required."))
+                return
+            job = self.server.get_download_job(request_id)
+            if job is None:
+                self._send_json(404, self._error("not_found", "The export request was not found."))
+                return
+            with self.server._jobs_lock:
+                result = {
+                    "request_id": job.request_id,
+                    "status": job.status,
+                    "progress": dict(job.progress),
+                    "download_ready": job.status == "complete",
+                    "error": dict(job.error) if job.error else None,
+                }
+            self._send_json(200, result)
+            return
+        if path == "/api/download-file":
+            request_id = self._query_request_id(parsed_target.query)
+            if request_id is None:
+                self._send_json(400, self._error("invalid_request", "A valid request_id is required."))
+                return
+            job = self.server.get_download_job(request_id)
+            if job is None:
+                self._send_json(404, self._error("not_found", "The export request was not found."))
+                return
+            with self.server._jobs_lock:
+                if job.status != "complete" or job.output_path is None or job.filename is None:
+                    self._send_json(409, self._error("export_not_ready", "The export file is not ready."))
+                    return
+                path_to_send = job.output_path
+                filename = job.filename
+                content_type = job.content_type or "application/octet-stream"
+            if not path_to_send.is_file():
+                self._send_json(410, self._error("export_expired", "The export file is no longer available."))
+                return
+            self._send_file(path_to_send, filename, content_type)
             return
         if path.startswith("/assets/"):
             asset_name = path.removeprefix("/assets/")
@@ -594,14 +919,39 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
         if not self._origin_is_local():
             self._send_json(403, self._error("origin_rejected", "The request origin is not allowed."))
             return
-        if urlsplit(self.path).path != "/api/download":
+        path = urlsplit(self.path).path
+        if path not in {"/api/download", "/api/cancel"}:
             self._send_json(404, self._error("not_found", "Not found."))
             return
         try:
             payload = self._read_json_body()
-            with tempfile.TemporaryDirectory(prefix="teams-export-") as temp_dir:
-                filename, content_type, output_path = self._build_download(payload, Path(temp_dir))
-                self._send_file(output_path, filename, content_type)
+            if path == "/api/cancel":
+                if not isinstance(payload, dict):
+                    raise ValueError("The request body must be a JSON object.")
+                request_id = payload.get("request_id")
+                if not self._valid_request_id(request_id):
+                    raise ValueError("A valid request_id is required.")
+                job = self.server.get_download_job(request_id)
+                if job is None:
+                    self._send_json(404, self._error("not_found", "The export request was not found."))
+                    return
+                with self.server._jobs_lock:
+                    active = job.status in {"queued", "running"}
+                    if active:
+                        job.cancel_event.set()
+                self._send_json(
+                    202 if active else 200,
+                    {"request_id": request_id, "cancellation_requested": active, "status": job.status},
+                )
+                return
+
+            request = self._prepare_download(payload)
+            try:
+                job = self.server.start_download(request)
+            except RuntimeError as exc:
+                self._send_json(409, self._error("export_busy", str(exc)))
+                return
+            self._send_json(202, {"request_id": job.request_id, "status": job.status})
         except AuthenticationRequiredError:
             self._send_json(401, self._error("authentication_required", "Teams sign-in is required."))
         except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -649,7 +999,7 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self._send_json(502, self._error("catalog_failed", f"Could not load chats ({type(exc).__name__})."))
 
-    def _build_download(self, payload: Any, temp_dir: Path) -> tuple[str, str, Path]:
+    def _prepare_download(self, payload: Any) -> DownloadRequest:
         if not isinstance(payload, dict):
             raise ValueError("The request body must be a JSON object.")
         chat_ids = payload.get("chat_ids")
@@ -684,41 +1034,29 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
             raise ValueError("One or more selected chats are no longer available. Refresh the list and try again.")
         selected_chats = [by_id[chat_id] for chat_id in chat_ids]
 
-        if len(selected_chats) == 1:
-            chat = self._summary(selected_chats[0])
-            output_path = self.server.exporter.export_chat(
-                chat,
-                temp_dir / f"{self.server.exporter.filename_stem(chat)}.txt",
-                limit=limit,
-                since=since,
-                until=until,
-            )
-            return output_path.name, "text/plain; charset=utf-8", output_path
-
-        files_dir = temp_dir / "chats"
-        files_dir.mkdir()
-        exported = self.server.exporter.export_chats(
-            [self._summary(chat) for chat in selected_chats],
-            files_dir,
-            limit=limit,
+        return DownloadRequest(
+            chats=selected_chats,
             since=since,
             until=until,
+            limit=limit,
+            concatenate=concatenate,
         )
-        if concatenate:
-            combined_path = temp_dir / "conversations.txt"
-            with combined_path.open("wb") as combined:
-                for index, path in enumerate(exported):
-                    if index:
-                        combined.write(b"\n")
-                    with path.open("rb") as source:
-                        shutil.copyfileobj(source, combined, DOWNLOAD_CHUNK_SIZE)
-            return combined_path.name, "text/plain; charset=utf-8", combined_path
 
-        archive_path = temp_dir / "teams-conversations.zip"
-        with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for path in exported:
-                archive.write(path, arcname=path.name)
-        return archive_path.name, "application/zip", archive_path
+    @staticmethod
+    def _valid_request_id(value: Any) -> bool:
+        if not isinstance(value, str) or len(value) != 32:
+            return False
+        try:
+            return uuid.UUID(hex=value).hex == value
+        except ValueError:
+            return False
+
+    @classmethod
+    def _query_request_id(cls, query: str) -> str | None:
+        values = parse_qs(query, keep_blank_values=True).get("request_id", [])
+        if len(values) != 1 or not cls._valid_request_id(values[0]):
+            return None
+        return values[0]
 
     def _all_chats(self) -> list[dict[str, Any]]:
         chats: list[dict[str, Any]] = []
