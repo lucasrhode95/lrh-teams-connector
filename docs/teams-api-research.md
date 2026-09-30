@@ -1830,6 +1830,10 @@ or when a deletion timestamp exists under:
 properties.deletetime
 ```
 
+These shapes are reverse-engineered observations, not a complete Microsoft contract. The local archive treats an explicit `MessageDelete` record or deletion timestamp as a tombstone: it keeps the stable message row and any previously retained body, reports the message as deleted, and excludes its old body from ordinary message search. A message missing from a later response is not treated as deleted because missing data can also mean retention expiry, incomplete paging, or lack of access.
+
+`properties.edittime` is retained as a revision timestamp. The archive uses it to avoid letting an older or unversioned copy replace known edited text. This ordering rule is covered by sanitized fixtures, but this investigation did not compare a known live edited/deleted message against Teams Web. The exact association between edit/delete activity, message IDs, and timestamps therefore remains tenant/build dependent and should be validated before treating it as authoritative.
+
 ### Mentions
 
 `properties.mentions` may be serialized JSON containing entries such as:
