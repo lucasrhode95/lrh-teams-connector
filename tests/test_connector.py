@@ -2,6 +2,7 @@ import json
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
 from teams_exporter.teams_connector import ChatSummary, TeamsConnector
@@ -37,6 +38,20 @@ class StubConnector(TeamsConnector):
 
 
 class TeamsConnectorTests(unittest.TestCase):
+    def test_members_enrich_blank_display_names_from_middle_tier_profiles(self):
+        client = StubConnector(
+            [{"members": [{"id": "8:orgid:ABC123", "displayName": ""}]}]
+        )
+        with patch.object(
+            client,
+            "_fetch_middle_tier_profile_names",
+            return_value={"abc123": "Taylor Example"},
+        ) as resolve_names:
+            members = client.get_conversation_members("19:alpha@thread.v2")
+
+        self.assertEqual(members[0]["displayName"], "Taylor Example")
+        resolve_names.assert_called_once_with(["abc123"])
+
     def test_csa_catalog_sorts_by_activity_and_stabilizes_ties(self):
         client = StubConnector([
             fixture("csa_startup.json"),

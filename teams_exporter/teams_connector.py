@@ -25,6 +25,10 @@ class ChatSummary:
     chat_type: str | None = None
 
 
+class AuthenticationRequiredError(RuntimeError):
+    """Raised when the cached Microsoft session needs an interactive sign-in."""
+
+
 class TeamsConnector:
     """Read chat catalogs and message history through Teams service APIs."""
 
@@ -55,8 +59,12 @@ class TeamsConnector:
         self._middle_tier_url: str | None = None
         self._auth_sources: dict[str, str] = {}
 
-    def login(self) -> None:
-        """Restore this application's session or use Microsoft device-code login."""
+    def login(self, *, interactive: bool = True) -> None:
+        """Restore the cached session, optionally starting device-code login.
+
+        MCP callers must use ``interactive=False`` so an expired or missing
+        session returns a clear error instead of waiting on a terminal prompt.
+        """
         cache = self._load_token_cache()
         app = msal.PublicClientApplication(
             client_id=self.TEAMS_CLIENT_ID,
@@ -65,9 +73,11 @@ class TeamsConnector:
         )
 
         spaces_result, spaces_source = self._acquire_resource_token(
-            app, self.SPACES_SCOPE
+            app, self.SPACES_SCOPE, interactive=interactive
         )
-        csa_result, csa_source = self._acquire_resource_token(app, self.CSA_SCOPE)
+        csa_result, csa_source = self._acquire_resource_token(
+            app, self.CSA_SCOPE, interactive=interactive
+        )
         self._auth_sources = {
             "spaces": spaces_source,
             "csa": csa_source,
@@ -534,6 +544,147 @@ class TeamsConnector:
 
         return sorted(results, key=self._message_order_key)
 
+    def get_messages_page(
+        self,
+        conversation_id: str,
+        *,
+        page_size: int = 50,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        continuation_url: str | None = None,
+    ) -> tuple[list[dict[str, Any]], str | None, int, int]:
+        """Read one bounded service page for resumable extraction.
+
+        ``continuation_url`` is an opaque service link and must be passed back
+        unchanged. Its origin and conversation path are validated before use.
+        The returned counts are raw items scanned and items omitted because a
+        requested time filter could not be checked due to a missing timestamp.
+        """
+        self._require_logged_in()
+        if not isinstance(conversation_id, str) or not conversation_id.strip():
+            raise ValueError("conversation_id must be a non-empty string.")
+        if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 100:
+            raise ValueError("page_size must be between 1 and 100.")
+        since_utc = self._validate_bound("since", since)
+        until_utc = self._validate_bound("until", until)
+        if since_utc is not None and until_utc is not None and since_utc > until_utc:
+            raise ValueError("since must be earlier than or equal to until.")
+
+        if continuation_url is None:
+            url = self._set_query_parameters(
+                self._messages_url(conversation_id),
+                startTime=(
+                    str(self._epoch_milliseconds(since_utc))
+                    if since_utc is not None
+                    else "0"
+                ),
+                pageSize=str(page_size),
+                view="msnp24Equivalent",
+            )
+        else:
+            url = continuation_url
+        self._validate_message_page_url(url, conversation_id)
+
+        payload = self._request_chat_service(url)
+        page = payload.get("messages")
+        if not isinstance(page, list) or any(
+            not isinstance(message, dict) for message in page
+        ):
+            raise RuntimeError("Unexpected Teams messages response.")
+
+        selected: list[dict[str, Any]] = []
+        missing_timestamp_count = 0
+        for message in page:
+            timestamp = self._message_datetime(message)
+            if (since_utc is not None or until_utc is not None) and timestamp is None:
+                missing_timestamp_count += 1
+                continue
+            if since_utc is not None and timestamp < since_utc:
+                continue
+            if until_utc is not None and timestamp > until_utc:
+                continue
+            selected.append(message)
+
+        metadata = self._mapping(payload.get("_metadata"))
+        next_url = metadata.get("backwardLink")
+        if next_url is not None and not isinstance(next_url, str):
+            raise RuntimeError("Unexpected Teams message continuation link.")
+        if next_url:
+            self._validate_message_page_url(next_url, conversation_id)
+        return (
+            sorted(selected, key=self._message_order_key),
+            next_url or None,
+            len(page),
+            missing_timestamp_count,
+        )
+
+    def get_conversation_members(self, conversation_id: str) -> list[dict[str, Any]]:
+        """Return the service roster for a conversation, when exposed."""
+        self._require_logged_in()
+        if not isinstance(conversation_id, str) or not conversation_id.strip():
+            raise ValueError("conversation_id must be a non-empty string.")
+        if not self._chat_service_url:
+            raise RuntimeError("Teams AuthZ did not return a Chat Service URL.")
+        endpoint = (
+            f"{self._chat_service_url.rstrip('/')}/v1/threads/"
+            f"{quote(conversation_id, safe='')}/members"
+        )
+        payload = self._request_chat_service(endpoint)
+        members = payload.get("members")
+        if not isinstance(members, list) or any(
+            not isinstance(member, dict) for member in members
+        ):
+            raise RuntimeError("Unexpected Teams conversation members response.")
+        resolved_members = [dict(member) for member in members]
+        identifiers = {
+            identifier
+            for member in resolved_members
+            for key in ("id", "mri", "objectId", "userId", "userMri")
+            if (identifier := self._profile_identifier(member.get(key)))
+        }
+        if identifiers:
+            try:
+                profile_names = self._fetch_middle_tier_profile_names(sorted(identifiers))
+            except RuntimeError:
+                profile_names = {}
+            for member in resolved_members:
+                existing_name = member.get("userDisplayName") or member.get("displayName")
+                if isinstance(existing_name, str) and existing_name.strip():
+                    continue
+                for key in ("id", "mri", "objectId", "userId", "userMri"):
+                    identifier = self._profile_identifier(member.get(key))
+                    name = profile_names.get(identifier) if identifier else None
+                    if name:
+                        member["displayName"] = name
+                        break
+        return resolved_members
+
+    @staticmethod
+    def _validate_bound(name: str, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if not isinstance(value, datetime):
+            raise TypeError(f"{name} must be a datetime or None.")
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError(f"{name} must include a timezone.")
+        return value.astimezone(timezone.utc)
+
+    def _validate_message_page_url(self, url: str, conversation_id: str) -> None:
+        if not self._chat_service_url:
+            raise RuntimeError("Teams AuthZ did not return a Chat Service URL.")
+        self._validate_service_url(url, self._chat_service_url, "Chat Service")
+        expected_path = urlsplit(self._messages_url(conversation_id)).path
+        actual = urlsplit(url)
+        from urllib.parse import unquote
+
+        if (
+            actual.username
+            or actual.password
+            or actual.fragment
+            or unquote(actual.path) != unquote(expected_path)
+        ):
+            raise RuntimeError("Refusing a continuation URL for another Teams resource.")
+
     def _messages_url(self, conversation_id: str) -> str:
         if not self._chat_service_url:
             raise RuntimeError("Teams AuthZ did not return a Chat Service URL.")
@@ -664,11 +815,19 @@ class TeamsConnector:
         self,
         app: msal.PublicClientApplication,
         scope: str,
+        *,
+        interactive: bool,
     ) -> tuple[dict[str, Any], str]:
         for account in app.get_accounts():
             result = app.acquire_token_silent(scopes=[scope], account=account)
             if result and result.get("access_token"):
                 return result, "cache"
+
+        if not interactive:
+            raise AuthenticationRequiredError(
+                "Teams sign-in is required. Run `python -m teams_exporter auth` "
+                "in a terminal, complete Microsoft sign-in, then retry."
+            )
 
         flow = app.initiate_device_flow(scopes=[scope])
         if not isinstance(flow, dict) or not flow.get("user_code"):
