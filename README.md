@@ -6,7 +6,7 @@ The connector follows Teams Desktop client conventions and uses endpoint behavio
 
 ## Sign in
 
-Run `python -m teams_exporter auth` from the repository root to complete Microsoft's sign-in flow. Microsoft handles the password and any verification; this application never sees or stores the password. The shared connector stores opaque tokens in `%LOCALAPPDATA%\scrape-teams-chat\.teams_token_cache.json` on Windows (or the per-user data directory on other platforms), independent of the working directory. UI and MCP use the same MSAL cache; access tokens renew silently when Microsoft accepts the stored refresh token.
+Run `python -m teams_exporter auth` from the repository root to complete Microsoft's sign-in flow. Microsoft handles the password and any verification; this application never sees or stores the password. The shared connector stores opaque tokens in an OS-encrypted cache under `%LOCALAPPDATA%\scrape-teams-chat` on Windows (DPAPI), or the per-user data directory on other platforms, independent of the working directory. UI and MCP use the same MSAL cache; access tokens renew silently when Microsoft accepts the stored refresh token. If encrypted storage is unavailable, the connector fails closed and never writes a plaintext cache. A legacy plaintext cache is migrated only after an encrypted write and read-back succeed; otherwise it is preserved and the user may need to sign in again.
 
 ## Use the MCP server
 

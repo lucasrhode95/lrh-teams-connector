@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import html
-import hashlib
 import http.client
 import json
 import os
 import re
 import tempfile
 import time
+import uuid
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -245,15 +245,12 @@ class TeamsConnector:
                 authority=self._authority,
                 token_cache=cache,
             )
-            try:
-                spaces_result, spaces_source = self._acquire_resource_token(
-                    app, self.SPACES_SCOPE, interactive=interactive
-                )
-                csa_result, csa_source = self._acquire_resource_token(
-                    app, self.CSA_SCOPE, interactive=interactive
-                )
-            finally:
-                self._persist_token_cache(cache)
+            spaces_result, spaces_source = self._acquire_resource_token(
+                app, self.SPACES_SCOPE, interactive=interactive
+            )
+            csa_result, csa_source = self._acquire_resource_token(
+                app, self.CSA_SCOPE, interactive=interactive
+            )
 
         self._auth_sources = {
             "spaces": spaces_source,
@@ -427,10 +424,10 @@ class TeamsConnector:
         with _TokenCacheLock(self._cache_lock_path):
             self._migrate_repository_cache_if_needed()
             cache = self._load_token_cache()
-        # Read account records directly from MSAL's serialized cache. Creating
-        # PublicClientApplication can perform OpenID metadata discovery, which
-        # would make local-only archive searches depend on network access.
-        accounts = cache.find(msal.TokenCache.CredentialType.ACCOUNT)
+        # Read the cached account directly. Creating PublicClientApplication
+        # can perform OpenID metadata discovery, which would make local-only
+        # archive searches depend on network access.
+        accounts = list(cache.search(msal.TokenCache.CredentialType.ACCOUNT))
         if not accounts:
             return None
         account = accounts[0]
@@ -1804,42 +1801,122 @@ class TeamsConnector:
     def _scope_name(scope: str) -> str:
         return "CSA" if "chatsvcagg" in scope else "Teams"
 
-    def _load_token_cache(self) -> msal.SerializableTokenCache:
-        cache = msal.SerializableTokenCache()
-        if not self._cache_path.exists():
-            return cache
-        try:
-            cache.deserialize(self._cache_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            raise RuntimeError(
-                f"Could not read this application's MSAL cache: {self._safe_exception_detail(exc)}"
-            ) from exc
+    def _load_token_cache(self) -> Any:
+        """Load the MSAL cache through the operating system's encrypted store."""
+        self._migrate_plaintext_cache(self._cache_path)
+        cache, _ = self._new_persisted_token_cache(self._cache_path)
         return cache
 
-    def _persist_token_cache(self, cache: msal.SerializableTokenCache) -> None:
-        if not cache.has_state_changed:
+    @staticmethod
+    def _new_persisted_token_cache(path: Path) -> tuple[Any, Any]:
+        """Create encrypted persistence and its MSAL cache, without plaintext fallback."""
+        try:
+            from msal_extensions import PersistedTokenCache, build_encrypted_persistence
+
+            persistence = build_encrypted_persistence(str(path))
+            return PersistedTokenCache(persistence), persistence
+        except Exception:
+            raise RuntimeError(
+                "Encrypted Teams credential storage is unavailable. No plaintext cache "
+                "will be used. You may need to sign in again after encrypted storage is available."
+            ) from None
+
+    def _migrate_plaintext_cache(self, source: Path) -> None:
+        """Encrypt a legacy JSON cache, removing it only after encrypted read-back succeeds."""
+        if not source.is_file():
             return
-        self._cache_path.parent.mkdir(parents=True, exist_ok=True)
-        handle, temporary_name = tempfile.mkstemp(
-            prefix=f".{self._cache_path.name}.", suffix=".tmp", dir=self._cache_path.parent
+        cache_state = self._read_plaintext_cache_state(source)
+        if cache_state is None:
+            return
+
+        destination = self._cache_path
+        same_path = source.resolve() == destination
+        try:
+            if not same_path and destination.exists():
+                existing, _ = self._new_persisted_token_cache(destination)
+                existing.search(msal.TokenCache.CredentialType.ACCOUNT)
+                if existing.serialize() == cache_state:
+                    source.unlink()
+                    return
+                raise RuntimeError(
+                    "An encrypted Teams cache already exists and differs from the legacy "
+                    "cache. The plaintext copy was left intact and will not be used; you "
+                    "may need to sign in again."
+                )
+
+            staging_path = self._new_staging_cache_path(destination)
+            try:
+                staged_cache, persistence = self._new_persisted_token_cache(staging_path)
+                persistence.save(cache_state)
+                staged_cache.search(msal.TokenCache.CredentialType.ACCOUNT)
+                if staged_cache.serialize() != cache_state:
+                    raise RuntimeError("Encrypted cache read-back did not match.")
+
+                if same_path:
+                    os.replace(staging_path, destination)
+                else:
+                    os.link(staging_path, destination)
+                    try:
+                        verified_cache, _ = self._new_persisted_token_cache(destination)
+                        verified_cache.search(msal.TokenCache.CredentialType.ACCOUNT)
+                        if verified_cache.serialize() != cache_state:
+                            destination.unlink(missing_ok=True)
+                            raise RuntimeError("Encrypted cache read-back did not match.")
+                    except Exception:
+                        destination.unlink(missing_ok=True)
+                        raise
+                    source.unlink()
+            finally:
+                staging_path.unlink(missing_ok=True)
+                Path(f"{staging_path}.lockfile").unlink(missing_ok=True)
+        except Exception:
+            raise RuntimeError(
+                "The existing plaintext Teams token cache could not be migrated to "
+                "encrypted storage. The original file was left intact and will not be "
+                "used. You may need to sign in again."
+            ) from None
+
+    @staticmethod
+    def _read_plaintext_cache_state(path: Path) -> str | None:
+        """Recognize and deserialize legacy MSAL JSON without exposing its contents."""
+        try:
+            raw_text = path.read_text(encoding="utf-8")
+            payload = json.loads(raw_text)
+        except (OSError, UnicodeError, ValueError):
+            return None
+        cache_sections = {
+            "AccessToken",
+            "Account",
+            "AppMetadata",
+            "IdToken",
+            "RefreshToken",
+        }
+        if not isinstance(payload, dict) or (
+            payload and not cache_sections.intersection(payload)
+        ):
+            return None
+        try:
+            cache = msal.SerializableTokenCache()
+            cache.deserialize(raw_text)
+            return cache.serialize()
+        except Exception:
+            raise RuntimeError(
+                "The existing plaintext Teams token cache is not a valid MSAL cache. "
+                "It was left intact and will not be used; you may need to sign in again."
+            ) from None
+
+    @staticmethod
+    def _new_staging_cache_path(destination: Path) -> Path:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        handle, name = tempfile.mkstemp(
+            prefix=f".{destination.name}.migration-{uuid.uuid4().hex}.",
+            suffix=".encrypted",
+            dir=destination.parent,
         )
         os.close(handle)
-        temporary_path = Path(temporary_name)
-        try:
-            temporary_path.write_text(cache.serialize(), encoding="utf-8")
-            if os.name != "nt":
-                os.chmod(temporary_path, 0o600)
-            temporary_path.replace(self._cache_path)
-        except OSError as exc:
-            raise RuntimeError(
-                f"Could not save this application's MSAL cache: {self._safe_exception_detail(exc)}"
-            ) from exc
-        finally:
-            if temporary_path.exists():
-                try:
-                    temporary_path.unlink()
-                except OSError:
-                    pass
+        staging_path = Path(name)
+        staging_path.unlink()
+        return staging_path
 
     @staticmethod
     def _default_cache_path() -> Path:
@@ -1860,47 +1937,7 @@ class TeamsConnector:
         source = self._repository_cache_path()
         if source.resolve() == self._cache_path or not source.is_file():
             return
-        if self._cache_path.exists():
-            try:
-                same_cache = hashlib.sha256(source.read_bytes()).digest() == hashlib.sha256(
-                    self._cache_path.read_bytes()
-                ).digest()
-            except OSError:
-                same_cache = False
-            if same_cache:
-                source.unlink()
-            return
-        self._cache_path.parent.mkdir(parents=True, exist_ok=True)
-        handle, temporary_name = tempfile.mkstemp(
-            prefix=f".{self._cache_path.name}.migration.",
-            suffix=".tmp",
-            dir=self._cache_path.parent,
-        )
-        temporary = Path(temporary_name)
-        try:
-            with os.fdopen(handle, "wb") as output, source.open("rb") as input_stream:
-                while chunk := input_stream.read(1024 * 1024):
-                    output.write(chunk)
-                output.flush()
-                os.fsync(output.fileno())
-            if os.name != "nt":
-                os.chmod(temporary, 0o600)
-            try:
-                os.link(temporary, self._cache_path)
-            except FileExistsError:
-                return
-            source_hash = hashlib.sha256(source.read_bytes()).digest()
-            destination_hash = hashlib.sha256(self._cache_path.read_bytes()).digest()
-            if source_hash != destination_hash:
-                self._cache_path.unlink(missing_ok=True)
-                raise RuntimeError("The Teams token cache migration could not be verified.")
-            source.unlink()
-        except OSError as exc:
-            raise RuntimeError(
-                f"Could not migrate this application's MSAL cache: {self._safe_exception_detail(exc)}"
-            ) from exc
-        finally:
-            temporary.unlink(missing_ok=True)
+        self._migrate_plaintext_cache(source)
 
     @staticmethod
     def _safe_exception_detail(value: Any) -> str:
