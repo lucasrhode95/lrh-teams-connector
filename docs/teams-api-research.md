@@ -525,15 +525,26 @@ metadata.hasMoreChats
 
 This suggests CSA may support a persistent local chat catalog that is updated incrementally rather than repeatedly rebuilt from `/users/ME/conversations`.
 
-**Read-only live probe (2026-09-30):** a fresh startup request returned 944
-chats with `isPartialData=false` and `hasMoreChats=false` in about 4.7 seconds.
-The `GET /api/csa/api/v1/teams/users/me/updates` request accepted that startup
-response's `metadata.syncToken` in `x-ms-synctoken`. It returned empty arrays
-for `chats`, `teams`, `users`, `channels`, and `privateFeeds`, with
-`isPartialData=false`, `hasMoreChats=false`, and a present `syncToken` equal to
-the request token. This verifies the route and an empty-delta response shape;
-no nonempty change or token rotation was observed. Stale-token recovery,
-deletions, and update-application semantics remain unverified.
+**Read-only live probe (2026-09-30):** requests used the app connector's
+existing encrypted token cache and the following non-secret header names:
+`Authorization`, `x-skypetoken`, and `Accept: application/json`. No token values
+or response contents were recorded. Timings are client elapsed time around the
+request and JSON parsing, with zero retries; they are not server processing
+times.
+
+- Bootstrap: `GET /api/csa/api/v1/teams/users/me?isPrefetch=false&enableMembershipSummary=true`, with no sync-token header, returned 944 chats, 4 teams, 6 private feeds, and 0 users. `metadata.isPartialData` and `metadata.hasMoreChats` were both false, and a `metadata.syncToken` was present. It took 5.656 seconds. The separate connector authentication/setup before this request took 5.268 seconds.
+- `GET /api/csa/api/v1/teams/users/me/updates` without `x-ms-synctoken` returned a full-sized response: 944 chats, 4 teams, 7 channels, 6 private feeds, and 0 users, with both completeness flags false and a sync token. Two requests measured 3.907 and 4.145 seconds.
+- The same updates route with `x-ms-synctoken` set to the bootstrap token returned empty `chats`, `teams`, `users`, `channels`, and `privateFeeds` arrays in 0.457 seconds. Its sync token matched the request token.
+- A separate two-call test first called `/updates` without a sync token, then immediately called it with the token returned by that response. The first response again contained 944 chats, 4 teams, 7 channels, 6 private feeds, and 0 users (4.145 seconds); the token-bearing call returned empty arrays and the same token in 0.547 seconds.
+
+The no-token `/updates` response therefore behaves like a full catalog snapshot in
+this account/build, while a fresh sync token produced an empty no-change result
+much faster. This is consistent with an incremental/delta route. The downloaded
+Web bundle confirms the `/users/me` and `/users/me/updates` route mappings and
+declares a `SyncTokenExpired` error category; it does not expose a readable
+nonempty delta example. No chat changes were made for this test, so the exact
+representation of additions, edits, removals/deletions, paging, token rotation,
+and stale-token recovery remains unverified.
 
 ---
 
@@ -2094,13 +2105,12 @@ contract. See [Graph list chat messages (beta)](https://learn.microsoft.com/en-u
 
 ## Delta synchronization and open uncertainties
 
-The CSA response exposes `metadata.syncToken` and public captures show an
-`x-ms-synctoken` request header for `teams/users/me/updates`. A live read-only
-GET accepted the fresh startup token and returned a complete empty delta (all
-five catalog arrays empty, `isPartialData=false`, and `hasMoreChats=false`).
-The response included the same `syncToken`; no token rotation occurred in
-this no-change sample. This verifies the route and empty response shape, but
-not delivery or application of actual changes.
+The CSA response exposes `metadata.syncToken`, and public captures show an
+`x-ms-synctoken` request header for `teams/users/me/updates`. The live probes
+above show that omitting the header returns a full-sized catalog response,
+while sending a fresh token returns an empty response with the same token.
+This verifies the no-change path but does not prove what a nonempty delta
+contains or how the client applies it.
 
 The following details remain unverified or may vary by tenant/build:
 
