@@ -50,6 +50,10 @@ class MCPContractTests(unittest.TestCase):
                             self.assertTrue(tool.inputSchema["properties"])
                             self.assertIsNotNone(tool.outputSchema)
 
+                        catalog_schema = str(tools_by_name["list_chats"].outputSchema)
+                        self.assertIn("catalog_scope", catalog_schema)
+                        self.assertIn("unclassified_service_rows_excluded", catalog_schema)
+
                         search_tool = tools_by_name["search_messages"]
                         self.assertEqual(
                             search_tool.inputSchema["properties"]["match_mode"]["enum"],

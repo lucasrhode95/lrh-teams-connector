@@ -198,17 +198,20 @@ class TeamsConnectorTests(unittest.TestCase):
         chats = client.list_chats()
 
         self.assertEqual([chat.id for chat in chats], [
+            "48:notes",
             "19:zeta@thread.v2",
             "19:beta@thread.v2",
             "19:alpha@thread.v2",
             "19:untitled@thread.v2",
         ])
-        self.assertEqual(chats[0].display_name, "Zeta discussion")
-        self.assertTrue(chats[0].unread)
-        self.assertEqual(chats[0].chat_type, "group")
-        self.assertEqual(chats[0].last_message_preview, "Newest chat item")
-        self.assertEqual(chats[2].unread, False)
-        self.assertEqual(chats[3].display_name, "Resolved One-to-one Person")
+        self.assertTrue(chats[0].is_self_chat)
+        self.assertEqual(chats[0].display_name, "Notes to self")
+        self.assertEqual(chats[1].display_name, "Zeta discussion")
+        self.assertTrue(chats[1].unread)
+        self.assertEqual(chats[1].chat_type, "group")
+        self.assertEqual(chats[1].last_message_preview, "Newest chat item")
+        self.assertEqual(chats[3].unread, False)
+        self.assertEqual(chats[4].display_name, "Resolved One-to-one Person")
         self.assertEqual(client.requests[1][1], "POST")
         self.assertEqual(
             client.requests[1][3]["Authorization"], "Bearer spaces-test-token"
@@ -245,8 +248,27 @@ class TeamsConnectorTests(unittest.TestCase):
                     },
                     {
                         "id": "19:extra@thread.v2",
-                        "threadProperties": {"topic": "Extra chat"},
+                        "threadProperties": {
+                            "topic": "Extra chat",
+                            "productThreadType": "Chat",
+                            "threadType": "chat",
+                        },
                         "properties": {"lastimreceivedtime": 1790590000000},
+                    },
+                    {
+                        "id": "48:notifications",
+                        "threadProperties": {
+                            "productThreadType": "StreamOfNotifications",
+                            "threadType": "streamofnotifications",
+                        },
+                    },
+                    {
+                        "id": "19:channel@thread.tacv2",
+                        "threadProperties": {"productThreadType": "TeamsStandardChannel"},
+                    },
+                    {
+                        "id": "19:future@thread.v2",
+                        "threadProperties": {"productThreadType": "FutureRecord"},
                     },
                 ],
                 "_metadata": {"backwardLink": next_page},
@@ -254,7 +276,14 @@ class TeamsConnectorTests(unittest.TestCase):
             {
                 "conversations": [
                     {"id": "19:extra@thread.v2"},
-                    {"id": "19:last@thread.v2", "threadProperties": {"topic": "Last chat"}},
+                    {
+                        "id": "19:last@thread.v2",
+                        "threadProperties": {
+                            "topic": "Last meeting",
+                            "productThreadType": "Meeting",
+                            "threadType": "meeting",
+                        },
+                    },
                 ],
                 "_metadata": {},
             },
@@ -264,7 +293,10 @@ class TeamsConnectorTests(unittest.TestCase):
 
         chats_by_id = {chat.id: chat for chat in chats}
         self.assertEqual(set(chats_by_id), {
-            "19:rich@thread.v2", "19:extra@thread.v2", "19:last@thread.v2"
+            "48:notes",
+            "19:rich@thread.v2",
+            "19:extra@thread.v2",
+            "19:last@thread.v2",
         })
         self.assertEqual(chats_by_id["19:rich@thread.v2"].display_name, "Rich CSA chat")
         self.assertEqual(
@@ -272,6 +304,13 @@ class TeamsConnectorTests(unittest.TestCase):
         )
         self.assertTrue(chats_by_id["19:rich@thread.v2"].unread)
         self.assertEqual(chats_by_id["19:extra@thread.v2"].display_name, "Extra chat")
+        self.assertEqual(chats_by_id["19:last@thread.v2"].display_name, "Last meeting")
+        self.assertTrue(client.catalog_coverage.catalog_complete is False)
+        self.assertTrue(client.catalog_coverage.csa_reported_partial)
+        self.assertEqual(client.catalog_coverage.chat_service_unique_rows, 6)
+        self.assertEqual(client.catalog_coverage.fallback_chats_added, 2)
+        self.assertEqual(client.catalog_coverage.non_chat_service_rows_excluded, 2)
+        self.assertEqual(client.catalog_coverage.unclassified_service_rows_excluded, 1)
         self.assertEqual(len(client.requests), 3)
         self.assertEqual(client.requests[0][0], TeamsConnector.CSA_STARTUP_URL)
         first_catalog_url = client.requests[1][0]
@@ -280,6 +319,91 @@ class TeamsConnectorTests(unittest.TestCase):
             {"view": ["mychats"], "pageSize": ["500"]},
         )
         self.assertEqual(client.requests[2][0], next_page)
+
+    def test_fallback_one_to_one_name_uses_read_only_roster(self):
+        client = StubConnector([
+            {
+                "chats": [],
+                "metadata": {"isPartialData": True, "hasMoreChats": False},
+            },
+            {
+                "conversations": [{
+                    "id": "19:untitled@thread.v2",
+                    "threadProperties": {
+                        "productThreadType": "OneToOneChat",
+                        "threadType": "chat",
+                    },
+                }],
+                "_metadata": {},
+            },
+            {
+                "members": [
+                    {"id": "8:orgid:self-guid", "displayName": "Taylor Example"},
+                    {"id": "8:orgid:peer-guid", "displayName": "Jordan Example"},
+                ]
+            },
+        ])
+
+        chats = client.list_chats()
+
+        chat = next(item for item in chats if item.id == "19:untitled@thread.v2")
+        self.assertEqual(chat.display_name, "Jordan Example")
+        self.assertEqual(client.catalog_coverage.fallback_name_lookups_attempted, 1)
+        self.assertEqual(client.catalog_coverage.fallback_chats_without_resolved_name, 0)
+        self.assertTrue(client.catalog_coverage.catalog_complete)
+
+    def test_unspecified_csa_completeness_uses_paginated_fallback(self):
+        client = StubConnector([
+            {"chats": [], "metadata": {}},
+            {"conversations": [], "_metadata": {}},
+        ])
+
+        chats = client.list_chats()
+
+        self.assertEqual([chat.id for chat in chats], ["48:notes"])
+        self.assertIsNone(client.catalog_coverage.csa_reported_partial)
+        self.assertEqual(client.catalog_coverage.chat_service_unique_rows, 0)
+        self.assertTrue(client.catalog_coverage.catalog_complete)
+        self.assertEqual(len(client.requests), 2)
+
+    def test_raw_self_chat_is_named_and_counted_as_a_chat(self):
+        client = StubConnector([
+            {"chats": [], "metadata": {"isPartialData": True}},
+            {"conversations": [{
+                "id": "48:notes",
+                "threadProperties": {"productThreadType": "StreamOfNotes"},
+            }], "_metadata": {}},
+        ])
+
+        chats = client.list_chats()
+
+        self_chat = next(chat for chat in chats if chat.is_self_chat)
+        self.assertEqual(self_chat.display_name, "Notes to self")
+        self.assertEqual(self_chat.chat_type, "chat")
+        self.assertEqual(client.catalog_coverage.fallback_chats_added, 1)
+        self.assertEqual(client.catalog_coverage.fallback_chats_without_resolved_name, 0)
+
+    def test_catalog_rejects_csa_rows_without_ids_instead_of_silently_dropping_them(self):
+        client = StubConnector([
+            {"chats": [{"title": "Missing identifier"}], "metadata": {
+                "isPartialData": False,
+                "hasMoreChats": False,
+            }},
+        ])
+
+        with self.assertRaisesRegex(RuntimeError, "chat row has no ID"):
+            client.list_chats()
+
+    def test_catalog_rejects_chat_service_rows_without_ids(self):
+        client = StubConnector([
+            {"chats": [], "metadata": {"isPartialData": True}},
+            {"conversations": [{"threadProperties": {
+                "productThreadType": "Chat",
+            }}], "_metadata": {}},
+        ])
+
+        with self.assertRaisesRegex(RuntimeError, "catalog row without an ID"):
+            client.list_chats()
 
     def test_service_helpers_send_only_their_service_credentials(self):
         client = StubConnector()

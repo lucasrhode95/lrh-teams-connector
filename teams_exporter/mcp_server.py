@@ -25,6 +25,7 @@ SERVER_INSTRUCTIONS = (
     "Use sync_search_index to fetch bounded history batches and get_search_index_status "
     "to inspect indexed coverage. Search results explicitly report incomplete coverage. "
     "list_chats includes the signed-in user's self chat and marks it with is_self_chat. "
+    "Its coverage describes catalog scope, source, exclusions, and unresolved fallback names. "
     "get_messages returns author_id and is_self when sender identity is available; "
     "use is_self rather than matching display names to identify the user's own messages. "
     "Search cursors expire after 30 minutes and are lost when this server process restarts."
@@ -55,6 +56,15 @@ class ChatRecord(TypedDict):
 
 class CatalogCoverage(TypedDict):
     catalog_complete: bool
+    catalog_source: str
+    catalog_scope: str
+    csa_reported_partial: bool | None
+    chat_service_unique_rows: int | None
+    fallback_chats_added: int
+    non_chat_service_rows_excluded: int
+    unclassified_service_rows_excluded: int
+    fallback_name_lookups_attempted: int
+    fallback_chats_without_resolved_name: int
     total_chats: int
     returned_this_page: int
 
@@ -302,6 +312,8 @@ def create_mcp_server(service: TeamsService | None = None) -> FastMCP:
         """List Teams chats by most recent activity, using bounded pages.
 
         The signed-in user's self chat is included and marked with is_self_chat.
+        Coverage describes the source catalog and excluded or unclassified
+        Chat Service rows. catalog_complete is limited to catalog_scope.
 
         Args:
             page_size: Number of chats to return (1–100).

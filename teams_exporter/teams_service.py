@@ -142,6 +142,27 @@ class TeamsService:
             self._chats_cache_until = time.monotonic() + 60
         return self._chats_cache
 
+    def _catalog_coverage_record(self) -> dict[str, Any]:
+        coverage = getattr(self.connector, "catalog_coverage", None)
+        if getattr(coverage, "catalog_source", None) == "not loaded":
+            coverage = None
+        defaults = {
+            "catalog_complete": True,
+            "catalog_source": "connector catalog",
+            "catalog_scope": "Chats returned by the configured Teams connector.",
+            "csa_reported_partial": None,
+            "chat_service_unique_rows": None,
+            "fallback_chats_added": 0,
+            "non_chat_service_rows_excluded": 0,
+            "unclassified_service_rows_excluded": 0,
+            "fallback_name_lookups_attempted": 0,
+            "fallback_chats_without_resolved_name": 0,
+        }
+        return {
+            key: getattr(coverage, key, default) if coverage is not None else default
+            for key, default in defaults.items()
+        }
+
     def list_chats(
         self,
         *,
@@ -168,7 +189,7 @@ class TeamsService:
             "next_page_token": f"offset:{next_offset}" if next_offset < len(chats) else None,
             "database_notice": self.database_notice,
             "coverage": {
-                "catalog_complete": True,
+                **self._catalog_coverage_record(),
                 "total_chats": len(chats),
                 "returned_this_page": len(page),
             },

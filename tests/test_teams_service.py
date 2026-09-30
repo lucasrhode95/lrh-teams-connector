@@ -7,6 +7,7 @@ from pathlib import Path
 
 from teams_exporter.teams_connector import (
     AuthenticationRequiredError,
+    ChatCatalogCoverage,
     ChatSummary,
     TeamsConnector,
 )
@@ -92,13 +93,26 @@ class TeamsServiceTests(unittest.TestCase):
         self.service = TeamsService(connector=self.connector, index=index)
 
     def test_list_chats_returns_bounded_pages_and_coverage(self):
+        self.connector.catalog_coverage = ChatCatalogCoverage(
+            catalog_complete=False,
+            catalog_source="sanitized fixture",
+            catalog_scope="Fixture chats only.",
+            csa_reported_partial=True,
+            chat_service_unique_rows=4,
+            fallback_chats_added=1,
+            unclassified_service_rows_excluded=1,
+        )
         first = self.service.list_chats(page_size=1)
         second = self.service.list_chats(page_size=1, page_token=first["next_page_token"])
 
         self.assertEqual([row["id"] for row in first["items"]], ["19:alpha@thread.v2"])
         self.assertEqual([row["id"] for row in second["items"]], ["19:beta@thread.v2"])
         self.assertIsNone(second["next_page_token"])
-        self.assertTrue(first["coverage"]["catalog_complete"])
+        self.assertFalse(first["coverage"]["catalog_complete"])
+        self.assertEqual(first["coverage"]["catalog_source"], "sanitized fixture")
+        self.assertEqual(first["coverage"]["chat_service_unique_rows"], 4)
+        self.assertEqual(first["coverage"]["fallback_chats_added"], 1)
+        self.assertEqual(first["coverage"]["unclassified_service_rows_excluded"], 1)
         self.assertEqual(self.service.index.counts()["catalog_chats"], 2)
 
     def test_avatar_uris_are_opt_in_for_local_ui_and_omitted_by_default(self):

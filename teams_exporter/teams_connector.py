@@ -29,6 +29,22 @@ class ChatSummary:
     is_self_chat: bool = False
 
 
+@dataclass(slots=True)
+class ChatCatalogCoverage:
+    """Provenance and completeness for one normalized chat catalog read."""
+
+    catalog_complete: bool
+    catalog_source: str
+    catalog_scope: str
+    csa_reported_partial: bool | None
+    chat_service_unique_rows: int | None = None
+    fallback_chats_added: int = 0
+    non_chat_service_rows_excluded: int = 0
+    unclassified_service_rows_excluded: int = 0
+    fallback_name_lookups_attempted: int = 0
+    fallback_chats_without_resolved_name: int = 0
+
+
 class AuthenticationRequiredError(RuntimeError):
     """Raised when the cached Microsoft session needs an interactive sign-in."""
 
@@ -45,6 +61,25 @@ class TeamsConnector:
         "?isPrefetch=false&enableMembershipSummary=true"
     )
     SELF_CHAT_ID = "48:notes"
+    CHAT_CATALOG_SCOPE = (
+        "CSA chat and meeting entries plus the known notes-to-self chat; "
+        "team/channel entities and Teams service streams are excluded."
+    )
+    CHAT_SERVICE_CHAT_TYPES = {"chat", "onetoonechat", "meeting"}
+    CHAT_SERVICE_NON_CHAT_TYPES = {
+        "space",
+        "topic",
+        "teamsteam",
+        "teamsstandardchannel",
+        "teamssharedchannel",
+        "streamofnotes",
+        "streamofnotifications",
+        "streamofmentions",
+        "streamofcalllogs",
+        "streamofannotations",
+        "streamofgeneric",
+    }
+    MAX_FALLBACK_NAME_LOOKUPS = 20
     _MESSAGE_AUTHOR_MRI = re.compile(
         r"(?i)(?<![a-z0-9])(8:orgid:[0-9a-f]{8}-[0-9a-f]{4}-"
         r"[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?![0-9a-f])"
@@ -72,6 +107,12 @@ class TeamsConnector:
         self._middle_tier_url: str | None = None
         self._auth_sources: dict[str, str] = {}
         self._last_client_message_id = 0
+        self.catalog_coverage = ChatCatalogCoverage(
+            catalog_complete=False,
+            catalog_source="not loaded",
+            catalog_scope=self.CHAT_CATALOG_SCOPE,
+            csa_reported_partial=None,
+        )
 
     def login(self, *, interactive: bool = True) -> None:
         """Restore the cached session, optionally starting device-code login.
@@ -222,10 +263,17 @@ class TeamsConnector:
         self._require_logged_in()
         payload = self._request_csa(self.CSA_STARTUP_URL)
         metadata = self._mapping(payload.get("metadata"))
-        is_partial = (
-            metadata.get("isPartialData") is True
-            or metadata.get("hasMoreChats") is True
+        is_partial = metadata.get("isPartialData") is True or metadata.get(
+            "hasMoreChats"
+        ) is True
+        csa_reported_complete = (
+            metadata.get("isPartialData") is False
+            and metadata.get("hasMoreChats") is False
         )
+        csa_reported_partial = (
+            True if is_partial else False if csa_reported_complete else None
+        )
+        needs_chat_service_fallback = csa_reported_partial is not False
         chats = payload.get("chats")
         if not isinstance(chats, list):
             raise RuntimeError("Unexpected CSA response: 'chats' is not a list.")
@@ -233,10 +281,10 @@ class TeamsConnector:
         normalized: list[ChatSummary] = []
         for chat in chats:
             if not isinstance(chat, dict):
-                continue
+                raise RuntimeError("Unexpected CSA response: a chat row is not an object.")
             chat_id = chat.get("id")
             if not isinstance(chat_id, str) or not chat_id:
-                continue
+                raise RuntimeError("Unexpected CSA response: a chat row has no ID.")
             last_message = self._mapping(chat.get("lastMessage"))
             title = (
                 chat.get("title")
@@ -274,20 +322,51 @@ class TeamsConnector:
             payload.get("users"),
         )
         self._add_one_to_one_profile_picture_uris(chats, normalized)
-        if is_partial:
+        fallback_rows: list[dict[str, Any]] = []
+        fallback_summaries: list[ChatSummary] = []
+        fallback_chats_added = 0
+        non_chat_rows_excluded = 0
+        unclassified_rows_excluded = 0
+        chat_service_unique_rows: int | None = None
+        fallback_name_lookups_attempted = 0
+        fallback_chats_without_name = 0
+        if needs_chat_service_fallback:
+            service_rows = self._list_chat_service_conversations()
+            chat_service_unique_rows = len(service_rows)
             known_ids = {chat.id for chat in normalized}
-            for row in self._list_chat_service_conversations():
+            for row in service_rows:
                 conversation_id = row.get("id")
                 if not isinstance(conversation_id, str) or conversation_id in known_ids:
                     continue
-                normalized.append(self._summarize_chat_service_conversation(row))
+                row_kind = self._chat_service_conversation_kind(row)
+                if row_kind == "non_chat":
+                    non_chat_rows_excluded += 1
+                    continue
+                if row_kind != "chat":
+                    unclassified_rows_excluded += 1
+                    continue
+                summary = self._summarize_chat_service_conversation(row)
+                normalized.append(summary)
+                fallback_rows.append(row)
+                fallback_summaries.append(summary)
+                fallback_chats_added += 1
                 known_ids.add(conversation_id)
+            fallback_name_lookups_attempted = self._resolve_fallback_chat_names(
+                fallback_rows, normalized
+            )
+        self_chat_synthesized = not any(
+            chat.id == self.SELF_CHAT_ID for chat in normalized
+        )
         self._ensure_self_chat(normalized)
+        fallback_chats_without_name = sum(
+            summary.display_name == summary.id
+            for summary in fallback_summaries
+        )
         # The visible Teams chat rows matched descending last-message time in a live
         # comparison better than the raw CSA array. Stable sorting retains the
         # CSA order when two chats have the same timestamp.
         oldest = datetime.min.replace(tzinfo=timezone.utc)
-        return sorted(
+        ordered = sorted(
             normalized,
             key=lambda chat: (
                 chat.is_self_chat,
@@ -295,6 +374,118 @@ class TeamsConnector:
             ),
             reverse=True,
         )
+
+        self.catalog_coverage = ChatCatalogCoverage(
+            catalog_complete=(
+                csa_reported_partial is False
+                or (
+                    chat_service_unique_rows is not None
+                    and unclassified_rows_excluded == 0
+                )
+            ),
+            catalog_source=(
+                "; ".join(
+                    source
+                    for source, enabled in (
+                        ("CSA startup", True),
+                        (
+                            "paginated Chat Service fallback",
+                            chat_service_unique_rows is not None,
+                        ),
+                        ("known self-chat correction", self_chat_synthesized),
+                    )
+                    if enabled
+                )
+            ),
+            catalog_scope=self.CHAT_CATALOG_SCOPE,
+            csa_reported_partial=csa_reported_partial,
+            chat_service_unique_rows=chat_service_unique_rows,
+            fallback_chats_added=fallback_chats_added,
+            non_chat_service_rows_excluded=non_chat_rows_excluded,
+            unclassified_service_rows_excluded=unclassified_rows_excluded,
+            fallback_name_lookups_attempted=fallback_name_lookups_attempted,
+            fallback_chats_without_resolved_name=fallback_chats_without_name,
+        )
+        return ordered
+
+    @classmethod
+    def _chat_service_conversation_kind(cls, conversation: dict[str, Any]) -> str:
+        """Classify Chat Service rows before merging them into the chat catalog."""
+        if conversation.get("id") == cls.SELF_CHAT_ID:
+            return "chat"
+        thread_properties = cls._mapping(conversation.get("threadProperties"))
+        raw_types = (
+            thread_properties.get("productThreadType"),
+            thread_properties.get("threadType"),
+        )
+        normalized_types = {
+            value.casefold().replace("_", "").replace("-", "").replace(" ", "")
+            for value in raw_types
+            if isinstance(value, str) and value.strip()
+        }
+        if normalized_types & cls.CHAT_SERVICE_NON_CHAT_TYPES:
+            return "non_chat"
+        if normalized_types & cls.CHAT_SERVICE_CHAT_TYPES:
+            return "chat"
+        return "unclassified"
+
+    def _resolve_fallback_chat_names(
+        self,
+        service_rows: list[dict[str, Any]],
+        chats: list[ChatSummary],
+    ) -> int:
+        """Resolve a bounded number of untitled fallback one-to-one chats."""
+        own_id = self._profile_identifier(self._spaces_claims.get("oid"))
+        if not own_id:
+            return 0
+        summaries = {chat.id: chat for chat in chats}
+        candidates = []
+        for row in service_rows:
+            conversation_id = row.get("id")
+            summary = summaries.get(conversation_id)
+            thread_properties = self._mapping(row.get("threadProperties"))
+            product_type = thread_properties.get("productThreadType")
+            if (
+                summary is not None
+                and summary.display_name == summary.id
+                and isinstance(product_type, str)
+                and product_type.casefold() == "onetoonechat"
+            ):
+                candidates.append((conversation_id, summary))
+
+        attempted = 0
+        for conversation_id, summary in candidates[: self.MAX_FALLBACK_NAME_LOOKUPS]:
+            attempted += 1
+            try:
+                members = self.get_conversation_members(conversation_id)
+            except (RuntimeError, OSError):
+                continue
+            peers: dict[str, str | None] = {}
+            for member in members:
+                member_id = next(
+                    (
+                        identifier
+                        for key in ("id", "mri", "objectId", "userId", "userMri")
+                        if (identifier := self._profile_identifier(member.get(key)))
+                    ),
+                    None,
+                )
+                if not member_id or member_id == own_id:
+                    continue
+                name = next(
+                    (
+                        value.strip()
+                        for key in ("userDisplayName", "displayName", "name")
+                        if isinstance((value := member.get(key)), str) and value.strip()
+                    ),
+                    None,
+                )
+                peers[member_id] = name
+            if len(peers) == 1:
+                name = next(iter(peers.values()))
+                if name:
+                    summary.display_name = name
+        return attempted
 
     def _ensure_self_chat(self, chats: list[ChatSummary]) -> None:
         """Include Teams' special notes-to-self thread in the normalized catalog."""
@@ -312,6 +503,7 @@ class TeamsConnector:
             chats.append(chat)
         chat.is_self_chat = True
         chat.display_name = self._self_chat_display_name()
+        chat.chat_type = "chat"
         chat.avatar_url = chat.avatar_url or self.get_profile_picture_uri(
             display_name=self._self_chat_display_name().removesuffix(" (You)")
         )
@@ -362,7 +554,9 @@ class TeamsConnector:
             for conversation in page:
                 conversation_id = conversation.get("id")
                 if not isinstance(conversation_id, str) or not conversation_id:
-                    continue
+                    raise RuntimeError(
+                        "Unexpected Teams conversation catalog row without an ID."
+                    )
                 if conversation_id in seen_ids:
                     continue
                 conversations.append(conversation)
@@ -385,10 +579,18 @@ class TeamsConnector:
         properties = self._mapping(conversation.get("properties"))
         thread_properties = self._mapping(conversation.get("threadProperties"))
         last_message = self._mapping(conversation.get("lastMessage"))
-        title = (
-            thread_properties.get("topic")
-            or properties.get("displayName")
-            or conversation_id
+        title = next(
+            (
+                value.strip()
+                for value in (
+                    thread_properties.get("topic"),
+                    properties.get("displayName"),
+                    conversation.get("title"),
+                    conversation.get("displayName"),
+                )
+                if isinstance(value, str) and value.strip()
+            ),
+            conversation_id,
         )
         last_message_at = self._message_datetime(last_message) or (
             self._message_datetime(
