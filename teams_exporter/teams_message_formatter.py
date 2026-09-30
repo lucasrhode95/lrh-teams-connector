@@ -1,10 +1,241 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import html
 import json
 import re
 from html.parser import HTMLParser
 from typing import Any
 
+
+_URI_OBJECT_RE = re.compile(
+    r"<URIObject\b(?P<attributes>[^>]*)>(?P<content>.*?)</URIObject\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_TAG_RE = re.compile(r"<Swift\b[^>]*>", re.IGNORECASE)
+_TAG_END_RE = re.compile(r"</Swift\s*>", re.IGNORECASE)
+
+
+class _TagAttributeParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.attributes: dict[str, str] = {}
+
+    def handle_starttag(self, _tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.attributes = {name.lower(): value or "" for name, value in attrs}
+
+    def handle_startendtag(
+        self, _tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        self.handle_starttag(_tag, attrs)
+
+
+def _tag_attributes(source: str, tag_name: str) -> dict[str, str]:
+    parser = _TagAttributeParser()
+    try:
+        parser.feed(f"<{tag_name} {source}>")
+        parser.close()
+    except Exception:
+        return {}
+    return parser.attributes
+
+
+def _remove_swift_payload_elements(source: str) -> tuple[str, list[str]]:
+    """Remove every Swift b64 element, returning its encoded values for decoding."""
+    output: list[str] = []
+    payloads: list[str] = []
+    cursor = 0
+    for opening in _TAG_RE.finditer(source):
+        tag_attributes = opening.group(0)[len("<Swift") : -1].strip()
+        attrs = _tag_attributes(tag_attributes, "Swift")
+        payload = attrs.get("b64")
+        if payload is None:
+            continue
+
+        output.append(source[cursor : opening.start()])
+        payloads.append(payload)
+        end = opening.end()
+        if not opening.group(0).rstrip().endswith("/>"):
+            closing = _TAG_END_RE.search(source, end)
+            if closing is not None:
+                end = closing.end()
+        cursor = end
+    output.append(source[cursor:])
+    return "".join(output), payloads
+
+
+def _normalized_for_deduplication(value: str) -> str:
+    without_markdown = re.sub(r"[*_`]+", "", value)
+    return re.sub(r"[^\w]+", " ", without_markdown, flags=re.UNICODE).casefold().strip()
+
+
+def _merge_uri_object_text(visible_text: str, card_text: list[str]) -> str:
+    """Merge visible fallback and card text without repeating identical content."""
+    output: list[str] = []
+    seen: list[str] = []
+    for value in [visible_text, *card_text]:
+        for line in value.splitlines() or [value]:
+            cleaned = re.sub(r"[\t ]+", " ", html.unescape(line)).strip()
+            normalized = _normalized_for_deduplication(cleaned)
+            if not normalized:
+                continue
+            if any(
+                normalized == previous
+                or (
+                    len(normalized) >= 3
+                    and f" {normalized} " in f" {previous} "
+                )
+                for previous in seen
+            ):
+                continue
+            output.append(cleaned)
+            seen.append(normalized)
+    return "\n".join(output)
+
+
+def _adaptive_card_text(payload: Any) -> list[str]:
+    """Extract user-facing text from Teams card envelopes and Adaptive Cards."""
+    output: list[str] = []
+
+    def add(value: Any) -> None:
+        if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+            text = str(value).strip()
+            if text:
+                output.append(text)
+
+    def visit(node: Any) -> None:
+        if isinstance(node, list):
+            for item in node:
+                visit(item)
+            return
+        if not isinstance(node, dict):
+            return
+
+        node_type = str(node.get("type", "")).casefold()
+        if node_type == "textblock":
+            add(node.get("text"))
+        elif node_type == "richtextblock":
+            visit(node.get("inlines", []))
+        elif node_type == "textrun":
+            add(node.get("text"))
+        elif node_type == "factset":
+            facts = node.get("facts", [])
+            if isinstance(facts, list):
+                for fact in facts:
+                    if not isinstance(fact, dict):
+                        continue
+                    title, value = fact.get("title"), fact.get("value")
+                    if title is not None and value is not None:
+                        add(f"{title}: {value}")
+                    else:
+                        add(title if title is not None else value)
+        elif node_type == "image":
+            add(node.get("altText"))
+        elif node_type.startswith("action."):
+            add(node.get("title") or node.get("label"))
+            add(node.get("url"))
+        elif node_type.startswith("input."):
+            add(node.get("label"))
+            if node.get("id"):
+                add(f"Field ID: {node['id']}")
+            add(node.get("value"))
+            add(node.get("placeholder"))
+
+        # These are the card's content-bearing children. Other properties such
+        # as spacing, color, width, alignment, and image URLs are presentation.
+        for key in (
+            "body",
+            "items",
+            "columns",
+            "actions",
+            "inlines",
+            "images",
+        ):
+            child = node.get(key)
+            if isinstance(child, (dict, list)):
+                visit(child)
+
+    if not isinstance(payload, dict):
+        return output
+
+    add(payload.get("summary"))
+    add(payload.get("text"))
+    attachments = payload.get("attachments", [])
+    if isinstance(attachments, list):
+        for attachment in attachments:
+            if isinstance(attachment, dict):
+                content = attachment.get("content")
+                if isinstance(content, dict):
+                    visit(content)
+    if str(payload.get("type", "")).casefold() == "adaptivecard":
+        visit(payload)
+
+    # A repeated block can occur in both the Teams summary and card body.
+    deduplicated: list[str] = []
+    seen: set[str] = set()
+    for value in output:
+        key = _normalized_for_deduplication(value)
+        if key and key not in seen:
+            deduplicated.append(value)
+            seen.add(key)
+    return deduplicated
+
+
+def _render_visible_html(source: str) -> str:
+    parser = TeamsHtmlParser()
+    try:
+        parser.feed(source)
+        parser.close()
+        return parser.text()
+    except Exception:
+        return html.unescape(re.sub(r"<[^>]*>", "", source)).strip()
+
+
+def _rewrite_swift_uriobjects(source: str, *, as_html: bool) -> tuple[str, bool]:
+    """Replace SWIFT.1 URIObjects with safe visible and decoded card text."""
+    found = False
+
+    def replace(match: re.Match[str]) -> str:
+        nonlocal found
+        outer_attrs = _tag_attributes(match.group("attributes"), "URIObject")
+        inner = match.group("content")
+        visible_source, encoded_payloads = _remove_swift_payload_elements(inner)
+        if outer_attrs.get("type", "").casefold() != "swift.1":
+            # Even if a non-card URIObject has a Swift field, never print its
+            # encoded representation into an export.
+            if not encoded_payloads:
+                return match.group(0)
+            found = True
+            visible = _render_visible_html(visible_source)
+            return html.escape(visible, quote=False) if as_html else visible
+
+        found = True
+        visible = _render_visible_html(visible_source)
+        card_text: list[str] = []
+        for encoded in encoded_payloads:
+            compact = "".join(encoded.split())
+            try:
+                raw = base64.b64decode(compact, validate=True)
+                decoded = json.loads(raw.decode("utf-8-sig"))
+                card_text.extend(_adaptive_card_text(decoded))
+            except (
+                binascii.Error,
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+                RecursionError,
+                ValueError,
+            ):
+                continue
+
+        merged = _merge_uri_object_text(visible, card_text)
+        return html.escape(merged, quote=False) if as_html else merged
+
+    rewritten = _URI_OBJECT_RE.sub(replace, source)
+    # Also strip an orphaned Swift payload element if the surrounding Teams
+    # markup is malformed and did not match the complete URIObject wrapper.
+    rewritten, orphan_payloads = _remove_swift_payload_elements(rewritten)
+    return rewritten, found or bool(orphan_payloads)
 
 class TeamsHtmlParser(HTMLParser):
     """Convert common Teams rich-text markup into readable Markdown-like text."""
@@ -226,6 +457,14 @@ class TeamsMessageFormatter:
         content_type = self._first_string(message, "contenttype", "contentType") or ""
         is_html = "html" in kind.lower() or "html" in content_type.lower()
 
+        decoded_content = html.unescape(content)
+        if (
+            not re.search(r"<URIObject\b", content, re.IGNORECASE)
+            and re.search(r"<URIObject\b", decoded_content, re.IGNORECASE)
+        ):
+            content = decoded_content
+        content, _ = _rewrite_swift_uriobjects(content, as_html=is_html)
+
         if is_html and content:
             parser = TeamsHtmlParser()
             try:
@@ -233,7 +472,7 @@ class TeamsMessageFormatter:
                 parser.close()
                 body = parser.text()
             except Exception:
-                body = content.strip()
+                body = _render_visible_html(content)
         else:
             body = self._normalize_plain_text(content)
 
@@ -247,6 +486,18 @@ class TeamsMessageFormatter:
         if kind and kind.lower() not in {"richtext/html", "text", "richtext"}:
             return f"[System message: {kind}]"
         return ""
+
+    def sanitize_preformatted_body(self, body: str) -> str:
+        """Remove or decode any SWIFT payloads in a cached formatted body."""
+        source = body
+        decoded_source = html.unescape(body)
+        if (
+            not re.search(r"<URIObject\b", source, re.IGNORECASE)
+            and re.search(r"<URIObject\b", decoded_source, re.IGNORECASE)
+        ):
+            source = decoded_source
+        rewritten, found = _rewrite_swift_uriobjects(source, as_html=False)
+        return _render_visible_html(rewritten) if found else body
 
     def _attachment_markers(self, message: dict[str, Any]) -> list[str]:
         properties = message.get("properties")
