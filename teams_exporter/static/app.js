@@ -173,7 +173,7 @@ const chats = [];
     cancelButton.hidden = downloadButton.dataset.busy !== 'true';
     cancelButton.disabled = !activeDownloadId;
     combineInput.disabled = selected.size < 2 || downloadButton.dataset.busy === 'true';
-    if (combineInput.disabled) combineInput.checked = false;
+    if (selected.size < 2) combineInput.checked = false;
   }
 
   function renderChats() {
@@ -375,6 +375,7 @@ const chats = [];
     }
     messageLimitInput.setCustomValidity('');
     authHelp.hidden = true;
+    const concatenate = selected.size > 1 && combineInput.checked;
     downloadButton.dataset.busy = 'true';
     downloadButton.textContent = 'Preparing…';
     updateControls();
@@ -390,7 +391,7 @@ const chats = [];
           from_utc_offset_minutes: fromDateInput.value ? browserUtcOffsetMinutes(fromDateInput.value, false) : null,
           to_utc_offset_minutes: toDateInput.value ? browserUtcOffsetMinutes(toDateInput.value, true) : null,
           message_limit: parsedLimit.value,
-          concatenate: combineInput.checked
+          concatenate: concatenate
         })
       });
       const startBody = await startResponse.json();
