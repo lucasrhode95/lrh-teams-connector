@@ -18,8 +18,8 @@ Status terms:
 - Retrieve relevant one-to-one, group, meeting, and self conversations with stable identities, honest coverage, reliable pagination, and inclusive date/count filters.
 - Offer a simple local page for manual text/ZIP exports without an AI client. Retrieving new Teams data still requires connectivity and authentication.
 - Expose the same engine through client-independent MCP for listing, participant/content search, and complete conversation or surrounding-context retrieval.
-- Support explicitly authorized text and attachment sending through MCP, including a usable workflow from a phone.
-- Preserve previously fetched history in an account-bound archive, with repeatable backfill, refresh, backup, and an operational path to 1+ year retention.
+- Support explicitly authorized text and attachment sending through MCP using files already on the host computer, including requests made remotely from a phone.
+- Retain fetched messages indefinitely in account-bound SQLite storage, lazily as retrieval, export or search requests require them. Merge fresh Teams records with previously retained history; no scheduled collection or expiry is required.
 - Enable an external AI client to research topics and produce scheduled attention summaries grounded in identifiable source messages.
 - Add optional viewing and presentation features after the core capabilities. Favorites/pinned presentation remains last.
 
@@ -37,19 +37,18 @@ Status terms:
 
 ## Proposed execution order and dependencies
 
-This order reflects the recent priority of self-chat access and sending files while using a phone. Work IDs preserve the earlier roadmap references; their numbering is not a strict execution sequence. Independent investigations can proceed without waiting for unrelated work.
+This order puts shared retrieval/storage foundations before optional attachment sending. Work IDs preserve earlier references; P1.4 was removed because phone-to-host file transfer is outside the requested workflow. Independent investigations can proceed without waiting for unrelated work.
 
 | Order | Work | What it unlocks |
 |---|---|---|
 | 1 | P1.3 Self-chat discovery and sender identity | Reliable retrieval and targeting of the user's own chat; useful sending test destination. |
-| 2 | P1.4 File handoff from phone/client to MCP host | Establishes whether a file selected remotely can actually reach the sender process. |
-| 3 | P1.5 Attachment upload, access and delivery | Useful file sending through MCP; depends on a verified destination and accessible source bytes. |
-| 4 | P1.1 Catalog completeness and ordering | A trustworthy scope for listing, archive sync and search. |
-| 5 | P1.2 Long-history filtering and export reliability | Correct, recoverable exports and backfills. |
-| 6 | P2.1 Archive continuity and retention | Reliable historical and recent search after repeated syncs. |
-| 7 | P2.3 Complete MCP content and continuation | Entire-message/context access within bounded client responses. |
-| 8 | P2.2 Search completeness and Teams search research | Search across the known scope, potentially with less initial backfill. Native search research can run alongside archive work. |
-| 9 | P2.4 Scheduled AI workflows | Daily attention summaries and topic research using the preceding capabilities. |
+| 2 | P1.1 Catalog completeness and ordering | A trustworthy scope for listing, retrieval and search. |
+| 3 | P1.2 Long-history filtering and export reliability | Correct, recoverable retrieval of requested intervals. |
+| 4 | P2.1 Lazy indefinite message storage | Shared fetch, upsert, query and return flow for UI and MCP. |
+| 5 | P2.3 Complete MCP content and continuation | Entire-message/context access through bounded repeatable requests. |
+| 6 | P2.2 Search completeness and Teams search research | Fetch a requested interval, then search merged SQLite records when native search is unavailable. |
+| 7 | P2.4 Scheduled AI workflows | Optional client-driven summaries using on-demand retrieval. |
+| Optional | P1.5 Attachment upload, access and delivery | Send a host-computer file with a message; a nice-to-have alongside existing text sending. |
 | Later | Nice-to-haves | Attachments in exports, indicators, message pictures, viewing and Favorites. |
 
 ## P1.3 Self-chat discovery and sender identity
@@ -63,25 +62,15 @@ This order reflects the recent priority of self-chat access and sending files wh
 - Completion evidence: self-chat can be listed or explicitly resolved, read and targeted across restarts; a normal direct chat is not misclassified. Any send to it must verify the actual destination, including when it is absent from the normal catalog. Missing evidence yields a clear error.
 - Possible user help: open the self-chat and identify an existing marker message/time if traffic cannot be mapped automatically. A new test message is a separate, explicitly authorized action.
 
-## P1.4 File handoff from the phone or MCP client
-
-**Status: Unverified for the intended mobile workflow.**
-
-- Known: the MCP process runs on a host computer; a phone's file path does not identify a file on that host. The current UI listens on loopback. Stdio and MCP registration alone do not transfer client attachments to the server.
-- Unknown: whether the user's current mobile/remote client makes an attached file available to the agent and then to the MCP host, and how this differs across other MCP clients.
-- Proposed path: first transfer a harmless sample through the intended client without sending it to Teams. Determine whether it exposes accessible bytes, a host path, or a resource reference that the host can resolve. Compare source and received size/hash. Do not assume that a URI supported by one client is universally transferable.
-- Implementation choice unlocked: support a host file source as the generic baseline, plus a client-supported staging mechanism where needed. Avoid large binary/base64 data in model context. If a separate upload interface is needed, decide its authenticated access and deployment independently; the loopback export page does not already solve remote upload.
-- Completion evidence: a file selected on the phone reaches the application intact and with an understood lifetime, size limit and cleanup behavior. Unsupported clients receive a precise explanation of the missing handoff.
-- Possible user help: attach a small sample from the phone and confirm the MCP client/remote workflow being used. This test requires no Teams write.
-
 ## P1.5 Send attachments
 
 **Status: Missing. Research contains candidate upload shapes, not a verified end-to-end implementation.**
 
+- Requested flow: while remotely controlling the agent from a phone, ask it to send a message to oneself or another specified Teams recipient and attach an existing file on the host computer. The server reads that local file and uploads it to Teams. Phone file upload/download and a separate file-transfer interface are not requirements. This is a nice-to-have extension to text sending.
 - Known: current sending is plain text. Existing research distinguishes ordinary SharePoint/OneDrive files from AMS inline images. It records candidate upload/link routes, file metadata fields and AMS references.
 - Unknown: whether app-owned authentication can obtain the required SharePoint/AMS audience tokens without additional consent; tenant storage discovery; the exact attachment message payload; recipient access for self, direct, group and meeting chats; upload limits and completion behavior.
 - Proposed path: inspect already collected Web code and Maxim-Mazurok/teams-api for the upload-to-message sequence. Observe a deliberately authorized sample attachment sent through Teams Web, if required, including storage upload, permissions, metadata and final message creation. Verify resource audiences and replay each stage with the application's authentication. A route string or successful upload alone is insufficient.
-- Scope: begin with ordinary files and an optional caption through a separate MCP attachment tool. Treat inline images as a second flow. UI sending remains optional. Bind authorization to the actual source file(s), destination and caption.
+- Scope: begin with ordinary host files and an optional text message, sharing the existing send destination/authorization behavior. Decide whether to extend send_message or expose a companion tool during implementation. Treat inline images as a second flow. UI sending remains optional. Bind authorization to the actual local file(s), destination and text; report inaccessible paths clearly.
 - Reliability questions: large/chunked uploads, name conflicts, interrupted transfers, changed source files, expired upload sessions, uploaded-but-unsent files, and ambiguous final-send responses. Any future cleanup of remote files is a separate mutation and must not silently delete pre-existing content. Keep verified file/message IDs so retries can avoid duplicate sends.
 - Completion evidence: an authorized sample is delivered as a real Teams attachment, can be opened by the intended recipient, has verified access scope, and returns file/message identifiers. Self-chat success alone does not prove access for other recipients. Validate failure handling without broadly sharing the file or silently overwriting an existing one.
 - Possible user help: a new sign-in if the cached account cannot obtain the upload resource token; a harmless sample; consent for the exact live upload/send test. If tenant policy blocks the needed token or permissions, record that blocker rather than assuming another token will solve it.
@@ -105,18 +94,28 @@ This order reflects the recent priority of self-chat access and sending files wh
 - Proposed path: build a reference sample around exact timestamps, then vary one request parameter at a time. Compare first and continuation pages, equal start/end boundaries, unlimited/count-limited histories, system events and anomalous timestamps. Inspect Web pagination call sites and existing reverse-engineering sources. Only enable an optimization after matching the reference message IDs and bounds.
 - Application work: define bounded retry/backoff for transient read failures, timeouts and throttling; preserve completed progress. Plan prompt cancellation and clear progress for long exports. Determine memory/disk and responsiveness behavior on large histories before claiming unlimited extraction is operationally reliable.
 - Completion evidence: matching IDs/counts under supported filters; explicit errors/coverage on incomplete reads; restart/retry/cancel exercises preserve correct progress without duplicate output. Never infer complete lifetime history merely from an absent older-page link.
-- Possible user help: identify a representative long conversation and known boundary messages. Read-only probing and sanitized fixtures should otherwise be unattended.
+- Selected test conversation: Fiona Grant (display name Grant, Fiona), identified by the user as fiona.grant@example.com. Resolve and verify its actual conversation ID before future read-only trials; the identifier supplied here has not been independently verified. Use this chat for paging and date-boundary comparisons. Ask for boundary examples only if existing data is insufficient.
 
-## P2.1 Archive continuity and 1+ year retention
+## P2.1 Lazy indefinite storage: fetch, upsert, query, return
 
-**Status: Storage and bounded backfill implemented; continuous retention incomplete.**
+**Status: Persistent SQLite exists; the unified retrieval/merge contract below is the target, not yet verified as implemented.**
 
-- Known: SQLite persists messages and history cursors across restarts, separates accounts and supports online backup. Sync rotates through chats; documented completed-history refresh fetches the newest page. There is no configured scheduler or automatic age-based deletion.
-- Questions to verify, not newly confirmed failures: can a busy chat produce more new messages between syncs than one refresh page covers? Are newest messages refreshed while historical backfill remains unfinished? How are expired saved continuations, older edits/deletions, roster changes and catalog removals handled? Does coverage distinguish stored rows from a continuously covered interval?
-- Proposed path: use sanitized fixtures for multi-page bursts, long backfill plus new arrivals, interruptions, expired continuations, membership changes and edits/deletions. Then compare a bounded live interval with the stored IDs. Evaluate separate progress for historical backfill and catching up on new messages, with overlap/gap detection rather than newest timestamp alone.
-- Operational work: choose a recurring sync entry point and scheduler, silent-auth failure reporting, backup cadence and a restore exercise using the same account. Decide retention and deletion behavior before implementing purge. App-level encryption is absent; whether it is required is an operational decision, not assumed unfinished product scope.
-- Completion evidence: no unreported gaps in the exercised scenarios; measured coverage/freshness after restarts; successful backup/restore and account separation; recurring sync with actionable reauthentication needs. A year of retention requires capture while Teams still exposes the history and continued collection thereafter.
-- Possible user help: choose sync cadence, retention/deletion policy and machine availability; complete sign-in when Microsoft requires interaction.
+- Retention decision: keep messages indefinitely, with no expiry, automatic purge, scheduled collection or mandatory full-history backfill. Store messages when a requested retrieval, export or search fetches them. Storage deletion/expiry controls can be added later if needed; the user can deliberately remove the database to reset the archive.
+- Shared engine flow, used by both UI and MCP:
+  1. Fetch Teams messages for the requested conversation(s) and time interval, following remote pagination. Persist fetched records as pages arrive, including useful records encountered while traversing history.
+  2. Upsert into account-bound SQLite using stable conversation/message IDs. Fresh remote records are authoritative for fields they actually supply; apply verified edit/version and explicit deletion semantics. Do not let an older page overwrite a newer known revision or let an incomplete deletion payload erase identity/time metadata.
+  3. Query SQLite for the requested interval. Its unique keys provide the deduplicated union of fresh remote records and retained local-only records, without requiring two full in-memory histories.
+  4. Return that merged set in stable chronological order with IDs and UTC timestamps. Apply requested output limits and continuation to the merged set, so retained local records participate correctly in ordering and counts.
+- Edits and deletions:
+  - Investigate and document Teams edit timestamps/version fields, deletion flags/tombstones, and whether deleted records retain their original IDs and timestamps.
+  - Update stored content when an incoming record represents an edit. Record an explicit remote soft-deletion flag locally and expose that state to consumers; do not render a deleted record as ordinary current text. Decide separately how retained pre-deletion text is represented.
+  - Preserve local records absent from remote responses, including records removed by remote retention. Absence alone cannot distinguish hard deletion, retention expiry, incomplete paging or lack of access, so it must never trigger local deletion or an invented deletion flag.
+  - Keep remote refresh coverage separate from retained-history coverage. Local-only history is usable, but its latest remote state is unknown if it can no longer be refreshed.
+- Investigation path: examine existing research and response fields first, then controlled read-only comparisons of known edited/deleted messages and sanitized fixtures. Any deliberate edit/delete test requires separate authorization. Establish revision ordering and idempotent upsert behavior before implementing the shared flow.
+- Functional verification: overlapping date exports, repeated fetches, edited messages, soft-delete records, local-only records, interrupted pages, concurrent refreshes and account isolation. A repeated request must not duplicate rows; failures must preserve successfully stored pages and report incomplete refresh rather than claim full coverage.
+- Simplification: replace separate export/index population paths with this shared pipeline where possible. Reassess existing sync tools as optional manual prefetch/status operations; remove redundant machinery instead of maintaining parallel retrieval implementations. Continuous catch-up, sync schedules, automatic deletion and full-lifetime completeness are not completion requirements.
+- Existing persistence, account separation and backup remain useful. No schema-version or legacy-format compatibility work is required. Only history actually fetched while available can be retained; never promise recovery of messages already unavailable before the first request.
+- Possible user help: identify an existing edited/deleted example if needed or complete a required sign-in. Retention duration and collection cadence no longer need a decision.
 
 ## P2.3 Complete content through bounded MCP responses
 
@@ -124,6 +123,8 @@ This order reflects the recent priority of self-chat access and sending files wh
 
 - Known: get_messages documents a 1,200-character body cap with explicit truncation metadata. Older-message cursors do not by themselves provide the missing remainder of a long individual message. No full-body continuation is documented.
 - Unknown: the required path for retrieving complete long bodies and quoted context; cursor lifetime/restart behavior for interactive retrieval; source references clients can reliably follow.
+- Target continuation contract: every bounded result states whether more work/results remain and supplies an opaque continuation plus the exact next tool name and arguments. Tool descriptions instruct the agent to repeat those calls until complete, or until the user's requested limit is met. Bind continuation to the original account, filters and ordering; distinguish retrieval-in-progress from a complete search with zero matches. Avoid returning the same page or repeating the entire remote fetch on every continuation.
+- Long-running work must advance through bounded resumable calls rather than depend on one indefinitely open MCP exchange. The server provides continuation; the client/agent drives additional calls. It cannot force a client to continue, so unfinished coverage must remain explicit. Automated pagination does not remove the separate need to retrieve the remainder of an oversized individual message.
 - Proposed path: check existing tool contracts against a long sanitized message and a conversation spanning many pages. Specify either body-offset retrieval, a bounded message-detail tool, or a complete export resource accessible to the client. Distinguish interactive result cursors from persisted archive-sync progress.
 - Completion evidence: a client can reconstruct a full message and conversation without silent clipping or flooding context; expired/mismatched cursors fail clearly; IDs, author identity and UTC timestamps preserve source traceability.
 - Possible user help: only if a particular MCP client cannot consume the chosen resource/file mechanism.
@@ -133,24 +134,30 @@ This order reflects the recent priority of self-chat access and sending files wh
 **Status: Local search implemented; native search contract unverified.**
 
 - Known: FTS5 supports phrase/all-term message search and indexed-roster participant lookup. Coverage is exposed. Teams Web search returned results in an earlier visual check; route strings alone did not establish request body, audience, paging or completeness.
+- Required fallback when native search cannot be verified:
+  - Accept a required from/to date range and explicit chat scope (selected chats or the resolved catalog). Fetch all available remote messages in that interval through P2.1, upsert them, then search the merged SQLite records, including retained local-only history.
+  - Large scopes use the P2.3 continuation contract for preparation and result pages. Report which chats/intervals were refreshed and which failed or remain pending; do not call a search complete until the requested fetch scope has been exhausted successfully. This is on-demand population, not a prerequisite background index job.
+  - Start with simple SQL matching: exact normalized text equality and literal substring matching using parameterized LIKE. Escape user-supplied percent/underscore and the escape character so they are literal text, not accidental SQL wildcards.
+  - Define normalization, case and accent behavior explicitly and test non-ASCII names/content; SQLite's default LIKE behavior must not be assumed to provide full Unicode case folding. No fuzzy, semantic or similarity search is required.
+  - Apply the same bounds and deduplicated stored records used for retrieval. Define how explicit deletion flags affect searchable content and return deletion state clearly. Participant lookup remains a roster/name operation, with missing roster coverage reported separately.
 - Proposed path: inspect the previously downloaded search call sites and referenced reverse-engineered client. Capture a controlled existing keyword/phrase and participant search in Teams Web, including relevant HTTP or WebSocket traffic if used. Replay read-only requests using app-owned credentials. Compare IDs, scope, dates, pagination and unavailable/hidden chat cases against known messages and local results.
-- Local-search questions: missing/stale rosters, unresolved names, stale catalog scope, edits and recently arrived messages must affect coverage correctly. Fuzzy/semantic matching is a possible enhancement; the currently requested words/phrases do not require adding it.
+- Local-search questions: missing/stale rosters, unresolved names, stale catalog scope, edits and recently arrived messages must affect coverage correctly. Evaluate whether the existing FTS layer still serves a necessary purpose after simple SQL matching is implemented; remove redundant code rather than require two search engines.
 - Completion evidence: the documented search scope matches what was actually searched, including when there are no hits. Native search is used only for verified scopes; it need not be complete lifetime search to be useful if its limits are explicit. Local indexing remains a valid implementation when native search cannot be verified.
 - Possible user help: supply known phrases, participant names and expected conversations for comparison. New sign-in or consent may be needed for an additional resource audience; neither is assumed to be available.
 
 ## P2.4 Scheduled attention summaries and topic research
 
-**Status: Retrieval primitives exist; recurring workflow is not configured.**
+**Status: Retrieval primitives exist; optional client-driven recurring workflow is not configured.**
 
 - Intended outcomes: daily pending tasks/requests requiring direct or indirect attention, recent topic updates, and ad-hoc research across chats with optional priority conversations.
-- Proposed path: define a small evaluation set of existing requests, replies and resolutions. Exercise the client workflow: update coverage, search, fetch surrounding context, and cite chat/message IDs, authors and times. Test timezone cutoffs, stale indexes, unfinished coverage and contradictory follow-up messages.
+- Proposed path: define a small evaluation set of existing requests, replies and resolutions. Exercise the client workflow: request a time range, fetch/upsert/search on demand, fetch surrounding context, and cite chat/message IDs, authors and times. Test timezone cutoffs, unfinished coverage and contradictory follow-up messages. Each scheduled client request uses the same lazy storage flow; a separate archive scheduler is unnecessary.
 - Open decisions: which MCP client schedules the run, when its host is available, how reauthentication is surfaced, delivery location, and how to distinguish pending work from completed or merely inferred tasks.
 - Completion evidence: a scheduled run reports its actual time/chat coverage, produces traceable findings, distinguishes explicit requests from inferences, and exposes failures or missing scope. Scheduling alone does not prove useful task extraction.
 - Possible user help: set the schedule and notification destination, clarify examples of pending/completed work, and authorize any external delivery separately. Summarization never implies permission to send Teams messages.
 
 ## Nice-to-haves and their investigation paths
 
-These remain below core retrieval, MCP, archive and the newly requested attachment sending. Attachment downloading remains optional.
+These and P1.5 attachment sending remain optional, below core retrieval, MCP and lazy storage. Attachment downloading remains optional; Favorites remains last.
 
 | Item | Current gap | Proposed path and completion evidence |
 |---|---|---|
@@ -168,7 +175,7 @@ These remain below core retrieval, MCP, archive and the newly requested attachme
 - Keep browser-session success distinct from success with the application's app-owned authentication. The latter is required for an unattended connector capability.
 - Record the hypothesis, source, observed result, scope, failure mode and completion evidence. Add confirmed route facts to API research and update status here; keep unsuccessful hypotheses labelled.
 - Prefer read-only observations and sanitized functional fixtures. Persist no tokens, cookies, authorization headers or private chat contents in research artifacts or repository fixtures.
-- Manual assistance may be needed for Microsoft sign-in, opening a representative chat, phone file handoff, expected-result validation, or a deliberately authorized upload/send.
+- Manual assistance may be needed for Microsoft sign-in, opening a representative chat, identifying a host file, expected-result validation, or a deliberately authorized upload/send.
 - Permission to investigate is not blanket permission to send messages, share files, alter chat state or create public links. Prepare exact destination/content before requesting any missing write authorization; the current consolidation does not perform those actions.
 - Keep shared behavior in the connector/service/formatter/archive layers so the MCP and local page remain reusable. Investigate Streamable HTTP only if an actual remote-client deployment requires it; stdio already meets the current server requirement.
 - No further work is needed merely to recreate already delivered UI, MCP registration or backup features. A separate Outlook client remains outside this application's completion scope; see [Outlook feasibility plan](outlook-client-feasibility-plan.md).
