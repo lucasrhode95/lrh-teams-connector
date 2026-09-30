@@ -20,6 +20,11 @@ MAX_REQUEST_BYTES = 1_000_000
 MAX_CHAT_CATALOG_SIZE = 10_000
 MAX_MESSAGE_LIMIT = 1_000_000
 DOWNLOAD_CHUNK_SIZE = 64 * 1024
+LOCAL_IMAGE_ASSETS = {
+    "avatar-person.svg",
+    "chat-call.svg",
+    "chat-group.svg",
+}
 
 
 INDEX_HTML = r"""<!doctype html>
@@ -28,65 +33,73 @@ INDEX_HTML = r"""<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Teams conversation export</title>
+  <script>
+    document.documentElement.dataset.theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  </script>
   <style>
-    :root { color-scheme: light; --teams-purple: #5b5fc7; --teams-purple-dark: #444791; --teams-purple-light: #e8ebfa; --teams-neutral: #f5f5f5; font: 15px/1.45 system-ui, sans-serif; color: #242424; background: var(--teams-neutral); }
+    :root { color-scheme: light; --teams-purple: #5b5fc7; --teams-purple-dark: #444791; --teams-purple-light: #e8ebfa; --page-bg: #f5f5f5; --surface: #fff; --surface-border: #e1dfdd; --text: #242424; --muted: #616161; --field-border: #c8c6c4; --line: #f0f0f0; --hover: #f5f5ff; --focus: #bdbdf2; --selection: #e8ebfa; --button-bg: #f0f0f0; --notice-bg: #fff7e6; --notice-text: #594522; --error: #a83232; --avatar-bg: #e8ebfa; --shadow: 0 12px 36px #1e293b12; font: 15px/1.45 system-ui, sans-serif; color: var(--text); background: var(--page-bg); }
+    :root[data-theme="dark"] { color-scheme: dark; --teams-purple: #898cf5; --teams-purple-dark: #a7a9f7; --teams-purple-light: #39395c; --page-bg: #141414; --surface: #1f1f1f; --surface-border: #3b3a39; --text: #f5f5f5; --muted: #b3b0ad; --field-border: #5c5a58; --line: #333; --hover: #2b2b38; --focus: #8b8ef4; --selection: #373764; --button-bg: #333; --notice-bg: #3a3426; --notice-text: #f2dca6; --error: #f17b7b; --avatar-bg: #34355f; --shadow: 0 12px 36px #0008; }
     * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 28px 16px; }
-    main { width: min(820px, 100%); padding: 28px; background: white; border: 1px solid #e1dfdd; border-radius: 10px; box-shadow: 0 12px 36px #1e293b12; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 28px 16px; background: var(--page-bg); color: var(--text); }
+    main { width: min(820px, 100%); padding: 28px; background: var(--surface); border: 1px solid var(--surface-border); border-radius: 10px; box-shadow: var(--shadow); }
     h1 { margin: 0; font-size: 1.6rem; letter-spacing: -.02em; }
-    p { margin: 8px 0 0; color: #616161; }
+    p { margin: 8px 0 0; color: var(--muted); }
     .eyebrow { margin: 0 0 6px; color: var(--teams-purple); font-size: .75rem; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
     header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
-    .account-info { display: grid; justify-items: end; gap: 2px; padding-top: 3px; text-align: right; }
-    .account-info strong { color: #242424; font-size: .9rem; font-weight: 700; }
-    .account-info span { color: #737373; font-size: .78rem; font-weight: 400; }
+    .account-info { display: flex; align-items: center; gap: 9px; padding-top: 3px; text-align: right; }
+    .account-copy { display: grid; gap: 2px; }
+    .account-info strong { color: var(--text); font-size: .9rem; font-weight: 700; }
+    .account-info .account-email { color: var(--muted); font-size: .78rem; font-weight: 400; }
+    .account-avatar { width: 40px; height: 40px; flex: 0 0 40px; border: 1px solid var(--surface-border); border-radius: 50%; object-fit: cover; background: var(--avatar-bg); }
     .filters { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 24px 0 18px; }
-    label, .filter-field { display: grid; gap: 6px; color: #424242; font-weight: 600; }
-    .field-label { color: #424242; font-weight: 600; }
-    input[type="number"], input[type="search"], .range-toggle { width: 100%; min-height: 40px; border: 1px solid #c8c6c4; border-radius: 4px; padding: 8px 10px; color: inherit; font: inherit; background: white; }
-    input:focus-visible, button:focus-visible { outline: 3px solid #bdbdf2; outline-offset: 2px; }
+    label, .filter-field { display: grid; gap: 6px; color: var(--text); font-weight: 600; }
+    .field-label { color: var(--text); font-weight: 600; }
+    input[type="number"], input[type="search"], .range-toggle { width: 100%; min-height: 40px; border: 1px solid var(--field-border); border-radius: 4px; padding: 8px 10px; color: var(--text); font: inherit; background: var(--surface); }
+    input::placeholder { color: var(--muted); opacity: 1; }
+    input:focus-visible, button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
     input[type="checkbox"] { accent-color: var(--teams-purple); }
     .combine { grid-column: 1 / -1; display: flex; align-items: center; gap: 9px; font-weight: 500; }
     .combine input { width: 16px; height: 16px; margin: 0; }
     .list-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin: 18px 0 8px; }
     .list-heading label { flex: 1; max-width: 340px; }
-    .count { color: #616161; white-space: nowrap; font-size: .9rem; }
-    .chat-list { max-height: min(44vh, 390px); overflow: auto; border: 1px solid #e1dfdd; border-radius: 4px; }
-    .chat-row { display: flex; grid-template-columns: auto 1fr; align-items: start; gap: 11px; padding: 11px 13px; border-bottom: 1px solid #f0f0f0; cursor: pointer; }
+    .count { color: var(--muted); white-space: nowrap; font-size: .9rem; }
+    .chat-list { max-height: min(44vh, 390px); overflow: auto; border: 1px solid var(--surface-border); border-radius: 4px; }
+    .chat-row { display: grid; grid-template-columns: auto 36px minmax(0, 1fr); align-items: center; gap: 11px; padding: 10px 13px; border-bottom: 1px solid var(--line); cursor: pointer; }
     .chat-row:last-child { border-bottom: 0; }
-    .chat-row:hover { background: #f5f5ff; }
+    .chat-row:hover { background: var(--hover); }
     .chat-row input { margin: 4px 0 0; }
-    .chat-name { display: block; color: #242424; font-weight: 600; overflow-wrap: anywhere; }
-    .chat-meta { display: block; margin-top: 2px; color: #737373; font-size: .82rem; }
-    .empty { padding: 20px; color: #737373; text-align: center; }
-    .database-notice { padding: 11px 12px; border-radius: 7px; background: #fff7e6; color: #594522; }
+    .chat-avatar { width: 36px; height: 36px; border: 1px solid var(--surface-border); border-radius: 50%; object-fit: cover; background: var(--avatar-bg); }
+    .chat-name { display: block; color: var(--text); font-weight: 600; overflow-wrap: anywhere; }
+    .chat-meta { display: block; margin-top: 2px; color: var(--muted); font-size: .82rem; }
+    .empty { padding: 20px; color: var(--muted); text-align: center; }
+    .database-notice { padding: 11px 12px; border-radius: 7px; background: var(--notice-bg); color: var(--notice-text); }
     .actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; }
     button { min-height: 40px; border: 0; border-radius: 4px; padding: 9px 15px; font: inherit; font-weight: 650; cursor: pointer; }
     button.primary { color: white; background: var(--teams-purple); }
     button.primary:hover:not(:disabled) { background: var(--teams-purple-dark); }
-    button.secondary { color: #424242; background: #f0f0f0; }
+    button.secondary { color: var(--text); background: var(--button-bg); }
     button:disabled { opacity: .52; cursor: not-allowed; }
-    #status { min-height: 1.4em; color: #616161; }
-    #status.error { color: #a83232; }
-    .auth-help { margin-top: 12px; padding: 12px; border-radius: 7px; background: #fff7e6; color: #594522; }
+    #status { min-height: 1.4em; color: var(--muted); }
+    #status.error { color: var(--error); }
+    .auth-help { margin-top: 12px; padding: 12px; border-radius: 7px; background: var(--notice-bg); color: var(--notice-text); }
     code { font-family: ui-monospace, Consolas, monospace; }
     .range-picker { position: relative; }
     .range-toggle { display: flex; align-items: center; justify-content: space-between; text-align: left; font-weight: 400; }
-    .calendar { position: absolute; z-index: 5; top: calc(100% + 7px); left: 0; width: min(352px, calc(100vw - 72px)); padding: 14px; background: white; border: 1px solid #e1dfdd; border-radius: 8px; box-shadow: 0 10px 28px #24242424; }
+    .calendar { position: absolute; z-index: 5; top: calc(100% + 7px); left: 0; width: min(352px, calc(100vw - 72px)); padding: 14px; background: var(--surface); border: 1px solid var(--surface-border); border-radius: 8px; box-shadow: var(--shadow); }
     .calendar-header { display: grid; grid-template-columns: 36px 1fr 36px; align-items: center; gap: 8px; margin-bottom: 10px; text-align: center; }
     .calendar-header strong { font-size: .95rem; }
     .calendar-nav { min-height: 34px; padding: 4px; color: var(--teams-purple-dark); background: transparent; font-size: 1.2rem; }
     .weekdays, .calendar-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); justify-items: center; }
-    .weekdays { margin-bottom: 4px; color: #737373; font-size: .75rem; font-weight: 600; }
-    .calendar-day { display: grid; place-items: center; width: 38px; height: 38px; min-height: 0; padding: 0; border-radius: 50%; color: #242424; background: transparent; font-weight: 400; }
-    .calendar-day:hover { background: #f1f0ff; }
-    .calendar-day.outside-month { color: #a19f9d; }
+    .weekdays { margin-bottom: 4px; color: var(--muted); font-size: .75rem; font-weight: 600; }
+    .calendar-day { display: grid; place-items: center; width: 38px; height: 38px; min-height: 0; padding: 0; border-radius: 50%; color: var(--text); background: transparent; font-weight: 400; }
+    .calendar-day:hover { background: var(--hover); }
+    .calendar-day.outside-month { color: var(--muted); opacity: .65; }
     .calendar-day.in-range { background: var(--teams-purple-light); border-radius: 0; }
     .calendar-day.range-start, .calendar-day.range-end { color: white; background: var(--teams-purple); font-weight: 650; }
-    .calendar-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; border-top: 1px solid #f0f0f0; padding-top: 10px; }
-    .calendar-hint { flex: 1; color: #616161; font-size: .72rem; line-height: 1.3; }
+    .calendar-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+    .calendar-hint { flex: 1; color: var(--muted); font-size: .72rem; line-height: 1.3; }
     .calendar-footer button { min-height: 32px; padding: 6px 9px; font-size: .8rem; }
-    @media (max-width: 560px) { main { padding: 20px; } header { gap: 12px; } .account-info { max-width: 42%; overflow-wrap: anywhere; } .filters { grid-template-columns: 1fr; } .combine { grid-column: auto; } .list-heading { align-items: stretch; flex-direction: column; } .list-heading label { max-width: none; } .actions { align-items: stretch; flex-direction: column-reverse; } .actions button { width: 100%; } }
+    @media (max-width: 560px) { main { padding: 20px; } header { gap: 12px; } .account-info { max-width: 48%; overflow-wrap: anywhere; } .account-avatar { width: 34px; height: 34px; flex-basis: 34px; } .filters { grid-template-columns: 1fr; } .combine { grid-column: auto; } .list-heading { align-items: stretch; flex-direction: column; } .list-heading label { max-width: none; } .actions { align-items: stretch; flex-direction: column-reverse; } .actions button { width: 100%; } }
   </style>
 </head>
 <body>
@@ -98,8 +111,11 @@ INDEX_HTML = r"""<!doctype html>
       <p>Choose one or more chats, set optional filters, and download a text export.</p>
     </div>
     <div id="account-info" class="account-info" aria-label="Signed-in account" hidden>
-      <strong id="account-name"></strong>
-      <span id="account-email"></span>
+      <img id="account-picture" class="account-avatar" alt="">
+      <span class="account-copy">
+        <strong id="account-name"></strong>
+        <span id="account-email" class="account-email"></span>
+      </span>
     </div>
   </header>
   <p id="database-notice" class="database-notice" role="status" hidden></p>
@@ -164,6 +180,7 @@ INDEX_HTML = r"""<!doctype html>
   const rangeLabel = document.getElementById('range-label');
   const fromDateInput = document.getElementById('from-date');
   const toDateInput = document.getElementById('to-date');
+  const fallbackPersonAvatar = '/assets/avatar-person.svg';
   let calendarMonth = new Date();
   calendarMonth.setDate(1);
   let choosingEnd = false;
@@ -270,6 +287,44 @@ INDEX_HTML = r"""<!doctype html>
     statusText.classList.toggle('error', Boolean(isError));
   }
 
+  function setAvatar(image, url, fallback) {
+    let fallbackApplied = false;
+    let fallbackTimer = null;
+    function showFallback() {
+      if (fallbackApplied) return;
+      fallbackApplied = true;
+      if (fallbackTimer !== null) window.clearTimeout(fallbackTimer);
+      image.src = fallback;
+    }
+    image.onload = function () {
+      if (fallbackTimer !== null) window.clearTimeout(fallbackTimer);
+    };
+    image.onerror = function () {
+      showFallback();
+    };
+    let source = fallback;
+    if (typeof url === 'string' && url.length <= 2048) {
+      try {
+        const parsed = new URL(url, window.location.origin);
+        if (parsed.protocol === 'https:' || parsed.origin === window.location.origin) source = parsed.href;
+      } catch (_) {}
+    }
+    if (source !== fallback) {
+      fallbackTimer = window.setTimeout(showFallback, 5000);
+    }
+    image.src = source;
+  }
+
+  function chatFallbackAvatar(chat) {
+    const type = String(chat.chat_type || '').toLocaleLowerCase();
+    const id = String(chat.id || '').toLocaleLowerCase();
+    if (type.includes('meeting') || type.includes('call') || id.startsWith('19:meeting_') || id.startsWith('19:call_')) {
+      return '/assets/chat-call.svg';
+    }
+    if (type.includes('group')) return '/assets/chat-group.svg';
+    return fallbackPersonAvatar;
+  }
+
   function updateControls() {
     count.textContent = selected.size + ' selected';
     downloadButton.disabled = selected.size === 0 || downloadButton.dataset.busy === 'true';
@@ -301,6 +356,11 @@ INDEX_HTML = r"""<!doctype html>
         else selected.delete(chat.id);
         updateControls();
       });
+      const avatar = document.createElement('img');
+      avatar.className = 'chat-avatar';
+      avatar.alt = '';
+      avatar.setAttribute('aria-hidden', 'true');
+      setAvatar(avatar, chat.avatar_url, chatFallbackAvatar(chat));
       const text = document.createElement('span');
       const name = document.createElement('span');
       name.className = 'chat-name';
@@ -310,7 +370,7 @@ INDEX_HTML = r"""<!doctype html>
       const dateText = chat.last_message_at ? new Date(chat.last_message_at).toLocaleString() : 'No recent activity shown';
       metadata.textContent = (chat.chat_type || 'Conversation') + ' · ' + dateText;
       text.append(name, metadata);
-      row.append(checkbox, text);
+      row.append(checkbox, avatar, text);
       list.appendChild(row);
     });
   }
@@ -340,6 +400,7 @@ INDEX_HTML = r"""<!doctype html>
       databaseNotice.hidden = !body.database_notice;
       document.getElementById('account-name').textContent = body.account?.name || '';
       document.getElementById('account-email').textContent = body.account?.email || '';
+      setAvatar(document.getElementById('account-picture'), body.account?.picture_url, fallbackPersonAvatar);
       accountInfo.hidden = !body.account;
       const known = new Set(chats.map(function (chat) { return chat.id; }));
       Array.from(selected).forEach(function (id) { if (!known.has(id)) selected.delete(id); });
@@ -464,13 +525,30 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
             body = INDEX_HTML.encode("utf-8")
             self.send_response(200)
             self._security_headers("text/html; charset=utf-8")
-            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+            self.send_header("Content-Security-Policy", "default-src 'none'; img-src 'self' https:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
             return
         if path == "/api/chats":
             self._list_chats()
+            return
+        if path.startswith("/assets/"):
+            asset_name = path.removeprefix("/assets/")
+            if asset_name not in LOCAL_IMAGE_ASSETS:
+                self._send_json(404, self._error("not_found", "Not found."))
+                return
+            asset_path = Path(__file__).parent / asset_name
+            try:
+                body = asset_path.read_bytes()
+            except OSError:
+                self._send_json(404, self._error("not_found", "Not found."))
+                return
+            self.send_response(200)
+            self._security_headers("image/svg+xml; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
         self._send_json(404, self._error("not_found", "Not found."))
 
@@ -507,7 +585,11 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
             page_token = None
             seen_tokens: set[str] = set()
             while True:
-                result = self.server.service.list_chats(page_size=100, page_token=page_token)
+                result = self.server.service.list_chats(
+                    page_size=100,
+                    page_token=page_token,
+                    include_avatar_uris=True,
+                )
                 chats.extend(result["items"])
                 if len(chats) > MAX_CHAT_CATALOG_SIZE:
                     raise RuntimeError("Chat catalog exceeds the local UI size limit.")

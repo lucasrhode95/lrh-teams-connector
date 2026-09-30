@@ -54,18 +54,27 @@ class ExportService:
         self.connector = ExportConnector()
         self.formatter = TeamsMessageFormatter()
         self.auth_required = False
-        self.account_info = {"name": "Taylor Reed", "email": "taylor@example.test"}
+        self.account_info = {
+            "name": "Taylor Reed",
+            "email": "taylor@example.test",
+            "picture_url": "https://images.example.test/taylor.png",
+        }
         self.database_notice = None
         self.chats = [
-            ChatSummary("19:alpha@thread.v2", "Alpha", chat_type="group"),
+            ChatSummary(
+                "19:alpha@thread.v2",
+                "Alpha",
+                chat_type="group",
+                avatar_url="https://images.example.test/alpha.png",
+            ),
             ChatSummary("19:beta@thread.v2", "Beta", chat_type="oneOnOne"),
         ]
         self.list_calls = []
 
-    def list_chats(self, *, page_size=50, page_token=None):
+    def list_chats(self, *, page_size=50, page_token=None, include_avatar_uris=False):
         if self.auth_required:
             raise AuthenticationRequiredError("not signed in")
-        self.list_calls.append((page_size, page_token))
+        self.list_calls.append((page_size, page_token, include_avatar_uris))
         offset = int(page_token.split(":")[1]) if page_token else 0
         selected = self.chats[offset : offset + page_size]
         next_offset = offset + len(selected)
@@ -76,6 +85,7 @@ class ExportService:
                     "name": chat.display_name,
                     "chat_type": chat.chat_type,
                     "last_message_at": None,
+                    **({"avatar_url": chat.avatar_url} if include_avatar_uris else {}),
                 }
                 for chat in selected
             ],
@@ -116,6 +126,7 @@ class LocalTeamsServerTests(unittest.TestCase):
         self.assertEqual(page_status, 200)
         self.assertIn(b"Download conversations", page)
         self.assertEqual(page_headers["Content-Security-Policy"].split(";", 1)[0], "default-src 'none'")
+        self.assertIn("img-src 'self' https:", page_headers["Content-Security-Policy"])
 
         status, headers, body = self.request("GET", "/api/chats")
         result = json.loads(body)
@@ -124,8 +135,22 @@ class LocalTeamsServerTests(unittest.TestCase):
         self.assertEqual(result["account"], self.service.account_info)
         self.assertEqual(result["database_notice"], self.service.database_notice)
         self.assertEqual([chat["name"] for chat in result["chats"]], ["Alpha", "Beta"])
+        self.assertEqual(result["chats"][0]["avatar_url"], "https://images.example.test/alpha.png")
+        self.assertEqual(result["account"]["picture_url"], "https://images.example.test/taylor.png")
         self.assertEqual(headers["Cache-Control"], "no-store")
-        self.assertEqual(self.service.list_calls, [(100, None)])
+        self.assertEqual(self.service.list_calls, [(100, None, True)])
+
+    def test_local_avatar_assets_are_available_and_unknown_assets_are_rejected(self):
+        for asset in ("avatar-person.svg", "chat-call.svg", "chat-group.svg"):
+            with self.subTest(asset=asset):
+                status, headers, body = self.request("GET", f"/assets/{asset}")
+                self.assertEqual(status, 200)
+                self.assertTrue(headers["Content-Type"].startswith("image/svg+xml"))
+                self.assertIn(b"<svg", body)
+
+        status, _, body = self.request("GET", "/assets/not-an-avatar.svg")
+        self.assertEqual(status, 404)
+        self.assertEqual(json.loads(body)["error"]["code"], "not_found")
 
     def test_chat_catalog_continues_through_bounded_pages(self):
         self.service.chats = [
@@ -138,7 +163,11 @@ class LocalTeamsServerTests(unittest.TestCase):
         self.assertEqual(result["count"], 205)
         self.assertEqual(
             self.service.list_calls,
-            [(100, None), (100, "offset:100"), (100, "offset:200")],
+            [
+                (100, None, True),
+                (100, "offset:100", True),
+                (100, "offset:200", True),
+            ],
         )
 
     def test_single_chat_download_applies_local_date_and_latest_message_limit(self):

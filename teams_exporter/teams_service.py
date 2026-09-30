@@ -101,6 +101,11 @@ class TeamsService:
             "name": str(display_name),
             "email": str(email) if email else "Email unavailable",
         }
+        get_picture_uri = getattr(self.connector, "get_profile_picture_uri", None)
+        if callable(get_picture_uri):
+            picture_uri = get_picture_uri(display_name=str(display_name))
+            if isinstance(picture_uri, str) and picture_uri.startswith("https://"):
+                self.account_info["picture_url"] = picture_uri
         tenant_id = metadata.get("tenant_id")
         user_id = metadata.get("user_id")
         home_account_id = metadata.get("home_account_id")
@@ -141,16 +146,23 @@ class TeamsService:
         page_size: int = 50,
         page_token: str | None = None,
         refresh: bool = False,
+        include_avatar_uris: bool = False,
     ) -> dict[str, Any]:
         """List the activity-ordered live chat catalog in bounded pages."""
         self._validate_int("page_size", page_size, 1, MAX_LIST_PAGE_SIZE)
+        if not isinstance(include_avatar_uris, bool):
+            raise ValueError("include_avatar_uris must be a boolean.")
         self._ensure_session()
         chats = self._get_chats(refresh=refresh)
         offset = self._decode_offset(page_token)
         page = chats[offset : offset + page_size]
         next_offset = offset + len(page)
+        items = [self._chat_record(chat) for chat in page]
+        if include_avatar_uris:
+            for item, chat in zip(items, page):
+                item["avatar_url"] = chat.avatar_url
         return {
-            "items": [self._chat_record(chat) for chat in page],
+            "items": items,
             "next_page_token": f"offset:{next_offset}" if next_offset < len(chats) else None,
             "database_notice": self.database_notice,
             "coverage": {

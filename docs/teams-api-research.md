@@ -1286,6 +1286,22 @@ shortenSingleWord
 size
 ```
 
+Teams Web bundle inspection and the signed-in UI show this profile image URI pattern:
+
+- `GET {middleTier}/beta/users/{currentUserId}/profilepicturev2/{targetMri}`
+  - `currentUserId` is the signed-in user's object identifier.
+  - `targetMri` is the target user's MRI, such as `8:orgid:{objectId}`.
+  - `displayname` is a query parameter used as a fallback identity label.
+  - `size` is a query parameter; `HR64x64` was observed on the current user's Teams Web avatar.
+  - The URI can be assigned to an image element directly; the browser loads it for display. The application does not create or persist a separate image file.
+- Teams Web bundle queries also include chat avatar fields such as `chat { id, avatarUrl }` and chat picture metadata.
+  - The presence of these fields in the client bundle does not establish that every conversation response contains a usable image URI.
+  - The connector accepts absolute HTTPS image URIs when a chat response supplies one. The local UI falls back to local SVG icons when an image is missing, fails, or takes too long to load.
+- The inspected client bundles include GraphQL presence data and operations.
+  - The application does not currently request presence; a stable read-only contract has not been established.
+
+These are reverse-engineered client patterns, not a supported public API contract. Availability and access behavior may vary by tenant, account, and Teams client version.
+
 ---
 
 ## People/search/profile helpers

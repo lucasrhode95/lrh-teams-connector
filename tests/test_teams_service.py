@@ -30,7 +30,13 @@ class ServiceConnector(TeamsConnector):
         super().__init__()
         latest = datetime(2026, 9, 28, 10, 0, 3, tzinfo=timezone.utc)
         self.chats = [
-            ChatSummary("19:alpha@thread.v2", "Alpha", last_message_at=latest, chat_type="group"),
+            ChatSummary(
+                "19:alpha@thread.v2",
+                "Alpha",
+                last_message_at=latest,
+                chat_type="group",
+                avatar_url="https://images.example.test/alpha.png",
+            ),
             ChatSummary("19:beta@thread.v2", "Beta", last_message_at=latest, chat_type="oneOnOne"),
         ]
         self.pages = {}
@@ -85,6 +91,33 @@ class TeamsServiceTests(unittest.TestCase):
         self.assertIsNone(second["next_page_token"])
         self.assertTrue(first["coverage"]["catalog_complete"])
         self.assertEqual(self.service.index.counts()["catalog_chats"], 2)
+
+    def test_avatar_uris_are_opt_in_for_local_ui_and_omitted_by_default(self):
+        default_result = self.service.list_chats(page_size=1)
+        ui_result = self.service.list_chats(page_size=1, include_avatar_uris=True)
+
+        self.assertNotIn("avatar_url", default_result["items"][0])
+        self.assertEqual(
+            ui_result["items"][0]["avatar_url"],
+            "https://images.example.test/alpha.png",
+        )
+
+    def test_missing_account_picture_uri_does_not_block_account_setup(self):
+        service = TeamsService(connector=self.connector)
+        service._index_path = Path(self.temp.name) / "account-archive.sqlite3"
+
+        service._select_index_for_account(
+            {
+                "username": "taylor@example.test",
+                "name": "Taylor Example",
+                "tenant_id": "tenant-guid",
+                "user_id": "user-guid",
+            }
+        )
+
+        self.assertEqual(service.account_info["name"], "Taylor Example")
+        self.assertNotIn("picture_url", service.account_info)
+        self.assertTrue(service.index.owner_fingerprint)
 
     def test_get_messages_uses_cursor_and_deduplicates_overlapping_pages(self):
         self.connector.pages["19:alpha@thread.v2"] = [
