@@ -1,6 +1,6 @@
 # Teams MCP server
 
-This repository provides a client-independent MCP server over standard input/output (`stdio`). MCP clients launch the process when they connect, so no always-on HTTP listener is needed. The same `TeamsService` and SQLite index can also be used by a future local interface. Read tools do not change Teams state; the `send_message` tool is the only write operation.
+This repository provides a client-independent MCP server over standard input/output (`stdio`). MCP clients launch the process when they connect, so no always-on HTTP listener is needed. The MCP server and the existing local export page share `TeamsService` and `TeamsConnector`; formatting and retrieval behavior therefore stay in application code instead of being duplicated in either interface. Read tools do not change Teams state; the `send_message` tool is the only write operation. See the [project architecture guide](project-architecture.md) for the module map and local export workflow.
 
 ## Install and sign in
 
