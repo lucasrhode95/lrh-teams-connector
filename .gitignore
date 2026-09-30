@@ -4,6 +4,13 @@
 *.token-cache
 tokens.json
 
+# Locally indexed Teams message archive (database and SQLite sidecars)
+.teams_search_index*
+*.sqlite3
+*.sqlite3-*
+*.db-wal
+*.db-shm
+
 # Environment / secrets
 .env
 .env.*

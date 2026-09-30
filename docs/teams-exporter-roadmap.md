@@ -18,6 +18,8 @@ The project uses app-owned Microsoft authentication and read-only Teams requests
 | Message formatter for rich text, semantic @mentions, deleted/system markers, attachment and image markers | Implemented |
 | Plain-text export for one or multiple chats | Implemented |
 | Fixture-based tests for connector, filtering, formatting, and export | Implemented |
+| Client-independent MCP access over stdio | Implemented; see Phase 2 status |
+| Persistent local SQLite/FTS5 message index | Implemented; bounded and resumable, but no scheduled refresh is configured |
 | Local web UI for sign-in, chat selection, filters, and downloads | Not implemented |
 | CSA delta synchronization for partial/incremental catalogs | Not implemented |
 
@@ -84,18 +86,44 @@ Acceptance:
 - A user can export a selected chat with count-only, date-only, and combined filters.
 - The UI displays an explicit authentication-needed state and can refresh after device-code sign-in.
 
-## Phase 2 — expose chat search and extraction to Codex
+## Phase 2 — MCP client access and local message archive
 
-Expose a local Python MCP server over `stdio` that Codex can start from its MCP configuration. This interface can call the existing backend directly; it does not require a continuously running HTTP listener. The separate local web UI may use HTTP. Reuse the app-owned sign-in and connector without a separate Microsoft app registration.
+Expose a standard, client-independent Python MCP server over `stdio`. MCP clients start it on demand; it does not need a continuously running HTTP listener. Keep chat listing, search, formatting, indexing, and retrieval in shared application services so a future local UI can reuse them. Reuse the app-owned sign-in and connector without a separate Microsoft app registration.
 
-**Status:** Not implemented. The connector already supports chat listing and message retrieval; the MCP server, participant search, and message-content search remain to be built.
+**Status:** Implemented for read-only MCP access. The six tools are `list_chats`, `search_chats`, `search_messages`, `get_messages`, `sync_search_index`, and `get_search_index_status`. Their MCP input and output schemas are typed. Message and participant searches use a persistent SQLite database with FTS5 and per-chat coverage state. `sync_search_index` fetches bounded batches, stores opaque history continuations in SQLite, and rotates through the chat catalog so repeated calls can reach older chats as well as recent ones. Completed histories refresh their newest page while retaining older indexed messages.
 
-MCP requirements:
+### Search backend findings
 
-- Advertise typed, read-only tools with clear descriptions and bounded, paginated results so large chats do not flood the model context.
-- Reuse the app-owned MSAL cache. Report a missing or expired sign-in clearly; do not print device-code instructions or other text to the MCP protocol's standard output.
-- Return source chat IDs, message IDs, authors, timestamps, and coverage limits with search and retrieval results.
-- Document the local Codex MCP configuration. An optional skill may describe multi-tool research workflows after the tools work.
+- Teams Web's signed-in search UI returned message and chat results for a keyword across multiple conversations during a read-only live check.
+- The downloaded Teams Web bundles define `search/api/v2/query` and `searchservice/api/v2/query`, plus `/search/api/v1/suggestions`. Those route strings establish that the Web client has search services, but the exact request body, response schema, paging behavior, token audience, and history coverage have not been verified for direct calls.
+- The implementation therefore does not claim or use server-side content search. `search_messages` searches only messages already in the local FTS5 index and reports whether the requested scope is fully indexed.
+- No verified server-side chat-by-participant search contract is used. `search_chats` searches locally indexed participant rosters. The Chat Service member route returned nine member records for a live group chat; its names were blank. The existing Middle Tier profile lookup resolved all nine identifiers in that sample. The index reports unresolved names and treats those rosters as incomplete for name search.
+- These are private, undocumented Microsoft service contracts and can change. More route evidence and live test detail belongs in [Teams API research](teams-api-research.md).
+
+### MCP tools and archive behavior
+
+- `list_chats`: list the live catalog in bounded pages.
+- `search_chats`: search indexed participant names; return local-index coverage and a continuation cursor.
+- `search_messages`: search local FTS5 content by exact token phrase or all query terms, with optional conversation and timestamp filters.
+- `get_messages`: retrieve bounded pages from the live service with optional inclusive time bounds. Message bodies have a per-item character cap and explicit truncation metadata.
+- `sync_search_index`: copy bounded message pages and participant rosters into local SQLite; repeat calls continue a history backfill and rotate fairly across chats.
+- `get_search_index_status`: page through per-chat message and participant coverage, freshness, and timestamp limits.
+
+The index is stored in the signed-in user's local application data directory by default; `TEAMS_SEARCH_INDEX_PATH` can override it. The application does not store tokens, cookies, or request authorization headers in the index. The database contains message text and participant names and is not encrypted by the application. Protect the device and its local account with the organization's approved disk-encryption and access-control settings. SQLite files and sidecars are ignored by Git.
+
+This archive can preserve messages already fetched if Teams later stops returning them. It cannot recover history that Teams no longer exposes before the first successful backfill. The `message_history_complete` flag means the service returned no older continuation link; it is not proof that Microsoft exposed every message ever sent.
+
+For a 1+ year retention goal, the persistent archive provides the storage and deduplication layer. Repeated sync calls rotate through all chats and continue each chat's saved history cursor, so bounded runs can gradually backfill the catalog. A complete initial backfill must happen while Teams still exposes older history, followed by recurring syncs to capture new messages. MCP stdio runs only when a client starts it; this repository does not yet configure a scheduler or standalone scheduled-sync command. The SQLite file has no automatic age-based deletion and is not application-encrypted. Retention duration, deletion, backup, device protection, and company policy still need an explicit operational policy.
+
+MCP and archive requirements:
+
+- Keep all MCP tools read-only. Listing, searching, syncing, and retrieving must not mark chats/messages read or change Teams state.
+- Reuse the app-owned MSAL cache. MCP startup and calls use silent authentication only and return an actionable authentication-needed error; they never wait for device-code login or print protocol diagnostics to stdout.
+- Return stable chat/message IDs, authors, timestamps, useful excerpts, and explicit index or retrieval coverage.
+- Bound tool inputs/results and support continuation for long chat lists, histories, and search results.
+- Never present local partial-index results as a complete mailbox-wide search. Coverage is false for unindexed chats, unfinished histories, stale latest ranges, or messages with timestamps that cannot be checked for a requested date range.
+- Keep sanitized fixtures only. Tests cover pagination, continuation, overlapping-page deduplication, date bounds, FTS search, participant-name coverage, missing authentication, and MCP schemas.
+- Document installation and generic stdio configuration, with Codex and at least one other client example. No agent skill is required for the server to work.
 
 ### Primary AI workflows
 
@@ -114,20 +142,20 @@ Required read capabilities:
 - `get_messages`: retrieve an entire conversation when no time bounds are provided, or a timestamp-bounded section when `since` and/or `until` are provided.
 - Support the workflow of taking a search result and retrieving its full conversation or surrounding section by timestamp.
 
-Search may use a Teams search service if its current behavior and coverage are verified, or a local index if needed. The chosen backend must make coverage and limits clear; search results must not imply that unindexed history was searched.
+Message and participant search use the local index until a Teams search service's behavior and coverage are verified. Search results must not imply that unindexed history was searched.
 
-A persistent local message archive is also a future requirement for preserving messages already retrieved if Teams later stops returning them due to retention. It should deduplicate by conversation/message identity, preserve timestamps and available message IDs/edit/deletion metadata, merge later retrievals, and support repeat queries without calling Teams for already stored ranges. The exact storage technology is undecided. Define encryption, retention, deletion controls, and applicable company-policy constraints before enabling persistence.
+A persistent local archive is now implemented for messages and available participant names. It deduplicates by conversation/message identity, preserves timestamps and message type, merges refreshes, and supports repeat searches without calling Teams. Remaining requirements for production retention are recurring scheduling, an explicit retention/deletion policy, and alignment with company policy. App-level database encryption is not implemented.
 
 Read tools must not mark chats or messages as read or modify any Teams state. Message sending is a separate optional write capability under N4 and is not part of the Phase 2 read interface by default.
 
 Acceptance:
 
-- Codex can list chats, search message contents, find chats from participant names, and retrieve whole or timestamp-bounded message history through documented tools.
+- Any standard MCP client can list chats, search indexed message contents, find chats from indexed participant names, retrieve live whole or timestamp-bounded message history, and inspect/sync the local archive.
 - Search results can be followed by a retrieval call using their conversation ID and timestamps.
-- A scheduled daily run can produce an attention summary with source references; an ad-hoc topic request can search across chats and prioritize a named conversation, with findings traceable to messages.
+- A scheduled daily run can produce an attention summary with source references; an ad-hoc topic request can search across indexed chats and prioritize a named conversation, with findings traceable to messages. The scheduler itself remains to be configured.
 - Calls preserve authentication boundaries and expose no tokens, cookies, or authorization headers.
 
-## Nice-to-haves — after the local exporter and Codex access work
+## Nice-to-haves — after the local exporter and MCP client access work
 
 These are lower priority than the Phase 1 and Phase 2 requirements. The conversation viewer is the lowest-priority item.
 
