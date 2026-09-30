@@ -119,13 +119,19 @@ This order puts shared retrieval/storage foundations before optional attachment 
 
 ## P2.3 Complete content through bounded MCP responses
 
-**Status: Bounded tools implemented; whole-message access needs clarification.**
+**Status: Bounded tools implemented; separate inline and resource-export interfaces agreed, implementation pending.**
 
 - Known: get_messages documents a 1,200-character body cap with explicit truncation metadata. Older-message cursors do not by themselves provide the missing remainder of a long individual message. No full-body continuation is documented.
-- Unknown: the required path for retrieving complete long bodies and quoted context; cursor lifetime/restart behavior for interactive retrieval; source references clients can reliably follow.
+- Agreed interfaces (MCP tools/resource operations over stdio; no HTTP server required):
+  - get_messages: bounded inline message pages for conversational use, with explicit continuation and a way to retrieve the remainder of oversized individual messages.
+  - export_chat: a separate tool that prepares a complete export snapshot for the requested conversation and filters, then returns an MCP resource_link plus export ID, MIME type, byte size, message count, UTC bounds and coverage. Use an account-bound URI such as teams-export://exports/<id>; do not embed the complete export in the tool response.
+  - resources/read: standard MCP access to the completed export resource. A resource link is not a guarantee that every client can download a file or keep its contents outside model context.
+  - read_export: bounded sections of the same immutable snapshot, with continuation and exact next-call arguments, for large exports and clients needing tool-based access. Sections must allow reconstruction without missing text or splitting Unicode incorrectly.
+- Shared behavior: both retrieval paths use P2.1's fetch/upsert/query engine and shared formatting. The UI can download the same generated export artifact. Resource delivery does not eliminate Teams pagination, resumable preparation, client context limits or the need for bounded reading.
+- Remaining decisions: snapshot storage/lifetime, restart-safe export IDs/cursors, long-message section boundaries and supported client resource behavior. Distinguish disposable generated exports from indefinitely retained SQLite messages; artifact cleanup must not delete archived history.
 - Target continuation contract: every bounded result states whether more work/results remain and supplies an opaque continuation plus the exact next tool name and arguments. Tool descriptions instruct the agent to repeat those calls until complete, or until the user's requested limit is met. Bind continuation to the original account, filters and ordering; distinguish retrieval-in-progress from a complete search with zero matches. Avoid returning the same page or repeating the entire remote fetch on every continuation.
 - Long-running work must advance through bounded resumable calls rather than depend on one indefinitely open MCP exchange. The server provides continuation; the client/agent drives additional calls. It cannot force a client to continue, so unfinished coverage must remain explicit. Automated pagination does not remove the separate need to retrieve the remainder of an oversized individual message.
-- Proposed path: check existing tool contracts against a long sanitized message and a conversation spanning many pages. Specify either body-offset retrieval, a bounded message-detail tool, or a complete export resource accessible to the client. Distinguish interactive result cursors from persisted archive-sync progress.
+- Proposed path: check both interfaces against a long sanitized message and a conversation spanning many pages. Verify resource discovery/read and bounded snapshot reconstruction with a generic MCP client. Distinguish interactive result cursors, snapshot section cursors and persisted remote-fetch progress. Standard resource-list pagination must not be mistaken for pagination within a resource's content.
 - Completion evidence: a client can reconstruct a full message and conversation without silent clipping or flooding context; expired/mismatched cursors fail clearly; IDs, author identity and UTC timestamps preserve source traceability.
 - Possible user help: only if a particular MCP client cannot consume the chosen resource/file mechanism.
 
