@@ -1830,6 +1830,10 @@ or when a deletion timestamp exists under:
 properties.deletetime
 ```
 
+These shapes are reverse-engineered observations, not a complete Microsoft contract. The local archive treats an explicit `MessageDelete` record or deletion timestamp as a tombstone: it keeps the stable message row and any previously retained body, reports the message as deleted, and excludes its old body from ordinary message search. A message missing from a later response is not treated as deleted because missing data can also mean retention expiry, incomplete paging, or lack of access.
+
+`properties.edittime` is retained as a revision timestamp. The archive uses it to avoid letting an older or unversioned copy replace known edited text. This ordering rule is covered by sanitized fixtures, but this investigation did not compare a known live edited/deleted message against Teams Web. The exact association between edit/delete activity, message IDs, and timestamps therefore remains tenant/build dependent and should be validated before treating it as authoritative.
+
 ### Mentions
 
 `properties.mentions` may be serialized JSON containing entries such as:
@@ -1938,6 +1942,39 @@ A read-only Regional Chat Service request for a conversation’s message history
 
 The message endpoint uses a conversation ID in its path, so retrieving history does not require a conversation-list URL to be present. Returned messages and pages may contain timestamps, sequence IDs, message types, HTML content, and pagination metadata as described above.
 
+## Self chat and sender identity — 2026-09-30
+
+Read-only inspection of the signed-in Teams Web session showed a self-chat row
+labelled with the current user's name and “(You)”. Its selected conversation
+header identified the thread as 48:notes; the participant list contained only
+the signed-in user. No message was sent or edited.
+
+Using the app-owned Teams session:
+
+- The complete CSA startup result contained 943 rows and did not include
+  48:notes.
+- The paginated Chat Service catalog contained 960 rows and did include
+  48:notes.
+- A direct read of message history for 48:notes succeeded even though it was
+  absent from CSA.
+- In the returned message shape, from was a composite string rather than a
+  bare ID. It contained 8:orgid followed by the account object ID, which
+  matched the signed-in account's MSAL object ID. This provides a stable
+  identity check that does not rely on display-name equality.
+- The standard Chat Service conversation-members request returned an error for
+  48:notes in this session. Its status and response body were not retained, so
+  the exact failure reason is unknown.
+
+The connector synthesizes a normalized self-chat row when CSA omits it and
+extracts the sender's canonical MRI from the composite from field. These are
+private Teams API observations from one account and build, not a Microsoft
+contract. Public third-party code also uses 48:notes for Teams self-chat, but
+that is corroboration rather than a guarantee that the private identifier will
+remain stable.
+An example of third-party corroboration is the
+[msgvault Teams package](https://pkg.go.dev/go.kenn.io/msgvault%40v0.20.0/internal/teams),
+which names that self-chat ID; it is not an official Microsoft API reference.
+
 ## Server-side filtering and pagination probe
 
 Read-only live requests on 2026-09-29 tested the private Chat Service routes
@@ -1955,11 +1992,21 @@ that the browser's requests were intercepted.
   or activity-date filter was identified in the tested request shape.
 - The CSA startup response returned 943 chats and reported `isPartialData=false`
   and `hasMoreChats=false`; every CSA ID was present in the raw Chat Service
-  list. The raw list had 17 additional entries, consisting of notification,
-  mention, call-log, notes, annotation, generic, space, and topic stream types.
-  These raw-only rows should not be merged into the ordinary complete CSA list
-  without an explicit product decision. The connector uses the raw list only as
-  a fallback when CSA explicitly reports partial data.
+  list. The raw list had 17 additional rows: one notes-to-self conversation
+  (`StreamOfNotes`), four `TeamsTeam`, six `TeamsStandardChannel`, one
+  `TeamsSharedChannel`, and one each of `StreamOfNotifications`,
+  `StreamOfMentions`, `StreamOfCallLogs`, `StreamOfAnnotations`, and
+  `StreamOfGeneric`. Thus, in this snapshot, the only raw-only chat-scope row
+  was notes-to-self; the other 16 rows were team/channel entities or service
+  streams. Product type labels were read from `threadProperties`.
+- The connector's catalog scope treats CSA chat/meeting rows as canonical,
+  supplements the known `48:notes` row, and uses the paginated raw feed as a
+  type-filtered fallback if CSA reports partial data or omits a completeness
+  flag. The fallback accepts chat, one-to-one chat, meeting, and the known
+  self-chat ID; it excludes identified team/channel and service-stream types.
+  An unrecognized raw-only type is excluded and reported as incomplete coverage.
+  This is application behavior based on the observed payloads, not a Microsoft
+  contract.
 - A first-page request with `pageSize=3` returned three messages. A 100-message
   page was also observed. This verifies those samples only, not a universal
   page-size limit.
@@ -1973,6 +2020,29 @@ that the browser's requests were intercepted.
 - The legacy Chat Service route ignored `since=` and `$filter` parameters in
   tests. Its `endTime` behavior did not reliably include ordinary messages at
   the tested upper-bound edge, so no server-side `until` filter is enabled.
+
+An additional focused history probe on 2026-09-30 used the user's selected
+Fiona direct conversation with the existing app-owned session. The exact
+display name resolved to one catalog entry; its two-member roster did not expose
+the supplied email address, so the conversation identity was matched by that
+unique display name rather than independently by email. No chat ID or message
+content was retained in this note.
+
+- An initial `pageSize=10` request returned ten messages and an opaque
+  `backwardLink`. Following that exact link returned ten more messages, even
+  when the caller passed `page_size=3` to the local page-reading method. The
+  continuation URL itself retained `pageSize=10`; continuation links therefore
+  control their own page-size behavior and must remain opaque.
+- The two sampled pages had no overlapping message IDs. Each page was sorted
+  oldest to newest by the client, and every timestamp on the continuation page
+  was no newer than the first page. This is evidence for that conversation and
+  sample only; it does not supersede the overlap observed in other history
+  probes or establish ordering for system-event types generally.
+- A request whose `startTime` exactly matched the first page's oldest message
+  included that message. An exact `until` boundary was also included by the
+  client-side filter, while messages newer than it were excluded from the
+  returned page. The outgoing message request contained no `endTime` parameter.
+- No transient retry was needed during this sample.
 
 Teams Web bundles collected on 2026-09-28 contain GraphQL operations for
 `messages(convId, replyChainId, cursor)` with `pageInfo.hasNextPage` and
@@ -2005,6 +2075,17 @@ The following details remain unverified or may vary by tenant/build:
 - whether `lastCompleteSegmentStartTime` and `lastCompleteSegmentEndTime` can safely terminate date-bounded history retrieval;
 - exact page-size limits and whether all continuation links retain the original requested page size;
 - which CSA headers beyond the resource bearer token and Skype token are mandatory across tenants.
+
+For the catalog implementation, `catalog_complete` is intentionally scoped:
+it means CSA reported complete, or that a paginated fallback finished without
+an unclassified raw-only row. It does not prove that every hidden, archived,
+or tenant-specific conversation is exposed by either service. When CSA marks
+its catalog complete, the connector does not make an extra raw-feed request on
+every listing; it includes the separately observed notes-to-self ID directly.
+When CSA is partial or its flags are absent, the full `backwardLink` chain is
+followed. Untitled fallback one-to-one chats can be named through a read-only
+thread-members lookup when the roster provides one resolvable peer; this lookup
+is bounded, and the catalog coverage reports unresolved fallback names.
 
 # Source notes
 

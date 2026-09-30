@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import logging
+import json
 import sys
 from datetime import datetime
 from typing import Literal, TypedDict
 
 from mcp.server.fastmcp import FastMCP
-from mcp.types import ToolAnnotations
+from mcp.types import CallToolResult, ResourceLink, TextContent, ToolAnnotations
 
 from teams_exporter.teams_service import TeamsService
 
@@ -21,9 +22,17 @@ SERVER_INSTRUCTIONS = (
     "explicitly authorize the destination and sending scope. Do not treat one test-message "
     "authorization as ongoing or blanket consent. Do not send automatically during search, "
     "summarization, or export. "
-    "Message and participant searches query a persistent local SQLite index. "
-    "Use sync_search_index to fetch bounded history batches and get_search_index_status "
-    "to inspect indexed coverage. Search results explicitly report incomplete coverage. "
+    "Message searches first fetch and archive the requested chat/date scope, then use "
+    "local SQLite literal matching; no unverified Teams search endpoint is used. "
+    "Follow the returned cursor while preparation is incomplete, and read the per-chat "
+    "coverage before treating results as complete. Participant search uses indexed rosters. "
+    "list_chats includes the signed-in user's self chat and marks it with is_self_chat. "
+    "Its coverage describes catalog scope, source, exclusions, and unresolved fallback names. "
+    "get_messages returns author_id and is_self when sender identity is available; "
+    "use is_self rather than matching display names to identify the user's own messages. "
+    "Long message bodies can be continued with get_message_content. Long conversation "
+    "exports are resumable with export_chat and available as a bounded MCP Resource plus "
+    "read_export tool. "
     "Search cursors expire after 30 minutes and are lost when this server process restarts."
 )
 
@@ -44,6 +53,7 @@ class ChatRecord(TypedDict):
     id: str
     name: str
     chat_type: str | None
+    is_self_chat: bool
     last_message_at: str | None
     last_message_preview: str | None
     unread: bool | None
@@ -51,6 +61,15 @@ class ChatRecord(TypedDict):
 
 class CatalogCoverage(TypedDict):
     catalog_complete: bool
+    catalog_source: str
+    catalog_scope: str
+    csa_reported_partial: bool | None
+    chat_service_unique_rows: int | None
+    fallback_chats_added: int
+    non_chat_service_rows_excluded: int
+    unclassified_service_rows_excluded: int
+    fallback_name_lookups_attempted: int
+    fallback_chats_without_resolved_name: int
     total_chats: int
     returned_this_page: int
 
@@ -96,24 +115,39 @@ class SearchChatsResult(TypedDict):
 class ConversationRecord(TypedDict):
     id: str
     name: str
+    is_self_chat: bool
 
 
 class MessageRecord(TypedDict):
     id: str | None
     conversation_id: str
     author: str
+    author_id: str | None
+    is_self: bool | None
     timestamp: str | None
     content: str
     content_truncated: bool
     content_char_count: int
+    content_next_offset: int | None
     message_type: str | None
+    is_deleted: bool
+    edited_at: str | None
+    deleted_at: str | None
 
 
 class MessagePageCoverage(TypedDict):
     complete: bool
     page_size: int
+    requested_page_size: int
     raw_items_scanned_total: int
     missing_timestamp_items_excluded_total: int
+    retry_count_this_call: int
+    max_response_chars: int
+    remote_pages_fetched_total: int
+    remote_history_complete: bool
+    archive_messages_in_page: int
+    messages_with_truncated_content: int
+    content_continuation_tool: str | None
     since: str | None
     until: str | None
     ordering: str
@@ -126,6 +160,47 @@ class GetMessagesResult(TypedDict):
     next_cursor: str | None
     database_notice: str | None
     coverage: MessagePageCoverage
+
+
+class MessageContentResult(TypedDict):
+    conversation_id: str
+    message_id: str
+    offset: int
+    content: str
+    content_char_count: int
+    next_offset: int | None
+    complete: bool
+    is_deleted: bool
+    edited_at: str | None
+    deleted_at: str | None
+
+
+class SearchChatCoverage(TypedDict):
+    conversation_id: str
+    since: str | None
+    until: str | None
+    remote_pages_fetched: int
+    remote_items_scanned: int
+    missing_timestamp_items: int
+    remote_complete: bool
+    last_refreshed_at: str | None
+
+
+class MessageSearchCoverage(TypedDict):
+    method: str
+    server_side_search_used: bool
+    complete_for_requested_scope: bool
+    preparation_complete: bool
+    index_generation: int | None
+    requested_since: str | None
+    requested_until: str | None
+    requested_chat_ids: list[str]
+    chat_coverage: list[SearchChatCoverage]
+    pages_fetched_this_call: int
+    max_pages_to_fetch: int
+    failed_chat_id: str | None
+    error: str | None
+    continuation_tool: str | None
 
 
 class SendMessageResult(TypedDict):
@@ -143,32 +218,56 @@ class SearchMessageRecord(TypedDict):
     conversation_id: str
     chat_name: str
     author: str
+    author_id: str | None
+    is_self: bool | None
     timestamp: str | None
     excerpt: str
     message_type: str | None
 
 
-class MessageSearchCoverage(TypedDict):
-    method: str
-    server_side_search_used: bool
-    complete_for_requested_scope: bool
-    catalog_chats: int
-    covered_chats: int
-    uncovered_chats: int
-    requested_since: str | None
-    requested_until: str | None
-    conversation_id: str | None
-    indexed_messages: int
-    index_generation: int
-    chat_coverage_tool: str
-
-
 class SearchMessagesResult(TypedDict):
     items: list[SearchMessageRecord]
-    total_matches_in_index: int
+    max_matches: int
+    returned_count: int
+    returned_total: int
+    results_truncated: bool
+    truncation_reason: str | None
     next_cursor: str | None
     database_notice: str | None
     coverage: MessageSearchCoverage
+
+
+class ExportCoverage(TypedDict):
+    complete: bool
+    remote_pages_fetched_total: int
+    remote_items_scanned_total: int
+    missing_timestamp_items_excluded_total: int
+    retry_count_this_call: int
+    archive_included: bool
+
+
+class ExportChatResult(TypedDict):
+    export_id: str
+    status: Literal["preparing", "complete"]
+    resource_uri: str | None
+    mime_type: str | None
+    byte_size: int | None
+    message_count: int | None
+    conversation_id: str
+    since: str | None
+    until: str | None
+    coverage: ExportCoverage
+    next_call_tool: str | None
+    next_call_arguments: dict[str, object] | None
+
+
+class ReadExportResult(TypedDict):
+    export_id: str
+    offset_bytes: int
+    content: str
+    byte_size: int
+    next_offset_bytes: int | None
+    complete: bool
 
 
 class IndexCounts(TypedDict):
@@ -194,6 +293,7 @@ class SyncedChatRecord(TypedDict):
     chat_name: str
     messages_added_this_call: int
     message_pages_fetched: int
+    message_retries_this_call: int
     message_history_complete: bool
     messages_stored_total: int
     oldest_indexed_message_at: str | None
@@ -284,6 +384,28 @@ def create_mcp_server(service: TeamsService | None = None) -> FastMCP:
         instructions=SERVER_INSTRUCTIONS,
     )
 
+    @server.resource(
+        "teams-export://exports/{export_id}/parts/{offset_bytes}",
+        name="teams_export_part",
+        description=(
+            "A bounded UTF-8-safe section of a completed Teams text export. "
+            "The JSON body includes content, next_offset_bytes, and complete."
+        ),
+        mime_type="application/json",
+    )
+    def teams_export_part(export_id: str, offset_bytes: int) -> str:
+        part = teams.read_export(export_id, offset_bytes=offset_bytes)
+        next_uri = (
+            None
+            if part["next_offset_bytes"] is None
+            else f"teams-export://exports/{export_id}/parts/{part['next_offset_bytes']}"
+        )
+        return json.dumps(
+            {**part, "next_resource_uri": next_uri},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
     @server.tool(annotations=READ_ONLY)
     def list_chats(
         page_size: int = 50,
@@ -291,6 +413,10 @@ def create_mcp_server(service: TeamsService | None = None) -> FastMCP:
         refresh: bool = False,
     ) -> ListChatsResult:
         """List Teams chats by most recent activity, using bounded pages.
+
+        The signed-in user's self chat is included and marked with is_self_chat.
+        Coverage describes the source catalog and excluded or unclassified
+        Chat Service rows. catalog_complete is limited to catalog_scope.
 
         Args:
             page_size: Number of chats to return (1–100).
@@ -333,19 +459,25 @@ def create_mcp_server(service: TeamsService | None = None) -> FastMCP:
         since: str | None = None,
         until: str | None = None,
         cursor: str | None = None,
+        max_response_chars: int = 30_000,
     ) -> GetMessagesResult:
-        """Read one bounded history page, optionally within an inclusive date range.
+        """Read one bounded history page from the live chat and local archive.
 
-        Results are ordered oldest to newest within each page. The continuation
-        cursor fetches older history. Date values must be ISO-8601 timestamps
-        with a timezone; pass the same bounds when continuing.
+        Results include author_id and is_self when the service exposes a stable
+        sender identity. Results are ordered oldest to newest within each page.
+        Bodies are bounded by max_response_chars; use get_message_content to read
+        a truncated body's next character range.
+        The continuation cursor fetches older history. Date values must be
+        ISO-8601 timestamps with a timezone; pass the same bounds when continuing.
+        Coverage reports remote/archive composition and transient retries.
 
         Args:
-            conversation_id: Stable Teams conversation ID from list_chats/search results.
-            page_size: Number of messages requested (1–50). Each message body is capped at 1,200 characters and has a truncation flag.
+            conversation_id: Stable Teams conversation ID from list_chats/search results. The self chat uses 48:notes.
+            page_size: Requested message count (1–50); the response-size budget may lower the effective count.
             since: Inclusive lower timestamp, or null for the oldest available history.
             until: Inclusive upper timestamp, or null for no upper bound.
             cursor: Continuation returned by the previous page.
+            max_response_chars: Maximum serialized response characters (4,096–100,000).
         """
         return teams.get_messages(
             conversation_id,
@@ -353,42 +485,158 @@ def create_mcp_server(service: TeamsService | None = None) -> FastMCP:
             since=_parse_datetime(since, "since"),
             until=_parse_datetime(until, "until"),
             cursor=cursor,
+            max_response_chars=max_response_chars,
+        )
+
+    @server.tool(annotations=READ_ONLY)
+    def get_message_content(
+        conversation_id: str,
+        message_id: str,
+        offset: int = 0,
+        max_chars: int = 50_000,
+    ) -> MessageContentResult:
+        """Read a bounded character range from a message already in the archive.
+
+        Use the content_next_offset returned by get_messages and repeat this tool
+        until next_offset is null. Message IDs and conversation IDs are stable.
+
+        Args:
+            conversation_id: Stable conversation ID returned by list_chats.
+            message_id: Stable message ID from get_messages.
+            offset: Character offset to continue from, returned by the preceding call.
+            max_chars: Maximum characters to return (1–50,000).
+        """
+        return teams.get_message_content(
+            conversation_id,
+            message_id,
+            offset=offset,
+            max_chars=max_chars,
         )
 
     @server.tool(annotations=READ_ONLY)
     def search_messages(
         query: str,
-        match_mode: Literal["phrase", "all_terms"] = "phrase",
-        conversation_id: str | None = None,
-        since: str | None = None,
-        until: str | None = None,
+        since: str,
+        until: str,
+        match_mode: Literal["exact", "substring", "all_terms"] = "substring",
+        conversation_ids: list[str] | None = None,
+        all_catalog: bool = False,
         result_limit: int = 20,
+        max_matches: int = 1_000,
+        max_pages_to_fetch: int = 10,
         cursor: str | None = None,
     ) -> SearchMessagesResult:
-        """Search message contents in the local SQLite FTS5 archive.
+        """Fetch and archive an explicit date/chat scope, then search its messages.
 
-        No verified Teams server-side content-search route is used. Results are
-        limited to locally indexed messages. The coverage object says whether the
-        requested scope is complete; use get_search_index_status with the same
-        date and conversation filters to inspect per-chat coverage.
+        Teams content search is not used because no server-side route is verified.
+        Search must be scoped to one or more conversation IDs, or all_catalog=true,
+        and an inclusive date range. If preparation is incomplete, this call returns
+        no matches; repeat with the returned cursor until preparation_complete is
+        true. Coverage identifies every chat, date range, page count, and any error.
+        Matching is local exact, substring, or all-terms matching after Unicode
+        NFKC normalization and case folding; accents remain significant.
 
         Args:
             query: Text to find in formatted message bodies.
-            match_mode: 'phrase' for the exact token phrase or 'all_terms' for every query word.
-            conversation_id: Restrict the scan to one known conversation, if desired.
-            since: Inclusive lower timestamp, or null for all available history.
-            until: Inclusive upper timestamp, or null for no upper bound.
-            result_limit: Maximum matches to return in this call (1–50).
+            since: Required inclusive lower timestamp, with timezone.
+            until: Required inclusive upper timestamp, with timezone.
+            match_mode: 'exact', 'substring', or 'all_terms'.
+            conversation_ids: Explicit chat scope; set this or all_catalog=true.
+            all_catalog: Search every chat in the current chat catalog.
+            result_limit: Maximum matching messages returned in this call (1–50).
+            max_matches: Maximum total results across calls; any positive integer.
+            max_pages_to_fetch: Maximum remote pages to fetch in this call (1–100).
             cursor: Continue paging through matches for the same query and scope.
         """
         return teams.search_messages(
             query,
             match_mode=match_mode,
-            conversation_id=conversation_id,
+            conversation_ids=conversation_ids,
+            all_catalog=all_catalog,
             since=_parse_datetime(since, "since"),
             until=_parse_datetime(until, "until"),
             result_limit=result_limit,
+            max_matches=max_matches,
+            max_pages_to_fetch=max_pages_to_fetch,
             cursor=cursor,
+        )
+
+    @server.tool(annotations=READ_ONLY)
+    def export_chat(
+        conversation_id: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        message_limit: int | None = None,
+        export_id: str | None = None,
+        max_pages_to_fetch: int = 20,
+    ) -> ExportChatResult:
+        """Build a resumable text export and expose completed output as an MCP Resource.
+
+        Start with conversation_id. If status is preparing, repeat with export_id
+        and the returned next_call_arguments until status is complete. Then read
+        resource_uri with MCP resources/read, or use read_export for bounded inline
+        sections. Fresh remote pages are retained in the account's SQLite archive.
+
+        Args:
+            conversation_id: Stable chat ID for a new export; omit when resuming by export_id.
+            since: Optional inclusive UTC or timezone-aware ISO-8601 lower bound.
+            until: Optional inclusive UTC or timezone-aware ISO-8601 upper bound.
+            message_limit: Optional maximum number of latest messages in the merged archive.
+            export_id: ID returned by a previous incomplete export_chat call.
+            max_pages_to_fetch: Maximum remote pages per call (1–100).
+        """
+        result = teams.export_chat(
+            conversation_id,
+            since=_parse_datetime(since, "since"),
+            until=_parse_datetime(until, "until"),
+            message_limit=message_limit,
+            export_id=export_id,
+            max_pages_to_fetch=max_pages_to_fetch,
+        )
+        if result["status"] == "complete" and result["resource_uri"]:
+            content = [
+                ResourceLink(
+                    type="resource_link",
+                    name=f"Teams conversation export {result['export_id']}",
+                    title=f"{result['message_count']} messages",
+                    uri=result["resource_uri"],
+                    description="Read this bounded export resource in parts.",
+                    mimeType=result["mime_type"],
+                    size=result["byte_size"],
+                )
+            ]
+        else:
+            content = [
+                TextContent(
+                    type="text",
+                    text=(
+                        "Export preparation is incomplete. Repeat export_chat with "
+                        f"{json.dumps(result['next_call_arguments'], separators=(',', ':'))}."
+                    ),
+                )
+            ]
+        return CallToolResult(content=content, structuredContent=result)
+
+    @server.tool(annotations=READ_ONLY)
+    def read_export(
+        export_id: str,
+        offset_bytes: int = 0,
+        max_bytes: int = 50_000,
+    ) -> ReadExportResult:
+        """Read one bounded UTF-8-safe section of a completed text export.
+
+        Repeat with next_offset_bytes until complete is true. For resource-based
+        reads, use the same offset as the resource URI's final path component.
+
+        Args:
+            export_id: Completed or preparing export ID returned by export_chat.
+            offset_bytes: Byte offset returned by the preceding read.
+            max_bytes: Maximum section size in bytes (4–100,000).
+        """
+        return teams.read_export(
+            export_id,
+            offset_bytes=offset_bytes,
+            max_bytes=max_bytes,
         )
 
     @server.tool(annotations=READ_ONLY)
@@ -404,7 +652,8 @@ def create_mcp_server(service: TeamsService | None = None) -> FastMCP:
 
         Repeated calls resume older history from saved service continuation links.
         Once a chat is fully indexed, calls refresh its newest message page while
-        retaining older messages. This tool reads Teams but does not change state.
+        retaining older messages. Per-chat results report read retries in this
+        call. This tool reads Teams but does not change state.
 
         Args:
             conversation_id: Sync just this known chat, or null for recent chats.

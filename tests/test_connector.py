@@ -1,11 +1,22 @@
+import base64
 import json
+import tempfile
+import threading
+import urllib.error
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
 
-from teams_exporter.teams_connector import ChatSummary, TeamsConnector
+import msal
+
+from teams_exporter.teams_connector import (
+    AuthenticationRequiredError,
+    ChatSummary,
+    ExtractionCancelled,
+    TeamsConnector,
+)
 from teams_exporter.teams_exporter import TeamsExporter
 from teams_exporter.teams_message_formatter import TeamsHtmlParser, TeamsMessageFormatter
 
@@ -15,6 +26,57 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 def fixture(name):
     return json.loads((FIXTURES / name).read_text(encoding="utf-8-sig"))
+
+
+class FakeEncryptedPersistence:
+    """Test-only encrypted-at-rest stand-in for the OS credential provider."""
+
+    is_encrypted = True
+    _prefix = b"test-encrypted:"
+
+    def __init__(self, location):
+        self.location = Path(location)
+
+    def get_location(self):
+        return str(self.location)
+
+    def time_last_modified(self):
+        return self.location.stat().st_mtime if self.location.exists() else 0
+
+    def load(self):
+        contents = self.location.read_bytes()
+        if not contents.startswith(self._prefix):
+            raise ValueError("not a test encrypted cache")
+        return base64.b64decode(contents[len(self._prefix) :]).decode("utf-8")
+
+    def save(self, contents):
+        self.location.parent.mkdir(parents=True, exist_ok=True)
+        encrypted = self._prefix + base64.b64encode(contents.encode("utf-8"))
+        self.location.write_bytes(encrypted)
+
+
+def sanitized_msal_cache_state(username="fixture@example.test"):
+    cache = msal.SerializableTokenCache()
+    cache.deserialize(
+        json.dumps(
+            {
+                "Account": {
+                    "fixture-account": {
+                        "home_account_id": "fixture-home",
+                        "environment": "login.microsoftonline.com",
+                        "realm": "fixture-tenant",
+                        "local_account_id": "fixture-user",
+                        "username": username,
+                    }
+                },
+                "AccessToken": {},
+                "AppMetadata": {},
+                "IdToken": {},
+                "RefreshToken": {},
+            }
+        )
+    )
+    return cache.serialize()
 
 
 class StubConnector(TeamsConnector):
@@ -30,8 +92,17 @@ class StubConnector(TeamsConnector):
         self.responses = list(responses)
         self.requests = []
 
-    def _http_json(self, url, *, method="GET", body=None, headers=None):
+    def _http_json(
+        self,
+        url,
+        *,
+        method="GET",
+        body=None,
+        headers=None,
+        cancel_event=None,
+    ):
         self.requests.append((url, method, body, dict(headers or {})))
+        self.last_request_retry_count = 0
         if self.responses:
             return self.responses.pop(0)
         return {}
@@ -47,13 +118,13 @@ class TeamsConnectorTests(unittest.TestCase):
             "home_account_id": "user-guid.tenant-guid",
         }
         cache = Mock()
-        cache.find.return_value = [cached_account]
+        cache.search.return_value = [cached_account]
         with patch.object(client, "_load_token_cache", return_value=cache):
             metadata = client.get_cached_account_metadata()
 
         self.assertEqual(metadata["username"], "taylor@example.test")
         self.assertEqual(metadata["user_id"], "user-guid")
-        cache.find.assert_called_once_with("Account")
+        cache.search.assert_called_once_with("Account")
 
     def test_profile_picture_uri_uses_teams_web_route_without_fetching_an_image(self):
         client = StubConnector()
@@ -73,6 +144,41 @@ class TeamsConnectorTests(unittest.TestCase):
             {"displayname": ["Taylor Example"], "size": ["HR64x64"]},
         )
         self.assertEqual(client.requests, [])
+
+    def test_profile_picture_uses_authenticated_middle_tier_request(self):
+        client = StubConnector()
+        uri = client.get_profile_picture_uri()
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.headers = {
+            "Content-Type": "image/png; charset=binary",
+            "Content-Length": "4",
+        }
+        response.read.return_value = b"PNG!"
+        opener = Mock()
+        opener.open.return_value = response
+
+        with patch("urllib.request.build_opener", return_value=opener):
+            image, content_type = client.get_profile_picture(uri)
+
+        self.assertEqual(image, b"PNG!")
+        self.assertEqual(content_type, "image/png")
+        request = opener.open.call_args.args[0]
+        self.assertEqual(request.get_header("Authorization"), "Bearer spaces-test-token")
+        self.assertIn("image/", request.get_header("Accept"))
+
+    def test_profile_picture_fetch_rejects_urls_outside_middle_tier(self):
+        client = StubConnector()
+
+        with self.assertRaisesRegex(RuntimeError, "outside the configured Middle Tier"):
+            client.get_profile_picture("https://images.example.test/profilepicturev2/user")
+
+        self.assertFalse(
+            client.can_fetch_profile_picture(
+                "https://middle.example.test/beta/users/me/profilepicturev2/../../messages"
+            )
+        )
 
     def test_chat_rows_use_backend_avatar_urls_or_one_to_one_picture_uri(self):
         client = StubConnector([{
@@ -198,17 +304,20 @@ class TeamsConnectorTests(unittest.TestCase):
         chats = client.list_chats()
 
         self.assertEqual([chat.id for chat in chats], [
+            "48:notes",
             "19:zeta@thread.v2",
             "19:beta@thread.v2",
             "19:alpha@thread.v2",
             "19:untitled@thread.v2",
         ])
-        self.assertEqual(chats[0].display_name, "Zeta discussion")
-        self.assertTrue(chats[0].unread)
-        self.assertEqual(chats[0].chat_type, "group")
-        self.assertEqual(chats[0].last_message_preview, "Newest chat item")
-        self.assertEqual(chats[2].unread, False)
-        self.assertEqual(chats[3].display_name, "Resolved One-to-one Person")
+        self.assertTrue(chats[0].is_self_chat)
+        self.assertEqual(chats[0].display_name, "Notes to self")
+        self.assertEqual(chats[1].display_name, "Zeta discussion")
+        self.assertTrue(chats[1].unread)
+        self.assertEqual(chats[1].chat_type, "group")
+        self.assertEqual(chats[1].last_message_preview, "Newest chat item")
+        self.assertEqual(chats[3].unread, False)
+        self.assertEqual(chats[4].display_name, "Resolved One-to-one Person")
         self.assertEqual(client.requests[1][1], "POST")
         self.assertEqual(
             client.requests[1][3]["Authorization"], "Bearer spaces-test-token"
@@ -245,8 +354,27 @@ class TeamsConnectorTests(unittest.TestCase):
                     },
                     {
                         "id": "19:extra@thread.v2",
-                        "threadProperties": {"topic": "Extra chat"},
+                        "threadProperties": {
+                            "topic": "Extra chat",
+                            "productThreadType": "Chat",
+                            "threadType": "chat",
+                        },
                         "properties": {"lastimreceivedtime": 1790590000000},
+                    },
+                    {
+                        "id": "48:notifications",
+                        "threadProperties": {
+                            "productThreadType": "StreamOfNotifications",
+                            "threadType": "streamofnotifications",
+                        },
+                    },
+                    {
+                        "id": "19:channel@thread.tacv2",
+                        "threadProperties": {"productThreadType": "TeamsStandardChannel"},
+                    },
+                    {
+                        "id": "19:future@thread.v2",
+                        "threadProperties": {"productThreadType": "FutureRecord"},
                     },
                 ],
                 "_metadata": {"backwardLink": next_page},
@@ -254,7 +382,14 @@ class TeamsConnectorTests(unittest.TestCase):
             {
                 "conversations": [
                     {"id": "19:extra@thread.v2"},
-                    {"id": "19:last@thread.v2", "threadProperties": {"topic": "Last chat"}},
+                    {
+                        "id": "19:last@thread.v2",
+                        "threadProperties": {
+                            "topic": "Last meeting",
+                            "productThreadType": "Meeting",
+                            "threadType": "meeting",
+                        },
+                    },
                 ],
                 "_metadata": {},
             },
@@ -264,7 +399,10 @@ class TeamsConnectorTests(unittest.TestCase):
 
         chats_by_id = {chat.id: chat for chat in chats}
         self.assertEqual(set(chats_by_id), {
-            "19:rich@thread.v2", "19:extra@thread.v2", "19:last@thread.v2"
+            "48:notes",
+            "19:rich@thread.v2",
+            "19:extra@thread.v2",
+            "19:last@thread.v2",
         })
         self.assertEqual(chats_by_id["19:rich@thread.v2"].display_name, "Rich CSA chat")
         self.assertEqual(
@@ -272,6 +410,13 @@ class TeamsConnectorTests(unittest.TestCase):
         )
         self.assertTrue(chats_by_id["19:rich@thread.v2"].unread)
         self.assertEqual(chats_by_id["19:extra@thread.v2"].display_name, "Extra chat")
+        self.assertEqual(chats_by_id["19:last@thread.v2"].display_name, "Last meeting")
+        self.assertTrue(client.catalog_coverage.catalog_complete is False)
+        self.assertTrue(client.catalog_coverage.csa_reported_partial)
+        self.assertEqual(client.catalog_coverage.chat_service_unique_rows, 6)
+        self.assertEqual(client.catalog_coverage.fallback_chats_added, 2)
+        self.assertEqual(client.catalog_coverage.non_chat_service_rows_excluded, 2)
+        self.assertEqual(client.catalog_coverage.unclassified_service_rows_excluded, 1)
         self.assertEqual(len(client.requests), 3)
         self.assertEqual(client.requests[0][0], TeamsConnector.CSA_STARTUP_URL)
         first_catalog_url = client.requests[1][0]
@@ -280,6 +425,91 @@ class TeamsConnectorTests(unittest.TestCase):
             {"view": ["mychats"], "pageSize": ["500"]},
         )
         self.assertEqual(client.requests[2][0], next_page)
+
+    def test_fallback_one_to_one_name_uses_read_only_roster(self):
+        client = StubConnector([
+            {
+                "chats": [],
+                "metadata": {"isPartialData": True, "hasMoreChats": False},
+            },
+            {
+                "conversations": [{
+                    "id": "19:untitled@thread.v2",
+                    "threadProperties": {
+                        "productThreadType": "OneToOneChat",
+                        "threadType": "chat",
+                    },
+                }],
+                "_metadata": {},
+            },
+            {
+                "members": [
+                    {"id": "8:orgid:self-guid", "displayName": "Taylor Example"},
+                    {"id": "8:orgid:peer-guid", "displayName": "Jordan Example"},
+                ]
+            },
+        ])
+
+        chats = client.list_chats()
+
+        chat = next(item for item in chats if item.id == "19:untitled@thread.v2")
+        self.assertEqual(chat.display_name, "Jordan Example")
+        self.assertEqual(client.catalog_coverage.fallback_name_lookups_attempted, 1)
+        self.assertEqual(client.catalog_coverage.fallback_chats_without_resolved_name, 0)
+        self.assertTrue(client.catalog_coverage.catalog_complete)
+
+    def test_unspecified_csa_completeness_uses_paginated_fallback(self):
+        client = StubConnector([
+            {"chats": [], "metadata": {}},
+            {"conversations": [], "_metadata": {}},
+        ])
+
+        chats = client.list_chats()
+
+        self.assertEqual([chat.id for chat in chats], ["48:notes"])
+        self.assertIsNone(client.catalog_coverage.csa_reported_partial)
+        self.assertEqual(client.catalog_coverage.chat_service_unique_rows, 0)
+        self.assertTrue(client.catalog_coverage.catalog_complete)
+        self.assertEqual(len(client.requests), 2)
+
+    def test_raw_self_chat_is_named_and_counted_as_a_chat(self):
+        client = StubConnector([
+            {"chats": [], "metadata": {"isPartialData": True}},
+            {"conversations": [{
+                "id": "48:notes",
+                "threadProperties": {"productThreadType": "StreamOfNotes"},
+            }], "_metadata": {}},
+        ])
+
+        chats = client.list_chats()
+
+        self_chat = next(chat for chat in chats if chat.is_self_chat)
+        self.assertEqual(self_chat.display_name, "Notes to self")
+        self.assertEqual(self_chat.chat_type, "chat")
+        self.assertEqual(client.catalog_coverage.fallback_chats_added, 1)
+        self.assertEqual(client.catalog_coverage.fallback_chats_without_resolved_name, 0)
+
+    def test_catalog_rejects_csa_rows_without_ids_instead_of_silently_dropping_them(self):
+        client = StubConnector([
+            {"chats": [{"title": "Missing identifier"}], "metadata": {
+                "isPartialData": False,
+                "hasMoreChats": False,
+            }},
+        ])
+
+        with self.assertRaisesRegex(RuntimeError, "chat row has no ID"):
+            client.list_chats()
+
+    def test_catalog_rejects_chat_service_rows_without_ids(self):
+        client = StubConnector([
+            {"chats": [], "metadata": {"isPartialData": True}},
+            {"conversations": [{"threadProperties": {
+                "productThreadType": "Chat",
+            }}], "_metadata": {}},
+        ])
+
+        with self.assertRaisesRegex(RuntimeError, "catalog row without an ID"):
+            client.list_chats()
 
     def test_service_helpers_send_only_their_service_credentials(self):
         client = StubConnector()
@@ -450,6 +680,119 @@ class TeamsConnectorTests(unittest.TestCase):
         messages = client.get_messages("19:fixture@thread.v2", limit=1)
         self.assertEqual([message["id"] for message in messages], ["message-3"])
         self.assertEqual(len(client.requests), 1)
+        self.assertTrue(client.last_message_read_coverage["limit_reached"])
+        self.assertFalse(client.last_message_read_coverage["complete"])
+
+    def test_read_requests_retry_transient_http_failures_and_count_retries(self):
+        client = TeamsConnector()
+        unavailable = urllib.error.HTTPError(
+            "https://chat.example.test/messages",
+            503,
+            "Service Unavailable",
+            {"Retry-After": "0"},
+            None,
+        )
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = b'{"ok": true}'
+        with patch("urllib.request.urlopen", side_effect=[unavailable, response]) as urlopen:
+            with patch("time.sleep"):
+                payload = client._http_json("https://chat.example.test/messages")
+
+        self.assertEqual(payload, {"ok": True})
+        self.assertEqual(urlopen.call_count, 2)
+        self.assertEqual(client.last_request_retry_count, 1)
+
+    def test_read_retry_budget_is_four_total_attempts(self):
+        client = TeamsConnector()
+        failures = [
+            urllib.error.HTTPError(
+                "https://chat.example.test/messages", 503, "Unavailable", {}, None
+            )
+            for _ in range(client.READ_REQUEST_MAX_ATTEMPTS)
+        ]
+        with patch("urllib.request.urlopen", side_effect=failures) as urlopen:
+            with patch("time.sleep"):
+                with self.assertRaisesRegex(RuntimeError, "4-attempt limit"):
+                    client._http_json("https://chat.example.test/messages")
+
+        self.assertEqual(urlopen.call_count, 4)
+        self.assertEqual(client.last_request_retry_count, 3)
+
+    def test_unknown_read_error_is_retried_with_bounded_policy(self):
+        client = TeamsConnector()
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = b'{"ok": true}'
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=[RuntimeError("sanitized transient fixture"), response],
+        ) as urlopen:
+            with patch("time.sleep") as sleep:
+                payload = client._http_json("https://chat.example.test/messages")
+
+        self.assertEqual(payload, {"ok": True})
+        self.assertEqual(urlopen.call_count, 2)
+        self.assertEqual(client.last_request_retry_count, 1)
+        sleep.assert_called_once()
+
+    def test_failed_page_reports_retries_without_discarding_prior_progress_count(self):
+        client = StubConnector()
+        progress = []
+
+        def fail_page(_url, *, cancel_event=None):
+            client.last_request_retry_count = 3
+            raise RuntimeError("sanitized exhausted request")
+
+        client._request_chat_service = fail_page
+        with self.assertRaisesRegex(RuntimeError, "exhausted"):
+            list(
+                client.iter_message_pages(
+                    "19:fixture@thread.v2",
+                    progress_callback=lambda pages, messages, retries: progress.append(
+                        (pages, messages, retries)
+                    ),
+                )
+            )
+
+        self.assertEqual(progress, [(0, 0, 3)])
+        self.assertEqual(client.last_message_read_coverage["retry_count"], 3)
+
+    def test_write_requests_are_not_retried(self):
+        client = TeamsConnector()
+        failure = urllib.error.HTTPError(
+            "https://chat.example.test/send", 503, "Unavailable", {}, None
+        )
+        with patch("urllib.request.urlopen", side_effect=failure) as urlopen:
+            with self.assertRaisesRegex(RuntimeError, "HTTP 503"):
+                client._http_json(
+                    "https://chat.example.test/send", method="POST", body=b"{}"
+                )
+
+        self.assertEqual(urlopen.call_count, 1)
+        self.assertEqual(client.last_request_retry_count, 0)
+
+    def test_retry_after_and_exponential_delays_are_bounded(self):
+        self.assertEqual(TeamsConnector._read_retry_delay(1, "1000"), 10.0)
+        self.assertEqual(TeamsConnector._read_retry_delay(2, "invalid"), 0.5)
+
+    def test_cancellation_interrupts_retry_backoff(self):
+        client = TeamsConnector()
+        cancel_event = threading.Event()
+        failure = urllib.error.HTTPError(
+            "https://chat.example.test/messages", 503, "Unavailable", {}, None
+        )
+        with patch("urllib.request.urlopen", side_effect=failure) as urlopen:
+            with patch.object(cancel_event, "wait", return_value=True):
+                with self.assertRaisesRegex(ExtractionCancelled, "cancelled"):
+                    client._http_json(
+                        "https://chat.example.test/messages",
+                        cancel_event=cancel_event,
+                    )
+
+        self.assertEqual(urlopen.call_count, 1)
 
     def test_connection_metadata_never_contains_token_values(self):
         client = StubConnector()
@@ -459,6 +802,213 @@ class TeamsConnectorTests(unittest.TestCase):
         self.assertNotIn("spaces-test-token", repr(metadata))
         self.assertNotIn("csa-test-token", repr(metadata))
         self.assertNotIn("skype-test-token", repr(metadata))
+
+    def test_default_cache_path_is_absolute_and_independent_of_working_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            elsewhere = root / "elsewhere"
+            elsewhere.mkdir()
+            with patch.dict("os.environ", {"LOCALAPPDATA": str(root)}):
+                with patch("os.getcwd", return_value=str(elsewhere)):
+                    cache_path = TeamsConnector()._cache_path
+
+        self.assertEqual(cache_path, root / "scrape-teams-chat" / ".teams_token_cache.json")
+        self.assertTrue(cache_path.is_absolute())
+
+    def test_legacy_repository_cache_is_encrypted_and_verified_before_removal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "repository" / ".teams_token_cache.json"
+            destination = root / "localappdata" / "scrape-teams-chat" / ".teams_token_cache.json"
+            source.parent.mkdir()
+            source_state = sanitized_msal_cache_state()
+            source.write_text(source_state, encoding="utf-8")
+            client = TeamsConnector(cache_path=destination)
+            client._uses_default_cache_path = True
+            with (
+                patch.object(client, "_repository_cache_path", return_value=source),
+                patch("msal_extensions.build_encrypted_persistence", FakeEncryptedPersistence),
+            ):
+                client._migrate_repository_cache_if_needed()
+                migrated = client._load_token_cache()
+
+            self.assertFalse(source.exists())
+            self.assertTrue(destination.is_file())
+            self.assertNotIn(source_state.encode("utf-8"), destination.read_bytes())
+            self.assertEqual(list(migrated.search(msal.TokenCache.CredentialType.ACCOUNT))[0]["username"], "fixture@example.test")
+
+    def test_plaintext_appdata_cache_is_replaced_after_encrypted_readback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            destination = root / "localappdata" / ".teams_token_cache.json"
+            destination.parent.mkdir()
+            source_state = sanitized_msal_cache_state()
+            destination.write_text(source_state, encoding="utf-8")
+            client = TeamsConnector(cache_path=destination)
+            with patch("msal_extensions.build_encrypted_persistence", FakeEncryptedPersistence):
+                migrated = client._load_token_cache()
+
+            self.assertNotIn(source_state.encode("utf-8"), destination.read_bytes())
+            self.assertEqual(list(migrated.search(msal.TokenCache.CredentialType.ACCOUNT))[0]["username"], "fixture@example.test")
+
+    def test_failed_encrypted_migration_preserves_plaintext_without_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "repository" / ".teams_token_cache.json"
+            destination = root / "localappdata" / "scrape-teams-chat" / ".teams_token_cache.json"
+            source.parent.mkdir()
+            source_state = sanitized_msal_cache_state()
+            source.write_text(source_state, encoding="utf-8")
+            client = TeamsConnector(cache_path=destination)
+            client._uses_default_cache_path = True
+            with (
+                patch.object(client, "_repository_cache_path", return_value=source),
+                patch("msal_extensions.build_encrypted_persistence", side_effect=OSError("fixture failure")),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "original file was left intact"):
+                    client._migrate_repository_cache_if_needed()
+
+            self.assertTrue(source.is_file())
+            self.assertEqual(source.read_text(encoding="utf-8"), source_state)
+            self.assertFalse(destination.exists())
+
+    def test_migration_does_not_overwrite_a_different_encrypted_destination(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "repository" / ".teams_token_cache.json"
+            destination = root / "localappdata" / ".teams_token_cache.json"
+            source.parent.mkdir()
+            source_state = sanitized_msal_cache_state()
+            source.write_text(source_state, encoding="utf-8")
+            FakeEncryptedPersistence(destination).save(
+                sanitized_msal_cache_state("other-fixture@example.test")
+            )
+            destination_bytes = destination.read_bytes()
+            client = TeamsConnector(cache_path=destination)
+            with (
+                patch.object(client, "_repository_cache_path", return_value=source),
+                patch("msal_extensions.build_encrypted_persistence", FakeEncryptedPersistence),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "original file was left intact"):
+                    client._migrate_plaintext_cache(source)
+
+            self.assertTrue(source.is_file())
+            self.assertEqual(source.read_text(encoding="utf-8"), source_state)
+            self.assertEqual(destination.read_bytes(), destination_bytes)
+
+    def test_injected_cache_path_uses_encrypted_persistence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache_path = Path(directory) / "test-cache.bin"
+            client = TeamsConnector(cache_path=cache_path)
+            build = Mock(side_effect=FakeEncryptedPersistence)
+            with patch("msal_extensions.build_encrypted_persistence", build):
+                client._load_token_cache()
+
+            build.assert_called_once_with(str(cache_path))
+
+    def test_login_keeps_the_existing_scopes_and_uses_persisted_msal_cache(self):
+        from msal_extensions import PersistedTokenCache
+
+        with tempfile.TemporaryDirectory() as directory:
+            client = TeamsConnector(cache_path=Path(directory) / "cache")
+            app = Mock()
+            acquire = Mock(
+                side_effect=[
+                    ({"access_token": "fixture-spaces-token"}, "cache"),
+                    ({"access_token": "fixture-csa-token"}, "cache"),
+                ]
+            )
+            authz = {
+                "tokens": {"skypeToken": "fixture-skype-token"},
+                "regionGtms": {
+                    "chatService": "https://chat.example.test",
+                    "middleTier": "https://middle.example.test",
+                },
+            }
+            with (
+                patch("msal_extensions.build_encrypted_persistence", FakeEncryptedPersistence),
+                patch("teams_exporter.teams_connector.msal.PublicClientApplication", return_value=app) as create_app,
+                patch.object(client, "_acquire_resource_token", acquire),
+                patch.object(client, "_request_teams_authz", return_value=authz),
+            ):
+                client.login(interactive=False)
+
+            cache = create_app.call_args.kwargs["token_cache"]
+            self.assertIsInstance(cache, PersistedTokenCache)
+            self.assertEqual(
+                [call.args[1] for call in acquire.call_args_list],
+                [client.SPACES_SCOPE, client.CSA_SCOPE],
+            )
+            self.assertEqual(
+                [call.kwargs["interactive"] for call in acquire.call_args_list],
+                [False, False],
+            )
+            self.assertEqual(client._auth_sources, {"spaces": "cache", "csa": "cache"})
+
+    def test_missing_encrypted_provider_fails_closed_without_writing_plaintext(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache_path = Path(directory) / "cache.json"
+            client = TeamsConnector(cache_path=cache_path)
+            with patch(
+                "msal_extensions.build_encrypted_persistence",
+                side_effect=RuntimeError("fixture failure"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "No plaintext cache will be used") as raised:
+                    client._load_token_cache()
+
+            self.assertNotIn("fixture failure", str(raised.exception))
+            self.assertFalse(cache_path.exists())
+
+    def test_silent_msal_acquisition_renews_cached_expiring_access_token(self):
+        client = TeamsConnector(cache_path="unused-cache.json")
+        account = {"home_account_id": "sanitized-account"}
+        app = Mock()
+        app.get_accounts.return_value = [account]
+        app.acquire_token_silent.return_value = {"access_token": "sanitized-renewed-token"}
+
+        result, source = client._acquire_resource_token(
+            app, client.SPACES_SCOPE, interactive=False
+        )
+
+        self.assertEqual(source, "cache")
+        self.assertEqual(result["access_token"], "sanitized-renewed-token")
+        app.acquire_token_silent.assert_called_once_with(
+            scopes=[client.SPACES_SCOPE], account=account
+        )
+
+    def test_invalid_refresh_token_fails_fast_with_sign_in_guidance(self):
+        client = TeamsConnector(cache_path="unused-cache.json")
+        app = Mock()
+        app.get_accounts.return_value = [{"home_account_id": "sanitized-account"}]
+        app.acquire_token_silent.return_value = {"error": "invalid_grant"}
+
+        with self.assertRaisesRegex(AuthenticationRequiredError, "no longer accepts") as raised:
+            client._acquire_resource_token(app, client.SPACES_SCOPE, interactive=False)
+
+        self.assertIn("python -m teams_exporter auth", str(raised.exception))
+        app.acquire_token_silent.assert_called_once()
+
+    def test_unknown_msal_errors_retry_without_claiming_credentials_are_invalid(self):
+        client = TeamsConnector(cache_path="unused-cache.json")
+        app = Mock()
+        app.get_accounts.return_value = [{"home_account_id": "sanitized-account"}]
+        app.acquire_token_silent.return_value = {"error": "unclassified_fixture_error"}
+        with patch("time.sleep") as sleep:
+            with self.assertRaisesRegex(RuntimeError, "service request failed after 3 attempts") as raised:
+                client._acquire_resource_token(app, client.SPACES_SCOPE, interactive=False)
+
+        self.assertNotIn("credentials are invalid", str(raised.exception).casefold())
+        self.assertEqual(app.acquire_token_silent.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_safe_network_detail_keeps_cause_but_redacts_tokens_and_url_queries(self):
+        detail = TeamsConnector._safe_exception_detail(
+            "connection refused for https://teams.example.test/path?token=secret-value"
+        )
+
+        self.assertIn("connection refused", detail)
+        self.assertIn("https://teams.example.test/path", detail)
+        self.assertNotIn("secret-value", detail)
 
 
 class TeamsMessageFormatterTests(unittest.TestCase):
@@ -570,11 +1120,20 @@ class TeamsExporterTests(unittest.TestCase):
             def __init__(self):
                 self.calls = []
 
-            def get_messages(
-                self, conversation_id, *, limit=None, since=None, until=None
+            last_message_read_coverage = {"retry_count": 0}
+
+            def iter_message_pages(
+                self,
+                conversation_id,
+                *,
+                limit=None,
+                since=None,
+                until=None,
+                cancel_event=None,
+                progress_callback=None,
             ):
                 self.calls.append((conversation_id, limit, since, until))
-                return [{
+                page = [{
                     "id": "one",
                     "sequenceId": 1,
                     "originalarrivaltime": "2026-09-28T13:00:00+03:00",
@@ -582,6 +1141,9 @@ class TeamsExporterTests(unittest.TestCase):
                     "messagetype": "RichText/Html",
                     "content": "<p>Hi <b>there</b></p>",
                 }]
+                if progress_callback:
+                    progress_callback(1, len(page), 0)
+                yield page
 
         connector = FakeConnector()
         exporter = TeamsExporter(connector, TeamsMessageFormatter())
@@ -607,6 +1169,79 @@ class TeamsExporterTests(unittest.TestCase):
             self.assertEqual(
                 connector.calls[0], ("19:fake", None, since, until)
             )
+        finally:
+            destination.unlink(missing_ok=True)
+
+    def test_large_export_spools_pages_to_disk_and_replays_chronologically(self):
+        class LargeConnector:
+            last_message_read_coverage = {"retry_count": 0}
+
+            def iter_message_pages(self, *_args, **_kwargs):
+                for index in reversed(range(80)):
+                    yield [{
+                        "id": f"message-{index}",
+                        "sequenceId": index,
+                        "originalarrivaltime": (
+                            f"2026-09-28T10:{index // 60:02d}:{index % 60:02d}Z"
+                        ),
+                        "imdisplayname": f"Author {index}",
+                        "messagetype": "Text",
+                        "content": "x" * 20_000,
+                    }]
+
+        import teams_exporter.teams_exporter as exporter_module
+
+        original_spool = exporter_module.tempfile.SpooledTemporaryFile
+        spools = []
+
+        def tracked_spool(*args, **kwargs):
+            spool = original_spool(*args, **kwargs)
+            spools.append(spool)
+            return spool
+
+        destination = Path(self.id().replace(".", "_") + ".large.txt")
+        exporter = TeamsExporter(LargeConnector(), TeamsMessageFormatter())
+        try:
+            with patch(
+                "teams_exporter.teams_exporter.tempfile.SpooledTemporaryFile",
+                side_effect=tracked_spool,
+            ):
+                exporter.export_chat(ChatSummary("19:large", "Large"), destination)
+            content = destination.read_text(encoding="utf-8")
+            self.assertTrue(spools[0]._rolled)
+            self.assertGreater(destination.stat().st_size, 1_000_000)
+            self.assertLess(content.index("[2026-09-28T10:00:00Z] Author 0"),
+                            content.index("[2026-09-28T10:01:19Z] Author 79"))
+        finally:
+            destination.unlink(missing_ok=True)
+
+    def test_cancelled_export_keeps_existing_destination_intact(self):
+        class CancelConnector:
+            last_message_read_coverage = {"retry_count": 0}
+
+            def iter_message_pages(self, *_args, **kwargs):
+                yield [{
+                    "id": "finished-page",
+                    "originalarrivaltime": "2026-09-28T10:00:00Z",
+                    "imdisplayname": "Taylor",
+                    "messagetype": "Text",
+                    "content": "already fetched",
+                }]
+                kwargs["cancel_event"].set()
+                raise ExtractionCancelled("cancelled")
+
+        destination = Path(self.id().replace(".", "_") + ".cancel.txt")
+        destination.write_text("previous export", encoding="utf-8")
+        try:
+            exporter = TeamsExporter(CancelConnector(), TeamsMessageFormatter())
+            with self.assertRaises(ExtractionCancelled):
+                exporter.export_chat(
+                    ChatSummary("19:cancel", "Cancel"),
+                    destination,
+                    cancel_event=threading.Event(),
+                )
+            self.assertEqual(destination.read_text(encoding="utf-8"), "previous export")
+            self.assertEqual(list(destination.parent.glob(f".{destination.name}.*.tmp")), [])
         finally:
             destination.unlink(missing_ok=True)
 

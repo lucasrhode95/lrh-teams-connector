@@ -6,6 +6,7 @@ import os
 import re
 import sqlite3
 import tempfile
+import unicodedata
 from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,7 +21,7 @@ class DatabaseOwnerMismatchError(RuntimeError):
 
 
 class TeamsSearchIndex:
-    """Local SQLite catalog, message archive, and FTS5 search index."""
+    """Local SQLite chat catalog, retained message archive, and search coverage."""
 
     OWNER_METADATA_KEY = "account_fingerprint"
 
@@ -183,9 +184,14 @@ class TeamsSearchIndex:
                         conversation_id TEXT NOT NULL,
                         message_id TEXT NOT NULL,
                         author TEXT NOT NULL,
+                        author_id TEXT,
                         sent_at TEXT,
                         body TEXT NOT NULL,
+                        body_folded TEXT NOT NULL DEFAULT '',
                         message_type TEXT,
+                        edited_at TEXT,
+                        deleted_at TEXT,
+                        is_deleted INTEGER NOT NULL DEFAULT 0,
                         indexed_at TEXT NOT NULL,
                         UNIQUE (conversation_id, message_id),
                         FOREIGN KEY (conversation_id) REFERENCES chats(conversation_id)
@@ -224,20 +230,58 @@ class TeamsSearchIndex:
                         FOREIGN KEY (conversation_id) REFERENCES chats(conversation_id)
                             ON DELETE CASCADE
                     );
+                    CREATE TABLE IF NOT EXISTS export_jobs (
+                        export_id TEXT PRIMARY KEY,
+                        conversation_id TEXT NOT NULL,
+                        since TEXT NOT NULL,
+                        until TEXT NOT NULL,
+                        next_url TEXT,
+                        complete INTEGER NOT NULL DEFAULT 0,
+                        pages INTEGER NOT NULL DEFAULT 0,
+                        scanned INTEGER NOT NULL DEFAULT 0,
+                        missing_timestamps INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        snapshot_path TEXT,
+                        byte_size INTEGER,
+                        message_count INTEGER,
+                        seen_urls_json TEXT NOT NULL DEFAULT '[]',
+                        FOREIGN KEY (conversation_id) REFERENCES chats(conversation_id)
+                            ON DELETE CASCADE
+                    );
                     CREATE TABLE IF NOT EXISTS index_metadata (
                         key TEXT PRIMARY KEY,
                         value TEXT NOT NULL
                     );
                     INSERT OR IGNORE INTO index_metadata(key, value)
                         VALUES ('generation', '0');
-                    CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
-                        conversation_id UNINDEXED,
-                        message_id UNINDEXED,
-                        body,
-                        tokenize = 'unicode61'
-                    );
                     """
                 )
+                connection.execute("DROP TABLE IF EXISTS message_fts")
+                message_columns = {
+                    row["name"]
+                    for row in connection.execute("PRAGMA table_info(messages)")
+                }
+                if "author_id" not in message_columns:
+                    connection.execute("ALTER TABLE messages ADD COLUMN author_id TEXT")
+                for name, declaration in (
+                    ("body_folded", "TEXT NOT NULL DEFAULT ''"),
+                    ("edited_at", "TEXT"),
+                    ("deleted_at", "TEXT"),
+                    ("is_deleted", "INTEGER NOT NULL DEFAULT 0"),
+                ):
+                    if name not in message_columns:
+                        connection.execute(
+                            f"ALTER TABLE messages ADD COLUMN {name} {declaration}"
+                        )
+                legacy_rows = connection.execute(
+                    "SELECT row_id, body FROM messages WHERE body_folded = ''"
+                ).fetchall()
+                for row in legacy_rows:
+                    connection.execute(
+                        "UPDATE messages SET body_folded = ? WHERE row_id = ?",
+                        (self._normalize_search_text(str(row["body"])), row["row_id"]),
+                    )
                 if self.owner_fingerprint is not None:
                     connection.execute(
                         "INSERT OR IGNORE INTO index_metadata(key, value) VALUES (?, ?)",
@@ -248,9 +292,7 @@ class TeamsSearchIndex:
                         raise DatabaseOwnerMismatchError(
                             "The selected Teams archive belongs to another account."
                         )
-        except sqlite3.OperationalError as exc:
-            if "fts5" in str(exc).casefold() or "no such module" in str(exc).casefold():
-                raise RuntimeError("This Python SQLite build does not include FTS5.") from exc
+        except sqlite3.OperationalError:
             raise
 
     def _owner_from_connection(self, connection: sqlite3.Connection) -> str | None:
@@ -378,59 +420,15 @@ class TeamsSearchIndex:
                 history_complete = next_url is None
             oldest = prior["oldest_message_at"] if prior else None
             newest = prior["newest_message_at"] if prior else None
-            stored = 0
-            for message in messages:
-                body = formatter.format_message(message)
-                author = self._message_author(message, body)
-                timestamp = self._timestamp(TeamsConnector._message_datetime(message))
-                message_id = message.get("id")
-                if message_id is None:
-                    fingerprint = json.dumps(
-                        [conversation_id, message.get("sequenceId"), timestamp, author, body],
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    )
-                    message_id = "generated:" + hashlib.sha256(
-                        fingerprint.encode("utf-8")
-                    ).hexdigest()
-                else:
-                    message_id = str(message_id)
-
-                message_type = message.get("messagetype") or message.get("messageType")
-                if not isinstance(message_type, str):
-                    message_type = None
-                existing = connection.execute(
-                    "SELECT row_id FROM messages WHERE conversation_id = ? AND message_id = ?",
-                    (conversation_id, message_id),
-                ).fetchone()
-                if existing:
-                    connection.execute(
-                        "DELETE FROM message_fts WHERE rowid = ?", (existing["row_id"],)
-                    )
-                    connection.execute(
-                        """UPDATE messages SET author = ?, sent_at = ?, body = ?,
-                           message_type = ?, indexed_at = ? WHERE row_id = ?""",
-                        (author, timestamp, body, message_type, now, existing["row_id"]),
-                    )
-                    row_id = existing["row_id"]
-                else:
-                    cursor = connection.execute(
-                        """INSERT INTO messages (
-                            conversation_id, message_id, author, sent_at, body,
-                            message_type, indexed_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                        (conversation_id, message_id, author, timestamp, body, message_type, now),
-                    )
-                    row_id = cursor.lastrowid
-                    stored += 1
-                connection.execute(
-                    "INSERT INTO message_fts(rowid, conversation_id, message_id, body) "
-                    "VALUES (?, ?, ?, ?)",
-                    (row_id, conversation_id, message_id, body),
-                )
-                if timestamp:
-                    oldest = timestamp if oldest is None else min(oldest, timestamp)
-                    newest = timestamp if newest is None else max(newest, timestamp)
+            stored, oldest, newest = self._upsert_message_rows(
+                connection,
+                conversation_id,
+                messages,
+                formatter=formatter,
+                now=now,
+                oldest=oldest,
+                newest=newest,
+            )
 
             connection.execute(
                 """INSERT INTO chat_index_state (
@@ -470,6 +468,489 @@ class TeamsSearchIndex:
         result = dict(updated)
         result["messages_added_this_page"] = stored
         return result
+
+    def upsert_messages(
+        self,
+        conversation_id: str,
+        messages: list[dict[str, Any]],
+        *,
+        formatter: TeamsMessageFormatter,
+    ) -> dict[str, int]:
+        """Upsert one fresh remote page without changing full-history progress."""
+        now = self._now()
+        with self._connect() as connection:
+            prior = connection.execute(
+                "SELECT oldest_message_at, newest_message_at FROM chat_index_state "
+                "WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+            stored, oldest, newest = self._upsert_message_rows(
+                connection,
+                conversation_id,
+                messages,
+                formatter=formatter,
+                now=now,
+                oldest=prior["oldest_message_at"] if prior else None,
+                newest=prior["newest_message_at"] if prior else None,
+            )
+            connection.execute(
+                """INSERT INTO chat_index_state (
+                       conversation_id, oldest_message_at, newest_message_at,
+                       messages_indexed_at
+                   ) VALUES (?, ?, ?, ?)
+                   ON CONFLICT(conversation_id) DO UPDATE SET
+                       oldest_message_at = excluded.oldest_message_at,
+                       newest_message_at = excluded.newest_message_at,
+                       messages_indexed_at = excluded.messages_indexed_at""",
+                (conversation_id, oldest, newest, now),
+            )
+            self._bump_generation(connection)
+        return {"messages_added": stored, "messages_received": len(messages)}
+
+    def _upsert_message_rows(
+        self,
+        connection: sqlite3.Connection,
+        conversation_id: str,
+        messages: list[dict[str, Any]],
+        *,
+        formatter: TeamsMessageFormatter,
+        now: str,
+        oldest: str | None,
+        newest: str | None,
+    ) -> tuple[int, str | None, str | None]:
+        connection.execute(
+            """INSERT OR IGNORE INTO chats(conversation_id, display_name, catalogued_at)
+               VALUES (?, ?, ?)""",
+            (conversation_id, conversation_id, now),
+        )
+        inserted = 0
+        for message in messages:
+            body = formatter.format_message(message)
+            author = self._message_author(message, body)
+            author_id = TeamsConnector._message_author_id(message)
+            timestamp = self._timestamp(TeamsConnector._message_datetime(message))
+            message_id = message.get("id")
+            if message_id is None:
+                fingerprint = json.dumps(
+                    [conversation_id, message.get("sequenceId"), timestamp, author, body],
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                message_id = "generated:" + hashlib.sha256(
+                    fingerprint.encode("utf-8")
+                ).hexdigest()
+            else:
+                message_id = str(message_id)
+
+            message_type = message.get("messagetype") or message.get("messageType")
+            if not isinstance(message_type, str):
+                message_type = None
+            properties = self._message_properties(message)
+            edited_at = self._timestamp_value(
+                properties.get("edittime") or message.get("edittime")
+            )
+            deleted_at = self._timestamp_value(
+                properties.get("deletetime") or message.get("deletetime")
+            )
+            is_deleted = bool(
+                (message_type or "").casefold() == "messagedelete" or deleted_at
+            )
+            existing = connection.execute(
+                """SELECT row_id, body, edited_at, deleted_at, is_deleted
+                   FROM messages WHERE conversation_id = ? AND message_id = ?""",
+                (conversation_id, message_id),
+            ).fetchone()
+            if existing:
+                previous_edit = self._revision_key(existing["edited_at"])
+                previous_delete = self._revision_key(existing["deleted_at"])
+                incoming_edit = self._revision_key(edited_at)
+                if is_deleted:
+                    body = str(existing["body"])
+                    timestamp = None
+                    author = None
+                    author_id = None
+                    message_type = None
+                    edited_at = existing["edited_at"] or edited_at
+                    deleted_at = max(
+                        (value for value in (existing["deleted_at"], deleted_at) if value),
+                        default=None,
+                    )
+                elif existing["is_deleted"]:
+                    if incoming_edit and incoming_edit > max(previous_delete, previous_edit):
+                        # A later explicit edit is evidence that this ID became active again.
+                        deleted_at = None
+                    else:
+                        # A plain historical row can be stale; absence of a tombstone
+                        # in that row is not evidence that the message was restored.
+                        body = str(existing["body"])
+                        timestamp = None
+                        author = None
+                        author_id = None
+                        message_type = None
+                        edited_at = existing["edited_at"]
+                        deleted_at = existing["deleted_at"]
+                        is_deleted = True
+                elif previous_edit and (not incoming_edit or incoming_edit < previous_edit):
+                    # Never allow an older/unversioned page to replace known edited text.
+                    body = str(existing["body"])
+                    timestamp = None
+                    author = None
+                    author_id = None
+                    message_type = None
+                    edited_at = existing["edited_at"]
+                    deleted_at = existing["deleted_at"]
+                    is_deleted = bool(existing["is_deleted"])
+            folded = self._normalize_search_text(body)
+
+            if existing:
+                row_id = int(existing["row_id"])
+                connection.execute(
+                    """UPDATE messages SET
+                           author = COALESCE(?, author),
+                           author_id = COALESCE(?, author_id),
+                           sent_at = COALESCE(?, sent_at),
+                           body = ?, body_folded = ?,
+                           message_type = COALESCE(?, message_type),
+                           edited_at = COALESCE(?, edited_at),
+                           deleted_at = ?,
+                           is_deleted = ?, indexed_at = ?
+                       WHERE row_id = ?""",
+                    (
+                        author,
+                        author_id,
+                        timestamp,
+                        body,
+                        folded,
+                        message_type,
+                        edited_at,
+                        deleted_at,
+                        int(is_deleted),
+                        now,
+                        row_id,
+                    ),
+                )
+            else:
+                cursor = connection.execute(
+                    """INSERT INTO messages (
+                           conversation_id, message_id, author, author_id, sent_at,
+                           body, body_folded, message_type, edited_at, deleted_at,
+                           is_deleted, indexed_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        conversation_id,
+                        message_id,
+                        author,
+                        author_id,
+                        timestamp,
+                        body,
+                        folded,
+                        message_type,
+                        edited_at,
+                        deleted_at,
+                        int(is_deleted),
+                        now,
+                    ),
+                )
+                row_id = int(cursor.lastrowid)
+                inserted += 1
+            if timestamp:
+                oldest = timestamp if oldest is None else min(oldest, timestamp)
+                newest = timestamp if newest is None else max(newest, timestamp)
+        return inserted, oldest, newest
+
+    @staticmethod
+    def _message_properties(message: dict[str, Any]) -> dict[str, Any]:
+        properties = message.get("properties")
+        if isinstance(properties, dict):
+            return properties
+        if isinstance(properties, str):
+            try:
+                decoded = json.loads(properties)
+            except json.JSONDecodeError:
+                return {}
+            return decoded if isinstance(decoded, dict) else {}
+        return {}
+
+    @classmethod
+    def _timestamp_value(cls, value: Any) -> str | None:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            try:
+                return datetime.fromtimestamp(float(value) / 1000, timezone.utc).isoformat().replace(
+                    "+00:00", "Z"
+                )
+            except (ValueError, OverflowError, OSError):
+                return None
+        if isinstance(value, str) and value.strip():
+            if value.strip().isdigit():
+                try:
+                    return datetime.fromtimestamp(
+                        int(value.strip()) / 1000, timezone.utc
+                    ).isoformat().replace("+00:00", "Z")
+                except (ValueError, OverflowError, OSError):
+                    return None
+            try:
+                parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+            except ValueError:
+                return value.strip()
+            return cls._timestamp(parsed)
+        return None
+
+    @classmethod
+    def _revision_key(cls, value: Any) -> str:
+        return cls._timestamp_value(value) or ""
+
+    def query_message_page(
+        self,
+        conversation_id: str,
+        *,
+        since: str | None,
+        until: str | None,
+        before: tuple[str, str] | None,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        predicates = ["m.conversation_id = ?", "m.sent_at IS NOT NULL"]
+        parameters: list[Any] = [conversation_id]
+        if since is not None:
+            predicates.append("m.sent_at >= ?")
+            parameters.append(since)
+        if until is not None:
+            predicates.append("m.sent_at <= ?")
+            parameters.append(until)
+        if before is not None:
+            predicates.append(
+                "(m.sent_at < ? OR (m.sent_at = ? AND m.message_id < ?))"
+            )
+            parameters.extend((before[0], before[0], before[1]))
+        parameters.append(limit)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""SELECT m.conversation_id, m.message_id, m.author, m.author_id,
+                           m.sent_at, m.body, m.message_type, m.edited_at,
+                           m.deleted_at, m.is_deleted, c.display_name
+                    FROM messages m JOIN chats c USING(conversation_id)
+                    WHERE {' AND '.join(predicates)}
+                    ORDER BY m.sent_at DESC, m.message_id DESC
+                    LIMIT ?""",
+                parameters,
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def query_messages_chronological(
+        self,
+        conversation_id: str,
+        *,
+        since: str | None,
+        until: str | None,
+        after: tuple[str, str] | None = None,
+        from_key: tuple[str, str] | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        predicates = ["conversation_id = ?", "sent_at IS NOT NULL"]
+        parameters: list[Any] = [conversation_id]
+        if since is not None:
+            predicates.append("sent_at >= ?")
+            parameters.append(since)
+        if until is not None:
+            predicates.append("sent_at <= ?")
+            parameters.append(until)
+        if after is not None:
+            predicates.append("(sent_at, message_id) > (?, ?)")
+            parameters.extend(after)
+        if from_key is not None:
+            predicates.append("(sent_at, message_id) >= (?, ?)")
+            parameters.extend(from_key)
+        parameters.append(limit)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""SELECT conversation_id, message_id, author, author_id, sent_at,
+                           body, message_type, edited_at, deleted_at, is_deleted
+                    FROM messages WHERE {' AND '.join(predicates)}
+                    ORDER BY sent_at ASC, message_id ASC LIMIT ?""",
+                parameters,
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def count_messages_in_range(
+        self, conversation_id: str, *, since: str | None, until: str | None
+    ) -> int:
+        predicates = ["conversation_id = ?", "sent_at IS NOT NULL"]
+        parameters: list[Any] = [conversation_id]
+        if since is not None:
+            predicates.append("sent_at >= ?")
+            parameters.append(since)
+        if until is not None:
+            predicates.append("sent_at <= ?")
+            parameters.append(until)
+        with self._connect() as connection:
+            return int(connection.execute(
+                f"SELECT COUNT(*) FROM messages WHERE {' AND '.join(predicates)}",
+                parameters,
+            ).fetchone()[0])
+
+    def latest_message_cutoff(
+        self,
+        conversation_id: str,
+        *,
+        since: str | None,
+        until: str | None,
+        limit: int,
+    ) -> tuple[str, str] | None:
+        if limit < 1:
+            return None
+        predicates = ["conversation_id = ?", "sent_at IS NOT NULL"]
+        parameters: list[Any] = [conversation_id]
+        if since is not None:
+            predicates.append("sent_at >= ?")
+            parameters.append(since)
+        if until is not None:
+            predicates.append("sent_at <= ?")
+            parameters.append(until)
+        parameters.append(limit - 1)
+        with self._connect() as connection:
+            row = connection.execute(
+                f"""SELECT sent_at, message_id FROM messages
+                    WHERE {' AND '.join(predicates)}
+                    ORDER BY sent_at DESC, message_id DESC LIMIT 1 OFFSET ?""",
+                parameters,
+            ).fetchone()
+        return (str(row["sent_at"]), str(row["message_id"])) if row else None
+
+    def get_message(self, conversation_id: str, message_id: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT conversation_id, message_id, author, author_id, sent_at,
+                          body, message_type, edited_at, deleted_at, is_deleted
+                   FROM messages WHERE conversation_id = ? AND message_id = ?""",
+                (conversation_id, message_id),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def create_export_job(
+        self,
+        export_id: str,
+        conversation_id: str,
+        since: str,
+        until: str,
+        message_limit: int | None,
+    ) -> dict[str, Any]:
+        now = self._now()
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO chats(conversation_id, display_name, catalogued_at)
+                   VALUES (?, ?, ?) ON CONFLICT(conversation_id) DO NOTHING""",
+                (conversation_id, conversation_id, now),
+            )
+            connection.execute(
+                """INSERT INTO export_jobs(
+                       export_id, conversation_id, since, until, message_limit,
+                       created_at, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (export_id, conversation_id, since, until, message_limit, now, now),
+            )
+            row = connection.execute(
+                "SELECT * FROM export_jobs WHERE export_id = ?", (export_id,)
+            ).fetchone()
+        return dict(row)
+
+    def get_export_job(self, export_id: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM export_jobs WHERE export_id = ?", (export_id,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def save_export_job_page(
+        self,
+        export_id: str,
+        messages: list[dict[str, Any]],
+        *,
+        requested_url: str | None,
+        next_url: str | None,
+        raw_scanned: int,
+        missing_timestamp_count: int,
+        formatter: TeamsMessageFormatter,
+    ) -> dict[str, Any]:
+        now = self._now()
+        with self._connect() as connection:
+            job = connection.execute(
+                "SELECT * FROM export_jobs WHERE export_id = ?", (export_id,)
+            ).fetchone()
+            if job is None:
+                raise KeyError("Export ID was not found.")
+            seen_urls = json.loads(job["seen_urls_json"] or "[]")
+            if requested_url and requested_url in seen_urls:
+                raise RuntimeError("Teams repeated an export continuation link.")
+            if requested_url:
+                seen_urls.append(requested_url)
+            if next_url and next_url in seen_urls:
+                raise RuntimeError("Teams repeated an export continuation link.")
+            chat_state = connection.execute(
+                "SELECT oldest_message_at, newest_message_at FROM chat_index_state "
+                "WHERE conversation_id = ?",
+                (job["conversation_id"],),
+            ).fetchone()
+            _, oldest, newest = self._upsert_message_rows(
+                connection,
+                str(job["conversation_id"]),
+                messages,
+                formatter=formatter,
+                now=now,
+                oldest=chat_state["oldest_message_at"] if chat_state else None,
+                newest=chat_state["newest_message_at"] if chat_state else None,
+            )
+            connection.execute(
+                """INSERT INTO chat_index_state(
+                       conversation_id, oldest_message_at, newest_message_at,
+                       messages_indexed_at
+                   ) VALUES (?, ?, ?, ?)
+                   ON CONFLICT(conversation_id) DO UPDATE SET
+                       oldest_message_at = excluded.oldest_message_at,
+                       newest_message_at = excluded.newest_message_at,
+                       messages_indexed_at = excluded.messages_indexed_at""",
+                (job["conversation_id"], oldest, newest, now),
+            )
+            connection.execute(
+                """UPDATE export_jobs SET next_url = ?, complete = ?,
+                       pages = pages + 1, scanned = scanned + ?,
+                       missing_timestamps = missing_timestamps + ?,
+                       seen_urls_json = ?, updated_at = ?
+                   WHERE export_id = ?""",
+                (
+                    next_url,
+                    int(next_url is None),
+                    raw_scanned,
+                    missing_timestamp_count,
+                    json.dumps(seen_urls, separators=(",", ":")),
+                    now,
+                    export_id,
+                ),
+            )
+            self._bump_generation(connection)
+            updated = connection.execute(
+                "SELECT * FROM export_jobs WHERE export_id = ?", (export_id,)
+            ).fetchone()
+        return dict(updated)
+
+    def complete_export_job(
+        self,
+        export_id: str,
+        *,
+        snapshot_path: str,
+        byte_size: int,
+        message_count: int,
+    ) -> dict[str, Any]:
+        with self._connect() as connection:
+            connection.execute(
+                """UPDATE export_jobs SET snapshot_path = ?, byte_size = ?,
+                       message_count = ?, updated_at = ? WHERE export_id = ?""",
+                (snapshot_path, byte_size, message_count, self._now(), export_id),
+            )
+            row = connection.execute(
+                "SELECT * FROM export_jobs WHERE export_id = ?", (export_id,)
+            ).fetchone()
+        if row is None:
+            raise KeyError("Export ID was not found.")
+        return dict(row)
 
     def save_participants(
         self,
@@ -527,60 +1008,69 @@ class TeamsSearchIndex:
             )
             self._bump_generation(connection)
 
+    @staticmethod
+    def _normalize_search_text(value: str) -> str:
+        normalized = unicodedata.normalize("NFKC", value).casefold()
+        return " ".join(normalized.split())
+
+    @staticmethod
+    def _like_literal(value: str) -> str:
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
     def search_messages(
         self,
         query: str,
         *,
         match_mode: str,
-        conversation_id: str | None,
-        since: str | None,
-        until: str | None,
+        conversation_ids: list[str],
+        since: str,
+        until: str,
+        after: tuple[str, str, str] | None,
         limit: int,
-        offset: int,
-    ) -> tuple[list[dict[str, Any]], int]:
-        match = self._fts_query(query, match_mode)
-        predicates = ["message_fts MATCH ?"]
-        parameters: list[Any] = [match]
-        if conversation_id:
-            predicates.append("m.conversation_id = ?")
-            parameters.append(conversation_id)
-        if since:
-            predicates.append("m.sent_at IS NOT NULL AND m.sent_at >= ?")
-            parameters.append(since)
-        if until:
-            predicates.append("m.sent_at IS NOT NULL AND m.sent_at <= ?")
-            parameters.append(until)
-        where = " AND ".join(predicates)
-        with self._connect() as connection:
-            total = connection.execute(
-                f"""SELECT COUNT(*) FROM message_fts
-                    JOIN messages m ON m.row_id = message_fts.rowid
-                    WHERE {where}""",
-                parameters,
-            ).fetchone()[0]
-            rows = connection.execute(
-                f"""SELECT m.conversation_id, m.message_id, m.author,
-                           m.sent_at, m.body, m.message_type, c.display_name
-                    FROM message_fts JOIN messages m ON m.row_id = message_fts.rowid
-                    JOIN chats c ON c.conversation_id = m.conversation_id
-                    WHERE {where}
-                    ORDER BY m.sent_at DESC, m.conversation_id, m.message_id
-                    LIMIT ? OFFSET ?""",
-                [*parameters, limit, offset],
-            ).fetchall()
-        return [dict(row) for row in rows], total
-
-    @staticmethod
-    def _fts_query(query: str, match_mode: str) -> str:
-        if match_mode == "phrase":
-            terms = [query.strip()]
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """Search normalized SQL text and return one stable keyset page."""
+        normalized = self._normalize_search_text(query)
+        predicates = ["m.is_deleted = 0", "m.sent_at IS NOT NULL"]
+        parameters: list[Any] = []
+        placeholders = ",".join("?" for _ in conversation_ids)
+        predicates.append(f"m.conversation_id IN ({placeholders})")
+        parameters.extend(conversation_ids)
+        predicates.extend(["m.sent_at >= ?", "m.sent_at <= ?"])
+        parameters.extend((since, until))
+        if match_mode == "exact":
+            predicates.append("m.body_folded = ?")
+            parameters.append(normalized)
+        elif match_mode == "substring":
+            predicates.append("m.body_folded LIKE ? ESCAPE '\\'")
+            parameters.append("%" + self._like_literal(normalized) + "%")
         elif match_mode == "all_terms":
-            terms = re.findall(r"\w+", query, flags=re.UNICODE)
+            terms = re.findall(r"\w+", normalized, flags=re.UNICODE)
             if not terms:
                 raise ValueError("query must contain at least one searchable word.")
+            for term in terms:
+                predicates.append("m.body_folded LIKE ? ESCAPE '\\'")
+                parameters.append("%" + self._like_literal(term) + "%")
         else:
-            raise ValueError("match_mode must be 'phrase' or 'all_terms'.")
-        return " AND ".join('"' + term.replace('"', '""') + '"' for term in terms)
+            raise ValueError("match_mode must be 'exact', 'substring', or 'all_terms'.")
+        if after is not None:
+            predicates.append(
+                "(m.sent_at, m.conversation_id, m.message_id) < (?, ?, ?)"
+            )
+            parameters.extend(after)
+        parameters.append(limit + 1)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""SELECT m.conversation_id, m.message_id, m.author, m.author_id,
+                           m.sent_at, m.body, m.message_type, m.edited_at,
+                           m.deleted_at, m.is_deleted, c.display_name
+                    FROM messages m JOIN chats c USING(conversation_id)
+                    WHERE {' AND '.join(predicates)}
+                    ORDER BY m.sent_at DESC, m.conversation_id DESC, m.message_id DESC
+                    LIMIT ?""",
+                parameters,
+            ).fetchall()
+        has_more = len(rows) > limit
+        return [dict(row) for row in rows[:limit]], has_more
 
     def search_chats_by_participant(
         self,

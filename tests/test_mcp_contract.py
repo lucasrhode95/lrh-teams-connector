@@ -40,7 +40,10 @@ class MCPContractTests(unittest.TestCase):
                             "list_chats",
                             "search_chats",
                             "get_messages",
+                            "get_message_content",
                             "search_messages",
+                            "export_chat",
+                            "read_export",
                             "sync_search_index",
                             "get_search_index_status",
                             "send_message",
@@ -50,13 +53,35 @@ class MCPContractTests(unittest.TestCase):
                             self.assertTrue(tool.inputSchema["properties"])
                             self.assertIsNotNone(tool.outputSchema)
 
+                        catalog_schema = str(tools_by_name["list_chats"].outputSchema)
+                        self.assertIn("catalog_scope", catalog_schema)
+                        self.assertIn("unclassified_service_rows_excluded", catalog_schema)
+                        self.assertIn(
+                            "retry_count_this_call",
+                            str(tools_by_name["get_messages"].outputSchema),
+                        )
+                        self.assertIn(
+                            "content_next_offset",
+                            str(tools_by_name["get_messages"].outputSchema),
+                        )
+                        self.assertIn(
+                            "message_retries_this_call",
+                            str(tools_by_name["sync_search_index"].outputSchema),
+                        )
+
                         search_tool = tools_by_name["search_messages"]
                         self.assertEqual(
                             search_tool.inputSchema["properties"]["match_mode"]["enum"],
-                            ["phrase", "all_terms"],
+                            ["exact", "substring", "all_terms"],
                         )
-                        self.assertNotIn(
-                            "max_messages_to_scan", search_tool.inputSchema["properties"]
+                        self.assertIn("since", search_tool.inputSchema["required"])
+                        self.assertIn("until", search_tool.inputSchema["required"])
+                        self.assertIn("max_matches", search_tool.inputSchema["properties"])
+                        templates = await session.list_resource_templates()
+                        self.assertEqual(len(templates.resourceTemplates), 1)
+                        self.assertIn(
+                            "teams-export://exports/{export_id}/parts/{offset_bytes}",
+                            templates.resourceTemplates[0].uriTemplate,
                         )
 
                         send_tool = tools_by_name["send_message"]
@@ -91,27 +116,147 @@ class MCPContractTests(unittest.TestCase):
                         )
                         self.assertIn("explicit send authorization", rejection_text)
 
-                        result = await session.call_tool(
+                        invalid_scope = await session.call_tool(
                             "search_messages", {"query": "sanitized contract probe"}
                         )
-                        if result.isError:
-                            # Local archive access is account-bound; without a
-                            # cached account the server must not open an
-                            # unverified database.
-                            error_text = " ".join(
-                                item.text for item in result.content if hasattr(item, "text")
-                            )
-                            self.assertIn("Teams sign-in is required", error_text)
-                        else:
-                            self.assertEqual(result.structuredContent["items"], [])
-                            self.assertIn("database_notice", result.structuredContent)
-                            self.assertFalse(
-                                result.structuredContent["coverage"][
-                                    "complete_for_requested_scope"
-                                ]
-                            )
+                        self.assertTrue(invalid_scope.isError)
 
             asyncio.run(exercise_client())
+
+    def test_generic_mcp_client_can_call_archive_tools_and_read_export_resource(self):
+        import asyncio
+        import json
+        from mcp.shared.memory import create_connected_server_and_client_session
+        from pydantic import AnyUrl
+
+        from teams_exporter.mcp_server import create_mcp_server
+
+        class FixtureService:
+            def get_messages(self, conversation_id, **kwargs):
+                return {
+                    "conversation": {"id": conversation_id, "name": "Fixture", "is_self_chat": False},
+                    "items": [],
+                    "next_cursor": None,
+                    "database_notice": None,
+                    "coverage": {
+                        "complete": True,
+                        "page_size": 1,
+                        "requested_page_size": 1,
+                        "raw_items_scanned_total": 0,
+                        "missing_timestamp_items_excluded_total": 0,
+                        "retry_count_this_call": 0,
+                        "since": None,
+                        "until": None,
+                        "ordering": "oldest to newest within each returned page",
+                        "continuation_direction": "older messages",
+                        "max_response_chars": 30_000,
+                        "remote_pages_fetched_total": 1,
+                        "remote_history_complete": True,
+                        "archive_messages_in_page": 0,
+                        "messages_with_truncated_content": 0,
+                        "content_continuation_tool": None,
+                    },
+                }
+
+            def get_message_content(self, conversation_id, message_id, **kwargs):
+                return {
+                    "conversation_id": conversation_id,
+                    "message_id": message_id,
+                    "offset": 0,
+                    "content": "fixture",
+                    "content_char_count": 7,
+                    "next_offset": None,
+                    "complete": True,
+                    "is_deleted": False,
+                    "edited_at": None,
+                    "deleted_at": None,
+                }
+
+            def search_messages(self, query, **kwargs):
+                return {
+                    "items": [],
+                    "max_matches": 1_000,
+                    "returned_count": 0,
+                    "returned_total": 0,
+                    "results_truncated": False,
+                    "truncation_reason": None,
+                    "next_cursor": None,
+                    "database_notice": None,
+                    "coverage": {
+                        "method": "fixture",
+                        "server_side_search_used": False,
+                        "complete_for_requested_scope": True,
+                        "preparation_complete": True,
+                        "index_generation": 1,
+                        "requested_since": "2026-09-28T00:00:00Z",
+                        "requested_until": "2026-09-29T00:00:00Z",
+                        "requested_chat_ids": ["19:fixture@thread.v2"],
+                        "chat_coverage": [],
+                        "pages_fetched_this_call": 1,
+                        "max_pages_to_fetch": 10,
+                        "failed_chat_id": None,
+                        "error": None,
+                        "continuation_tool": None,
+                    },
+                }
+
+            def export_chat(self, conversation_id, **kwargs):
+                return {
+                    "export_id": "0123456789abcdef0123456789abcdef",
+                    "status": "complete",
+                    "resource_uri": "teams-export://exports/0123456789abcdef0123456789abcdef/parts/0",
+                    "mime_type": "text/plain; charset=utf-8",
+                    "byte_size": 6,
+                    "message_count": 1,
+                    "conversation_id": conversation_id or "19:fixture@thread.v2",
+                    "since": None,
+                    "until": None,
+                    "coverage": {
+                        "complete": True,
+                        "remote_pages_fetched_total": 1,
+                        "remote_items_scanned_total": 1,
+                        "missing_timestamp_items_excluded_total": 0,
+                        "retry_count_this_call": 0,
+                        "archive_included": True,
+                    },
+                    "next_call_tool": None,
+                    "next_call_arguments": None,
+                }
+
+            def read_export(self, export_id, **kwargs):
+                return {
+                    "export_id": export_id,
+                    "offset_bytes": kwargs.get("offset_bytes", 0),
+                    "content": "sample",
+                    "byte_size": 6,
+                    "next_offset_bytes": None,
+                    "complete": True,
+                }
+
+        async def exercise():
+            async with create_connected_server_and_client_session(
+                create_mcp_server(FixtureService())
+            ) as session:
+                page = await session.call_tool(
+                    "get_messages",
+                    {"conversation_id": "19:fixture@thread.v2", "page_size": 1},
+                )
+                self.assertFalse(page.isError)
+                self.assertEqual(page.structuredContent["items"], [])
+
+                exported = await session.call_tool(
+                    "export_chat", {"conversation_id": "19:fixture@thread.v2"}
+                )
+                self.assertFalse(exported.isError)
+                uri = exported.structuredContent["resource_uri"]
+                self.assertTrue(uri.startswith("teams-export://exports/"))
+
+                resource = await session.read_resource(AnyUrl(uri))
+                payload = json.loads(resource.contents[0].text)
+                self.assertEqual(payload["content"], "sample")
+                self.assertTrue(payload["complete"])
+
+        asyncio.run(exercise())
 
 
 if __name__ == "__main__":

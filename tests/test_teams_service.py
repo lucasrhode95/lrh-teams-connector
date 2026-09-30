@@ -7,9 +7,11 @@ from pathlib import Path
 
 from teams_exporter.teams_connector import (
     AuthenticationRequiredError,
+    ChatCatalogCoverage,
     ChatSummary,
     TeamsConnector,
 )
+from teams_exporter.teams_exporter import TeamsExporter
 from teams_exporter.teams_search_index import TeamsSearchIndex
 from teams_exporter.teams_service import InvalidCursorError, TeamsService
 
@@ -42,14 +44,23 @@ class ServiceConnector(TeamsConnector):
         self.pages = {}
         self.members = {}
         self.page_calls = []
+        self.retry_counts = []
         self.login_calls = 0
+        self.interactive_login_values = []
         self.auth_required = False
         self.sent_messages = []
+        self.profile_picture_calls = []
 
     def login(self, *, interactive=True):
         self.login_calls += 1
+        self.interactive_login_values.append(interactive)
         if self.auth_required:
             raise AuthenticationRequiredError("sign-in needed")
+        self._spaces_access_token = "sanitized-spaces-token"
+        self._csa_access_token = "sanitized-csa-token"
+        self._skype_token = "sanitized-skype-token"
+        self._chat_service_url = "https://chat.example.test"
+        self._middle_tier_url = "https://middle.example.test"
 
     def list_chats(self):
         return self.chats
@@ -64,10 +75,52 @@ class ServiceConnector(TeamsConnector):
         continuation_url=None,
     ):
         self.page_calls.append((conversation_id, page_size, since, until, continuation_url))
+        self.last_request_retry_count = (
+            self.retry_counts.pop(0) if self.retry_counts else 0
+        )
         pages = self.pages.get(conversation_id, [([], None)])
         index = 0 if continuation_url is None else int(continuation_url.rsplit(":", 1)[1])
         page, next_url = pages[index]
         return page, next_url, len(page), 0
+
+    def iter_message_pages(
+        self,
+        conversation_id,
+        *,
+        limit=None,
+        since=None,
+        until=None,
+        cancel_event=None,
+        progress_callback=None,
+    ):
+        pages = self.pages.get(conversation_id, [([], None)])
+        messages_read = 0
+        retries = 0
+        self.last_message_read_coverage = {
+            "complete": False,
+            "pages_fetched": 0,
+            "messages_retrieved": 0,
+            "missing_timestamp_messages_excluded": 0,
+            "retry_count": 0,
+        }
+        for page_index, (page, next_url) in enumerate(pages):
+            if cancel_event is not None and cancel_event.is_set():
+                return
+            self.page_calls.append((conversation_id, 100, since, until, None if page_index == 0 else f"page:{page_index}"))
+            messages_read += len(page)
+            retries += self.retry_counts.pop(0) if self.retry_counts else 0
+            self.last_message_read_coverage = {
+                "complete": next_url is None,
+                "pages_fetched": page_index + 1,
+                "messages_retrieved": messages_read,
+                "missing_timestamp_messages_excluded": 0,
+                "retry_count": retries,
+            }
+            if progress_callback is not None:
+                progress_callback(page_index + 1, messages_read, retries)
+            yield page
+            if next_url is None:
+                break
 
     def get_conversation_members(self, conversation_id):
         if conversation_id not in self.members:
@@ -82,6 +135,10 @@ class ServiceConnector(TeamsConnector):
             "sent_at": "2026-09-22T00:30:56.789Z",
         }
 
+    def get_profile_picture(self, url):
+        self.profile_picture_calls.append(url)
+        return b"sanitized-image", "image/png"
+
 
 class TeamsServiceTests(unittest.TestCase):
     def setUp(self):
@@ -91,14 +148,65 @@ class TeamsServiceTests(unittest.TestCase):
         index = TeamsSearchIndex(Path(self.temp.name) / "search.sqlite3")
         self.service = TeamsService(connector=self.connector, index=index)
 
+    def test_authentication_check_does_not_load_chat_catalog(self):
+        result = self.service.check_authentication()
+        self.service.check_authentication()
+
+        self.assertEqual(result, {"authenticated": True})
+        self.assertEqual(self.connector.login_calls, 1)
+        self.assertEqual(self.connector.interactive_login_values, [False])
+        self.assertTrue(self.service.has_recent_connection)
+        self.assertIsNone(self.service._chats_cache)
+
+        self.connector.invalidate_session()
+        self.assertFalse(self.service.has_recent_connection)
+        self.service.check_authentication()
+        self.assertEqual(self.connector.login_calls, 2)
+
+    def test_authentication_check_uses_noninteractive_sign_in(self):
+        self.connector.auth_required = True
+
+        with self.assertRaises(AuthenticationRequiredError):
+            self.service.check_authentication()
+
+        self.assertEqual(self.connector.login_calls, 1)
+        self.assertEqual(self.connector.interactive_login_values, [False])
+        self.assertEqual(self.connector.page_calls, [])
+
+    def test_profile_picture_uses_shared_authentication_hook(self):
+        image, content_type = self.service.get_profile_picture(
+            "https://middle.example.test/profilepicturev2/safe-id"
+        )
+
+        self.assertEqual((image, content_type), (b"sanitized-image", "image/png"))
+        self.assertEqual(self.connector.login_calls, 1)
+        self.assertEqual(self.connector.interactive_login_values, [False])
+        self.assertEqual(
+            self.connector.profile_picture_calls,
+            ["https://middle.example.test/profilepicturev2/safe-id"],
+        )
+
     def test_list_chats_returns_bounded_pages_and_coverage(self):
+        self.connector.catalog_coverage = ChatCatalogCoverage(
+            catalog_complete=False,
+            catalog_source="sanitized fixture",
+            catalog_scope="Fixture chats only.",
+            csa_reported_partial=True,
+            chat_service_unique_rows=4,
+            fallback_chats_added=1,
+            unclassified_service_rows_excluded=1,
+        )
         first = self.service.list_chats(page_size=1)
         second = self.service.list_chats(page_size=1, page_token=first["next_page_token"])
 
         self.assertEqual([row["id"] for row in first["items"]], ["19:alpha@thread.v2"])
         self.assertEqual([row["id"] for row in second["items"]], ["19:beta@thread.v2"])
         self.assertIsNone(second["next_page_token"])
-        self.assertTrue(first["coverage"]["catalog_complete"])
+        self.assertFalse(first["coverage"]["catalog_complete"])
+        self.assertEqual(first["coverage"]["catalog_source"], "sanitized fixture")
+        self.assertEqual(first["coverage"]["chat_service_unique_rows"], 4)
+        self.assertEqual(first["coverage"]["fallback_chats_added"], 1)
+        self.assertEqual(first["coverage"]["unclassified_service_rows_excluded"], 1)
         self.assertEqual(self.service.index.counts()["catalog_chats"], 2)
 
     def test_avatar_uris_are_opt_in_for_local_ui_and_omitted_by_default(self):
@@ -144,18 +252,120 @@ class TeamsServiceTests(unittest.TestCase):
         self.assertTrue(second["coverage"]["complete"])
         self.assertEqual(second["coverage"]["raw_items_scanned_total"], 4)
 
-    def test_get_messages_marks_per_message_content_truncation_explicitly(self):
-        long_body = "x" * 1_250
+    def test_get_messages_reports_retry_count_for_each_page_request(self):
+        self.connector.pages["19:alpha@thread.v2"] = [
+            ([message("m2", 2, "second")], "page:1"),
+            ([message("m1", 1, "first")], None),
+        ]
+        self.connector.retry_counts = [2, 1]
+
+        first = self.service.get_messages("19:alpha@thread.v2")
+        second = self.service.get_messages(
+            "19:alpha@thread.v2", cursor=first["next_cursor"]
+        )
+
+        self.assertEqual(first["coverage"]["retry_count_this_call"], 2)
+        self.assertEqual(second["coverage"]["retry_count_this_call"], 1)
+
+    def test_search_fetches_explicit_scope_in_bounded_calls_and_reports_coverage(self):
+        self.connector.pages["19:alpha@thread.v2"] = [
+            ([message("m1", 1, "deployment start")], "page:1"),
+            ([message("m2", 2, "deployment complete")], None),
+        ]
+        since = datetime(2026, 9, 28, 10, 0, 0, tzinfo=timezone.utc)
+        until = datetime(2026, 9, 28, 10, 1, 0, tzinfo=timezone.utc)
+
+        first = self.service.search_messages(
+            "deployment",
+            conversation_ids=["19:alpha@thread.v2"],
+            since=since,
+            until=until,
+            max_pages_to_fetch=1,
+        )
+        second = self.service.search_messages(
+            "deployment",
+            conversation_ids=["19:alpha@thread.v2"],
+            since=since,
+            until=until,
+            max_pages_to_fetch=1,
+            cursor=first["next_cursor"],
+        )
+
+        self.assertEqual(first["items"], [])
+        self.assertFalse(first["coverage"]["complete_for_requested_scope"])
+        self.assertEqual(first["coverage"]["chat_coverage"][0]["conversation_id"], "19:alpha@thread.v2")
+        self.assertEqual(first["coverage"]["chat_coverage"][0]["since"], "2026-09-28T10:00:00Z")
+        self.assertEqual(first["coverage"]["chat_coverage"][0]["until"], "2026-09-28T10:01:00Z")
+        self.assertTrue(second["coverage"]["complete_for_requested_scope"])
+        self.assertEqual([item["id"] for item in second["items"]], ["m2", "m1"])
+
+    def test_search_escapes_sql_like_metacharacters_and_keeps_accents_significant(self):
+        self.connector.pages["19:alpha@thread.v2"] = [
+            ([message("literal", 1, "The value is 100%_ready; São Paulo")], None)
+        ]
+        since = datetime(2026, 9, 28, 10, 0, 0, tzinfo=timezone.utc)
+        until = datetime(2026, 9, 28, 10, 1, 0, tzinfo=timezone.utc)
+
+        literal = self.service.search_messages(
+            "100%_ready",
+            conversation_ids=["19:alpha@thread.v2"],
+            since=since,
+            until=until,
+        )
+        unaccented = self.service.search_messages(
+            "Sao Paulo",
+            conversation_ids=["19:alpha@thread.v2"],
+            since=since,
+            until=until,
+        )
+
+        self.assertEqual([item["id"] for item in literal["items"]], ["literal"])
+        self.assertEqual(unaccented["items"], [])
+
+    def test_local_ui_export_fetches_and_merges_persisted_messages(self):
+        chat = self.connector.chats[0]
+        self.service.index.upsert_messages(
+            chat.id,
+            [message("local", 1, "older retained local message")],
+            formatter=self.service.formatter,
+        )
+        self.connector.pages[chat.id] = [
+            ([message("remote", 2, "new Teams message")], None)
+        ]
+        destination = Path(self.temp.name) / "conversation.txt"
+
+        TeamsExporter(
+            self.connector,
+            self.service.formatter,
+            service=self.service,
+        ).export_chat(chat, destination, limit=2)
+
+        content = destination.read_text(encoding="utf-8")
+        self.assertIn("older retained local message", content)
+        self.assertIn("new Teams message", content)
+        self.assertEqual(self.service.index.count_messages_in_range(chat.id, since=None, until=None), 2)
+
+    def test_get_messages_bounds_output_and_continues_truncated_message_content(self):
+        long_body = "x" * 8_000
         self.connector.pages["19:alpha@thread.v2"] = [
             ([message("long", 1, long_body)], None)
         ]
 
-        result = self.service.get_messages("19:alpha@thread.v2")
+        result = self.service.get_messages(
+            "19:alpha@thread.v2", max_response_chars=4_096
+        )
 
         item = result["items"][0]
-        self.assertEqual(len(item["content"]), 1_200)
+        self.assertLessEqual(len(__import__("json").dumps(result, ensure_ascii=False)), 4_096)
         self.assertTrue(item["content_truncated"])
-        self.assertEqual(item["content_char_count"], 1_250)
+        self.assertEqual(item["content_char_count"], 8_000)
+        remainder = self.service.get_message_content(
+            "19:alpha@thread.v2",
+            "long",
+            offset=item["content_next_offset"],
+        )
+        self.assertEqual(item["content"] + remainder["content"], long_body)
+        self.assertTrue(remainder["complete"])
 
     def test_mcp_message_timestamps_are_normalized_to_utc(self):
         localized_message = message("localized", 1, "time zone probe")
@@ -185,6 +395,7 @@ class TeamsServiceTests(unittest.TestCase):
         self.connector.members["19:alpha@thread.v2"] = [
             {"id": "8:orgid:1", "userDisplayName": "Taylor Example"}
         ]
+        self.connector.retry_counts = [2, 1, 0]
 
         first = self.service.sync_search_index(
             conversation_id="19:alpha@thread.v2",
@@ -204,15 +415,22 @@ class TeamsServiceTests(unittest.TestCase):
 
         self.assertFalse(first["items"][0]["message_history_complete"])
         self.assertEqual(first["items"][0]["messages_added_this_call"], 2)
+        self.assertEqual(first["items"][0]["message_retries_this_call"], 2)
         self.assertTrue(second["items"][0]["message_history_complete"])
         self.assertEqual(second["items"][0]["messages_added_this_call"], 1)
+        self.assertEqual(second["items"][0]["message_retries_this_call"], 1)
         self.assertEqual(second["items"][0]["messages_stored_total"], 3)
         self.assertEqual(third["items"][0]["messages_added_this_call"], 0)
         self.assertTrue(third["items"][0]["message_history_complete"])
         self.assertEqual([call[4] for call in self.connector.page_calls], [None, "page:1", None])
 
-        result = self.service.search_messages("deployment update", conversation_id="19:alpha@thread.v2")
-        self.assertEqual(result["total_matches_in_index"], 1)
+        result = self.service.search_messages(
+            "deployment update",
+            conversation_ids=["19:alpha@thread.v2"],
+            since=datetime(2026, 9, 28, 10, 0, 0, tzinfo=timezone.utc),
+            until=datetime(2026, 9, 28, 10, 1, 0, tzinfo=timezone.utc),
+        )
+        self.assertEqual(result["returned_count"], 1)
         self.assertEqual(result["items"][0]["id"], "m2")
         self.assertEqual(result["items"][0]["author"], "A Sender")
         self.assertTrue(result["coverage"]["complete_for_requested_scope"])
@@ -257,7 +475,10 @@ class TeamsServiceTests(unittest.TestCase):
         self.assertFalse(first["items"][0]["message_history_complete"])
         self.assertTrue(second["items"][0]["message_history_complete"])
         result = reopened_service.search_messages(
-            "older retained deployment", conversation_id="19:alpha@thread.v2"
+            "older retained deployment",
+            conversation_ids=["19:alpha@thread.v2"],
+            since=datetime(2026, 9, 28, 10, 0, 0, tzinfo=timezone.utc),
+            until=datetime(2026, 9, 28, 10, 1, 0, tzinfo=timezone.utc),
         )
         self.assertEqual([item["id"] for item in result["items"]], ["m2"])
         self.assertTrue(result["coverage"]["complete_for_requested_scope"])
@@ -382,25 +603,31 @@ class TeamsServiceTests(unittest.TestCase):
         self.assertEqual(result["delivery_status"], "accepted")
         self.assertNotIn("user_confirmation", result)
 
-    def test_local_search_does_not_start_authentication_or_wait_for_sign_in(self):
-        result = self.service.search_messages("anything")
-        self.assertEqual(result["items"], [])
-        self.assertFalse(result["coverage"]["complete_for_requested_scope"])
+    def test_local_search_requires_explicit_scope_before_authentication(self):
+        with self.assertRaisesRegex(ValueError, "since and until are required"):
+            self.service.search_messages("anything")
         self.assertEqual(self.connector.login_calls, 0)
 
     def test_invalid_or_mismatched_search_continuation_is_rejected(self):
         self.connector.pages["19:alpha@thread.v2"] = [
             ([message("m1", 1, "deployment alpha"), message("m2", 2, "deployment beta")], None)
         ]
-        self.service.sync_search_index(
-            conversation_id="19:alpha@thread.v2", include_participants=False
-        )
         first = self.service.search_messages(
-            "deployment", conversation_id="19:alpha@thread.v2", result_limit=1
+            "deployment",
+            conversation_ids=["19:alpha@thread.v2"],
+            since=datetime(2026, 9, 28, 10, 0, 0, tzinfo=timezone.utc),
+            until=datetime(2026, 9, 28, 10, 1, 0, tzinfo=timezone.utc),
+            result_limit=1,
         )
         self.assertIsNotNone(first["next_cursor"])
         with self.assertRaises(InvalidCursorError):
-            self.service.search_messages("another query", cursor=first["next_cursor"])
+            self.service.search_messages(
+                "another query",
+                conversation_ids=["19:alpha@thread.v2"],
+                since=datetime(2026, 9, 28, 10, 0, 0, tzinfo=timezone.utc),
+                until=datetime(2026, 9, 28, 10, 1, 0, tzinfo=timezone.utc),
+                cursor=first["next_cursor"],
+            )
 
 
 if __name__ == "__main__":

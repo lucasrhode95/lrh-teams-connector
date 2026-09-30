@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import html
+import http.client
 import json
 import os
+import re
+import tempfile
+import time
+import uuid
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any
-from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+from threading import Event
+from typing import Any, Callable, Iterator
+from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsplit
 
 import msal
 
@@ -25,14 +32,120 @@ class ChatSummary:
     unread: bool | None = None
     chat_type: str | None = None
     avatar_url: str | None = None
+    is_self_chat: bool = False
+
+
+@dataclass(slots=True)
+class ChatCatalogCoverage:
+    """Provenance and completeness for one normalized chat catalog read."""
+
+    catalog_complete: bool
+    catalog_source: str
+    catalog_scope: str
+    csa_reported_partial: bool | None
+    chat_service_unique_rows: int | None = None
+    fallback_chats_added: int = 0
+    non_chat_service_rows_excluded: int = 0
+    unclassified_service_rows_excluded: int = 0
+    fallback_name_lookups_attempted: int = 0
+    fallback_chats_without_resolved_name: int = 0
 
 
 class AuthenticationRequiredError(RuntimeError):
     """Raised when the cached Microsoft session needs an interactive sign-in."""
 
 
+class _TokenCacheLock:
+    """Small cross-process lock for the app-owned MSAL cache file."""
+
+    def __init__(self, path: Path, timeout_seconds: float = 30.0) -> None:
+        self.path = path
+        self.timeout_seconds = timeout_seconds
+        self._stream = None
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._stream = self.path.open("a+b")
+        if self._stream.seek(0, os.SEEK_END) == 0:
+            self._stream.write(b"0")
+            self._stream.flush()
+        deadline = time.monotonic() + self.timeout_seconds
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+
+                    self._stream.seek(0)
+                    msvcrt.locking(self._stream.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(self._stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return self
+            except (OSError, BlockingIOError):
+                if time.monotonic() >= deadline:
+                    self._stream.close()
+                    self._stream = None
+                    raise RuntimeError(
+                        "The Teams token cache is busy in another process. Retry shortly."
+                    )
+                time.sleep(0.1)
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        if self._stream is None:
+            return
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                self._stream.seek(0)
+                msvcrt.locking(self._stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self._stream.fileno(), fcntl.LOCK_UN)
+        finally:
+            self._stream.close()
+            self._stream = None
+
+
+class ExtractionCancelled(RuntimeError):
+    """Raised when a caller asks an in-progress history read to stop."""
+
+
+class _TransientTeamsRequestError(RuntimeError):
+    def __init__(self, message: str, retry_after: str | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+class _MiddleTierRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Follow picture redirects only when they stay on the token's host."""
+
+    def __init__(self, middle_tier_url: str) -> None:
+        super().__init__()
+        self._middle_tier_netloc = urlsplit(middle_tier_url).netloc.lower()
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target = urlsplit(urljoin(req.full_url, newurl))
+        if (
+            target.scheme != "https"
+            or target.netloc.lower() != self._middle_tier_netloc
+            or target.username
+            or target.password
+        ):
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 class TeamsConnector:
     """Read chat catalogs and message history through Teams service APIs."""
+
+    PROFILE_PICTURE_PATH = re.compile(
+        r"(?:^|/)users/[A-Za-z0-9:@._-]+/profilepicturev2"
+        r"(?:/[A-Za-z0-9:@._-]+)?$",
+        re.IGNORECASE,
+    )
 
     TEAMS_CLIENT_ID = "1fec8e78-bce4-4aaf-ab1b-5451cc387264"
     SPACES_SCOPE = "https://api.spaces.skype.com/.default"
@@ -42,16 +155,56 @@ class TeamsConnector:
         "https://teams.microsoft.com/api/csa/api/v1/teams/users/me"
         "?isPrefetch=false&enableMembershipSummary=true"
     )
+    SELF_CHAT_ID = "48:notes"
+    CHAT_CATALOG_SCOPE = (
+        "CSA chat and meeting entries plus the known notes-to-self chat; "
+        "team/channel entities and Teams service streams are excluded."
+    )
+    CHAT_SERVICE_CHAT_TYPES = {"chat", "onetoonechat", "meeting"}
+    CHAT_SERVICE_NON_CHAT_TYPES = {
+        "space",
+        "topic",
+        "teamsteam",
+        "teamsstandardchannel",
+        "teamssharedchannel",
+        "streamofnotes",
+        "streamofnotifications",
+        "streamofmentions",
+        "streamofcalllogs",
+        "streamofannotations",
+        "streamofgeneric",
+    }
+    MAX_FALLBACK_NAME_LOOKUPS = 20
+    READ_REQUEST_MAX_ATTEMPTS = 4
+    READ_RETRY_BASE_SECONDS = 0.25
+    READ_RETRY_MAX_SECONDS = 8.0
+    READ_RETRY_AFTER_MAX_SECONDS = 10.0
+    RETRYABLE_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
+    _MESSAGE_AUTHOR_MRI = re.compile(
+        r"(?i)(?<![a-z0-9])(8:orgid:[0-9a-f]{8}-[0-9a-f]{4}-"
+        r"[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?![0-9a-f])"
+    )
+    _OBJECT_ID = re.compile(
+        r"(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+        r"[0-9a-f]{4}-[0-9a-f]{12}"
+    )
     MESSAGE_PAGE_SIZE = 100
     REQUEST_TIMEOUT_SECONDS = 30
 
     def __init__(
         self,
         tenant: str = "organizations",
-        cache_path: str | Path = ".teams_token_cache.json",
+        cache_path: str | Path | None = None,
     ) -> None:
         self._authority = f"https://login.microsoftonline.com/{tenant}"
-        self._cache_path = Path(cache_path)
+        self._uses_default_cache_path = cache_path is None
+        self._cache_path = (
+            self._default_cache_path() if cache_path is None else Path(cache_path)
+        )
+        self._cache_path = self._cache_path.expanduser().resolve()
+        self._cache_lock_path = self._cache_path.with_suffix(
+            self._cache_path.suffix + ".lock"
+        )
         self._spaces_access_token: str | None = None
         self._csa_access_token: str | None = None
         self._skype_token: str | None = None
@@ -61,6 +214,22 @@ class TeamsConnector:
         self._middle_tier_url: str | None = None
         self._auth_sources: dict[str, str] = {}
         self._last_client_message_id = 0
+        self.last_request_retry_count = 0
+        self.last_message_read_coverage: dict[str, Any] = {
+            "complete": False,
+            "pages_fetched": 0,
+            "raw_items_scanned": 0,
+            "messages_retrieved": 0,
+            "duplicate_messages_skipped": 0,
+            "missing_timestamp_messages_excluded": 0,
+            "retry_count": 0,
+        }
+        self.catalog_coverage = ChatCatalogCoverage(
+            catalog_complete=False,
+            catalog_source="not loaded",
+            catalog_scope=self.CHAT_CATALOG_SCOPE,
+            csa_reported_partial=None,
+        )
 
     def login(self, *, interactive: bool = True) -> None:
         """Restore the cached session, optionally starting device-code login.
@@ -68,25 +237,25 @@ class TeamsConnector:
         MCP callers must use ``interactive=False`` so an expired or missing
         session returns a clear error instead of waiting on a terminal prompt.
         """
-        cache = self._load_token_cache()
-        app = msal.PublicClientApplication(
-            client_id=self.TEAMS_CLIENT_ID,
-            authority=self._authority,
-            token_cache=cache,
-        )
+        with _TokenCacheLock(self._cache_lock_path):
+            self._migrate_repository_cache_if_needed()
+            cache = self._load_token_cache()
+            app = msal.PublicClientApplication(
+                client_id=self.TEAMS_CLIENT_ID,
+                authority=self._authority,
+                token_cache=cache,
+            )
+            spaces_result, spaces_source = self._acquire_resource_token(
+                app, self.SPACES_SCOPE, interactive=interactive
+            )
+            csa_result, csa_source = self._acquire_resource_token(
+                app, self.CSA_SCOPE, interactive=interactive
+            )
 
-        spaces_result, spaces_source = self._acquire_resource_token(
-            app, self.SPACES_SCOPE, interactive=interactive
-        )
-        csa_result, csa_source = self._acquire_resource_token(
-            app, self.CSA_SCOPE, interactive=interactive
-        )
         self._auth_sources = {
             "spaces": spaces_source,
             "csa": csa_source,
         }
-        self._persist_token_cache(cache)
-
         self._spaces_access_token = spaces_result["access_token"]
         self._csa_access_token = csa_result["access_token"]
         self._spaces_claims = self._decode_jwt_payload(self._spaces_access_token)
@@ -166,17 +335,99 @@ class TeamsConnector:
         query = urlencode({"displayname": name or "", "size": "HR64x64"})
         return urlunsplit((middle_tier.scheme, middle_tier.netloc, picture_path, query, ""))
 
+    def can_fetch_profile_picture(self, url: str) -> bool:
+        """Whether this profile-picture URL belongs to the authenticated Middle Tier."""
+        if not isinstance(url, str):
+            return False
+        expected = urlsplit(self._middle_tier_url or "")
+        actual = urlsplit(url)
+        return (
+            actual.scheme == "https"
+            and bool(expected.netloc)
+            and actual.netloc.lower() == expected.netloc.lower()
+            and bool(self.PROFILE_PICTURE_PATH.search(actual.path))
+        )
+
+    def get_profile_picture(self, url: str) -> tuple[bytes, str]:
+        """Fetch one profile picture with the saved Teams Web bearer token."""
+        self._require_logged_in()
+        if not self.can_fetch_profile_picture(url):
+            raise RuntimeError("Refusing a profile picture URL outside the configured Middle Tier.")
+        self._validate_service_url(url, self._middle_tier_url, "Middle Tier")
+
+        request = urllib.request.Request(
+            url,
+            method="GET",
+            headers={
+                "Authorization": f"Bearer {self._spaces_access_token}",
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                "User-Agent": "Microsoft Teams compatible client",
+            },
+        )
+        opener = urllib.request.build_opener(
+            _MiddleTierRedirectHandler(self._middle_tier_url or "")
+        )
+        max_image_bytes = 2_000_000
+        for attempt in range(1, self.READ_REQUEST_MAX_ATTEMPTS + 1):
+            retry_after = None
+            try:
+                with opener.open(request, timeout=self.REQUEST_TIMEOUT_SECONDS) as response:
+                    content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+                    if not content_type.startswith("image/"):
+                        raise RuntimeError("Teams returned a non-image profile picture response.")
+                    content_length = response.headers.get("Content-Length")
+                    if content_length and int(content_length) > max_image_bytes:
+                        raise RuntimeError("Teams profile picture exceeded the image size limit.")
+                    content = response.read(max_image_bytes + 1)
+                    if len(content) > max_image_bytes:
+                        raise RuntimeError("Teams profile picture exceeded the image size limit.")
+                    return content, content_type
+            except urllib.error.HTTPError as exc:
+                if exc.code in {401, 403}:
+                    exc.close()
+                    self._clear_session()
+                    raise AuthenticationRequiredError(
+                        "Teams no longer accepts the stored credentials for this request. "
+                        "Run `python -m teams_exporter auth` and retry."
+                    ) from None
+                if exc.code not in self.RETRYABLE_HTTP_STATUSES:
+                    status = exc.code
+                    exc.close()
+                    raise RuntimeError(
+                        f"Teams profile picture request failed with HTTP {status}."
+                    ) from None
+                retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                exc.close()
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                if attempt >= self.READ_REQUEST_MAX_ATTEMPTS:
+                    raise RuntimeError(
+                        "Teams profile picture request failed after "
+                        f"{self.READ_REQUEST_MAX_ATTEMPTS} attempts: "
+                        f"{self._safe_exception_detail(exc)}"
+                    ) from None
+
+            if attempt >= self.READ_REQUEST_MAX_ATTEMPTS:
+                raise RuntimeError(
+                    "Teams profile picture request failed after "
+                    f"{self.READ_REQUEST_MAX_ATTEMPTS} attempts."
+                ) from None
+            time.sleep(self._read_retry_delay(attempt, retry_after))
+
+        raise RuntimeError("Teams profile picture request failed without a response.")
+
     def get_cached_account_metadata(self) -> dict[str, Any] | None:
         """Return the first cached MSAL account without making network requests.
 
         This lets local archive searches select the account-specific database
         without attempting sign-in or contacting Microsoft.
         """
-        cache = self._load_token_cache()
-        # Read account records directly from MSAL's serialized cache. Creating
-        # PublicClientApplication can perform OpenID metadata discovery, which
-        # would make local-only archive searches depend on network access.
-        accounts = cache.find(msal.TokenCache.CredentialType.ACCOUNT)
+        with _TokenCacheLock(self._cache_lock_path):
+            self._migrate_repository_cache_if_needed()
+            cache = self._load_token_cache()
+        # Read the cached account directly. Creating PublicClientApplication
+        # can perform OpenID metadata discovery, which would make local-only
+        # archive searches depend on network access.
+        accounts = list(cache.search(msal.TokenCache.CredentialType.ACCOUNT))
         if not accounts:
             return None
         account = accounts[0]
@@ -206,15 +457,33 @@ class TeamsConnector:
             "region_gtms": self._authz_response.get("regionGtms"),
         }
 
+    @property
+    def has_active_session(self) -> bool:
+        """Whether this connector currently holds a completed Teams session."""
+        return bool(
+            self._spaces_access_token
+            and self._csa_access_token
+            and self._skype_token
+            and self._chat_service_url
+            and self._middle_tier_url
+        )
+
     def list_chats(self) -> list[ChatSummary]:
         """Return a normalized chat catalog in Teams-visible activity order."""
         self._require_logged_in()
         payload = self._request_csa(self.CSA_STARTUP_URL)
         metadata = self._mapping(payload.get("metadata"))
-        is_partial = (
-            metadata.get("isPartialData") is True
-            or metadata.get("hasMoreChats") is True
+        is_partial = metadata.get("isPartialData") is True or metadata.get(
+            "hasMoreChats"
+        ) is True
+        csa_reported_complete = (
+            metadata.get("isPartialData") is False
+            and metadata.get("hasMoreChats") is False
         )
+        csa_reported_partial = (
+            True if is_partial else False if csa_reported_complete else None
+        )
+        needs_chat_service_fallback = csa_reported_partial is not False
         chats = payload.get("chats")
         if not isinstance(chats, list):
             raise RuntimeError("Unexpected CSA response: 'chats' is not a list.")
@@ -222,10 +491,10 @@ class TeamsConnector:
         normalized: list[ChatSummary] = []
         for chat in chats:
             if not isinstance(chat, dict):
-                continue
+                raise RuntimeError("Unexpected CSA response: a chat row is not an object.")
             chat_id = chat.get("id")
             if not isinstance(chat_id, str) or not chat_id:
-                continue
+                raise RuntimeError("Unexpected CSA response: a chat row has no ID.")
             last_message = self._mapping(chat.get("lastMessage"))
             title = (
                 chat.get("title")
@@ -254,6 +523,7 @@ class TeamsConnector:
                     unread=unread,
                     chat_type=chat_type,
                     avatar_url=self._avatar_url_from_rows(chat),
+                    is_self_chat=chat_id == self.SELF_CHAT_ID,
                 )
             )
         self._resolve_untitled_one_to_one_names(
@@ -262,23 +532,202 @@ class TeamsConnector:
             payload.get("users"),
         )
         self._add_one_to_one_profile_picture_uris(chats, normalized)
-        if is_partial:
+        fallback_rows: list[dict[str, Any]] = []
+        fallback_summaries: list[ChatSummary] = []
+        fallback_chats_added = 0
+        non_chat_rows_excluded = 0
+        unclassified_rows_excluded = 0
+        chat_service_unique_rows: int | None = None
+        fallback_name_lookups_attempted = 0
+        fallback_chats_without_name = 0
+        if needs_chat_service_fallback:
+            service_rows = self._list_chat_service_conversations()
+            chat_service_unique_rows = len(service_rows)
             known_ids = {chat.id for chat in normalized}
-            for row in self._list_chat_service_conversations():
+            for row in service_rows:
                 conversation_id = row.get("id")
                 if not isinstance(conversation_id, str) or conversation_id in known_ids:
                     continue
-                normalized.append(self._summarize_chat_service_conversation(row))
+                row_kind = self._chat_service_conversation_kind(row)
+                if row_kind == "non_chat":
+                    non_chat_rows_excluded += 1
+                    continue
+                if row_kind != "chat":
+                    unclassified_rows_excluded += 1
+                    continue
+                summary = self._summarize_chat_service_conversation(row)
+                normalized.append(summary)
+                fallback_rows.append(row)
+                fallback_summaries.append(summary)
+                fallback_chats_added += 1
                 known_ids.add(conversation_id)
+            fallback_name_lookups_attempted = self._resolve_fallback_chat_names(
+                fallback_rows, normalized
+            )
+        self_chat_synthesized = not any(
+            chat.id == self.SELF_CHAT_ID for chat in normalized
+        )
+        self._ensure_self_chat(normalized)
+        fallback_chats_without_name = sum(
+            summary.display_name == summary.id
+            for summary in fallback_summaries
+        )
         # The visible Teams chat rows matched descending last-message time in a live
         # comparison better than the raw CSA array. Stable sorting retains the
         # CSA order when two chats have the same timestamp.
         oldest = datetime.min.replace(tzinfo=timezone.utc)
-        return sorted(
+        ordered = sorted(
             normalized,
-            key=lambda chat: chat.last_message_at or oldest,
+            key=lambda chat: (
+                chat.is_self_chat,
+                chat.last_message_at or oldest,
+            ),
             reverse=True,
         )
+
+        self.catalog_coverage = ChatCatalogCoverage(
+            catalog_complete=(
+                csa_reported_partial is False
+                or (
+                    chat_service_unique_rows is not None
+                    and unclassified_rows_excluded == 0
+                )
+            ),
+            catalog_source=(
+                "; ".join(
+                    source
+                    for source, enabled in (
+                        ("CSA startup", True),
+                        (
+                            "paginated Chat Service fallback",
+                            chat_service_unique_rows is not None,
+                        ),
+                        ("known self-chat correction", self_chat_synthesized),
+                    )
+                    if enabled
+                )
+            ),
+            catalog_scope=self.CHAT_CATALOG_SCOPE,
+            csa_reported_partial=csa_reported_partial,
+            chat_service_unique_rows=chat_service_unique_rows,
+            fallback_chats_added=fallback_chats_added,
+            non_chat_service_rows_excluded=non_chat_rows_excluded,
+            unclassified_service_rows_excluded=unclassified_rows_excluded,
+            fallback_name_lookups_attempted=fallback_name_lookups_attempted,
+            fallback_chats_without_resolved_name=fallback_chats_without_name,
+        )
+        return ordered
+
+    @classmethod
+    def _chat_service_conversation_kind(cls, conversation: dict[str, Any]) -> str:
+        """Classify Chat Service rows before merging them into the chat catalog."""
+        if conversation.get("id") == cls.SELF_CHAT_ID:
+            return "chat"
+        thread_properties = cls._mapping(conversation.get("threadProperties"))
+        raw_types = (
+            thread_properties.get("productThreadType"),
+            thread_properties.get("threadType"),
+        )
+        normalized_types = {
+            value.casefold().replace("_", "").replace("-", "").replace(" ", "")
+            for value in raw_types
+            if isinstance(value, str) and value.strip()
+        }
+        if normalized_types & cls.CHAT_SERVICE_NON_CHAT_TYPES:
+            return "non_chat"
+        if normalized_types & cls.CHAT_SERVICE_CHAT_TYPES:
+            return "chat"
+        return "unclassified"
+
+    def _resolve_fallback_chat_names(
+        self,
+        service_rows: list[dict[str, Any]],
+        chats: list[ChatSummary],
+    ) -> int:
+        """Resolve a bounded number of untitled fallback one-to-one chats."""
+        own_id = self._profile_identifier(self._spaces_claims.get("oid"))
+        if not own_id:
+            return 0
+        summaries = {chat.id: chat for chat in chats}
+        candidates = []
+        for row in service_rows:
+            conversation_id = row.get("id")
+            summary = summaries.get(conversation_id)
+            thread_properties = self._mapping(row.get("threadProperties"))
+            product_type = thread_properties.get("productThreadType")
+            if (
+                summary is not None
+                and summary.display_name == summary.id
+                and isinstance(product_type, str)
+                and product_type.casefold() == "onetoonechat"
+            ):
+                candidates.append((conversation_id, summary))
+
+        attempted = 0
+        for conversation_id, summary in candidates[: self.MAX_FALLBACK_NAME_LOOKUPS]:
+            attempted += 1
+            try:
+                members = self.get_conversation_members(conversation_id)
+            except (RuntimeError, OSError):
+                continue
+            peers: dict[str, str | None] = {}
+            for member in members:
+                member_id = next(
+                    (
+                        identifier
+                        for key in ("id", "mri", "objectId", "userId", "userMri")
+                        if (identifier := self._profile_identifier(member.get(key)))
+                    ),
+                    None,
+                )
+                if not member_id or member_id == own_id:
+                    continue
+                name = next(
+                    (
+                        value.strip()
+                        for key in ("userDisplayName", "displayName", "name")
+                        if isinstance((value := member.get(key)), str) and value.strip()
+                    ),
+                    None,
+                )
+                peers[member_id] = name
+            if len(peers) == 1:
+                name = next(iter(peers.values()))
+                if name:
+                    summary.display_name = name
+        return attempted
+
+    def _ensure_self_chat(self, chats: list[ChatSummary]) -> None:
+        """Include Teams' special notes-to-self thread in the normalized catalog."""
+        chat = next(
+            (item for item in chats if item.id == self.SELF_CHAT_ID),
+            None,
+        )
+        if chat is None:
+            chat = ChatSummary(
+                id=self.SELF_CHAT_ID,
+                display_name=self._self_chat_display_name(),
+                chat_type="chat",
+                is_self_chat=True,
+            )
+            chats.append(chat)
+        chat.is_self_chat = True
+        chat.display_name = self._self_chat_display_name()
+        chat.chat_type = "chat"
+        chat.avatar_url = chat.avatar_url or self.get_profile_picture_uri(
+            display_name=self._self_chat_display_name().removesuffix(" (You)")
+        )
+
+    def _self_chat_display_name(self) -> str:
+        name = self._spaces_claims.get("name") or self._spaces_claims.get(
+            "preferred_username"
+        )
+        if not isinstance(name, str) or not name.strip():
+            return "Notes to self"
+        label = name.strip()
+        if not label.casefold().endswith(" (you)"):
+            label += " (You)"
+        return label
 
     def _list_chat_service_conversations(self) -> list[dict[str, Any]]:
         """Follow Chat Service pages to complete a partial CSA catalog."""
@@ -315,7 +764,9 @@ class TeamsConnector:
             for conversation in page:
                 conversation_id = conversation.get("id")
                 if not isinstance(conversation_id, str) or not conversation_id:
-                    continue
+                    raise RuntimeError(
+                        "Unexpected Teams conversation catalog row without an ID."
+                    )
                 if conversation_id in seen_ids:
                     continue
                 conversations.append(conversation)
@@ -338,10 +789,18 @@ class TeamsConnector:
         properties = self._mapping(conversation.get("properties"))
         thread_properties = self._mapping(conversation.get("threadProperties"))
         last_message = self._mapping(conversation.get("lastMessage"))
-        title = (
-            thread_properties.get("topic")
-            or properties.get("displayName")
-            or conversation_id
+        title = next(
+            (
+                value.strip()
+                for value in (
+                    thread_properties.get("topic"),
+                    properties.get("displayName"),
+                    conversation.get("title"),
+                    conversation.get("displayName"),
+                )
+                if isinstance(value, str) and value.strip()
+            ),
+            conversation_id,
         )
         last_message_at = self._message_datetime(last_message) or (
             self._message_datetime(
@@ -363,6 +822,7 @@ class TeamsConnector:
             avatar_url=self._avatar_url_from_rows(
                 conversation, properties, thread_properties
             ),
+            is_self_chat=conversation_id == self.SELF_CHAT_ID,
         )
 
     def _add_one_to_one_profile_picture_uris(
@@ -556,6 +1016,40 @@ class TeamsConnector:
             identifier = identifier[len("8:orgid:") :]
         return identifier.lower() or None
 
+    @classmethod
+    def _message_author_id(cls, message: dict[str, Any]) -> str | None:
+        """Return a canonical sender MRI/object ID when the message exposes one."""
+        id_keys = ("id", "mri", "objectId", "userId", "userMri")
+        sender_keys = (
+            "from",
+            "fromId",
+            "fromMri",
+            "sender",
+            "senderId",
+            "senderMri",
+            "authorId",
+            "authorMri",
+            "userId",
+            "userMri",
+        )
+        for key in sender_keys:
+            value = message.get(key)
+            candidates = (
+                [value.get(nested_key) for nested_key in id_keys]
+                if isinstance(value, dict)
+                else [value]
+            )
+            for candidate in candidates:
+                if not isinstance(candidate, str) or not candidate.strip():
+                    continue
+                normalized = candidate.strip()
+                mri_match = cls._MESSAGE_AUTHOR_MRI.search(normalized)
+                if mri_match:
+                    return mri_match.group(1).lower()
+                if cls._OBJECT_ID.fullmatch(normalized):
+                    return f"8:orgid:{normalized.lower()}"
+        return None
+
     def get_messages(
         self,
         conversation_id: str,
@@ -563,15 +1057,45 @@ class TeamsConnector:
         limit: int | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
+        cancel_event: Event | None = None,
+        progress_callback: Callable[[int, int, int], None] | None = None,
     ) -> list[dict[str, Any]]:
-        """Read messages for a chat ID and return them oldest to newest.
+        """Read matching history and return it oldest to newest.
 
-        The service returns history through opaque ``backwardLink`` URLs. Date
-        bounds are inclusive. ``since`` is also sent as the observed server-side
-        ``startTime`` lower bound; local checks remain authoritative. ``until``
-        is applied locally because ``endTime`` edge behavior is inconsistent.
-        Segment metadata is not used as a stopping condition until its semantics
-        are verified.
+        Date bounds are inclusive. ``since`` is also sent as the observed
+        server-side ``startTime`` lower bound; local checks remain authoritative.
+        ``until`` stays local because server-side ``endTime`` behavior is
+        inconsistent. Segment metadata is not used as an early-stop condition.
+        """
+        messages = [
+            message
+            for page in self.iter_message_pages(
+                conversation_id,
+                limit=limit,
+                since=since,
+                until=until,
+                cancel_event=cancel_event,
+                progress_callback=progress_callback,
+            )
+            for message in page
+        ]
+        return sorted(messages, key=self._message_order_key)
+
+    def iter_message_pages(
+        self,
+        conversation_id: str,
+        *,
+        limit: int | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        cancel_event: Event | None = None,
+        progress_callback: Callable[[int, int, int], None] | None = None,
+    ) -> Iterator[list[dict[str, Any]]]:
+        """Yield deduplicated chronological pages while traversing newest first.
+
+        Each yielded page is oldest to newest, while successive pages move from
+        newer history to older history. Exporters can spool pages and replay
+        them in reverse without retaining every message body in memory.
         """
         self._require_logged_in()
         if not isinstance(conversation_id, str) or not conversation_id.strip():
@@ -580,20 +1104,8 @@ class TeamsConnector:
             isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0
         ):
             raise ValueError("limit must be a positive integer or None.")
-        if since is not None and not isinstance(since, datetime):
-            raise TypeError("since must be a datetime or None.")
-        if until is not None and not isinstance(until, datetime):
-            raise TypeError("until must be a datetime or None.")
-        if since is not None and (
-            since.tzinfo is None or since.utcoffset() is None
-        ):
-            raise ValueError("since must include a timezone.")
-        if until is not None and (
-            until.tzinfo is None or until.utcoffset() is None
-        ):
-            raise ValueError("until must include a timezone.")
-        since_utc = since.astimezone(timezone.utc) if since else None
-        until_utc = until.astimezone(timezone.utc) if until else None
+        since_utc = self._validate_bound("since", since)
+        until_utc = self._validate_bound("until", until)
         if since_utc is not None and until_utc is not None and since_utc > until_utc:
             raise ValueError("since must be earlier than or equal to until.")
 
@@ -602,74 +1114,145 @@ class TeamsConnector:
             self.MESSAGE_PAGE_SIZE,
             limit if limit is not None else self.MESSAGE_PAGE_SIZE,
         )
-        start_time = (
-            str(self._epoch_milliseconds(since_utc))
-            if since_utc is not None
-            else "0"
-        )
         url = self._set_query_parameters(
             endpoint,
-            startTime=start_time,
+            startTime=(
+                str(self._epoch_milliseconds(since_utc))
+                if since_utc is not None
+                else "0"
+            ),
             pageSize=str(first_page_size),
             view="msnp24Equivalent",
         )
 
-        results: list[dict[str, Any]] = []
         seen_message_ids: set[str] = set()
         seen_urls: set[str] = set()
         pages_without_new_messages = 0
+        pages_fetched = 0
+        raw_items_scanned = 0
+        messages_retrieved = 0
+        duplicate_messages_skipped = 0
+        missing_timestamp_messages_excluded = 0
+        retry_count = 0
+        limit_reached = False
+        history_complete = False
+        self.last_message_read_coverage = {
+            "complete": False,
+            "pages_fetched": 0,
+            "raw_items_scanned": 0,
+            "messages_retrieved": 0,
+            "duplicate_messages_skipped": 0,
+            "missing_timestamp_messages_excluded": 0,
+            "retry_count": 0,
+            "limit_reached": False,
+            "since": since_utc.isoformat().replace("+00:00", "Z") if since_utc else None,
+            "until": until_utc.isoformat().replace("+00:00", "Z") if until_utc else None,
+        }
 
-        while url:
-            self._validate_service_url(url, self._chat_service_url, "Chat Service")
-            if url in seen_urls:
-                raise RuntimeError("Teams repeated a message continuation link.")
-            seen_urls.add(url)
+        try:
+            while url:
+                self._raise_if_cancelled(cancel_event)
+                self._validate_service_url(url, self._chat_service_url, "Chat Service")
+                if url in seen_urls:
+                    raise RuntimeError("Teams repeated a message continuation link.")
+                seen_urls.add(url)
+                try:
+                    payload = self._request_chat_service(
+                        url,
+                        cancel_event=cancel_event,
+                    )
+                except Exception:
+                    retry_count += self.last_request_retry_count
+                    if progress_callback is not None:
+                        progress_callback(
+                            pages_fetched, messages_retrieved, retry_count
+                        )
+                    raise
+                retry_count += self.last_request_retry_count
 
-            payload = self._request_chat_service(url)
-            page = payload.get("messages")
-            if not isinstance(page, list) or any(
-                not isinstance(message, dict) for message in page
-            ):
-                raise RuntimeError("Unexpected Teams messages response.")
+                page = payload.get("messages")
+                if not isinstance(page, list) or any(
+                    not isinstance(message, dict) for message in page
+                ):
+                    raise RuntimeError("Unexpected Teams messages response.")
 
-            new_ids_on_page = 0
-            for message in sorted(page, key=self._message_order_key, reverse=True):
-                message_id = message.get("id")
-                if message_id is not None:
-                    message_id = str(message_id)
-                    if message_id in seen_message_ids:
+                raw_items_scanned += len(page)
+                new_ids_on_page = 0
+                selected_descending: list[dict[str, Any]] = []
+                for message in sorted(page, key=self._message_order_key, reverse=True):
+                    message_id = message.get("id")
+                    if message_id is not None:
+                        message_id = str(message_id)
+                        if message_id in seen_message_ids:
+                            duplicate_messages_skipped += 1
+                            continue
+                        seen_message_ids.add(message_id)
+                        new_ids_on_page += 1
+
+                    timestamp = self._message_datetime(message)
+                    if (since_utc is not None or until_utc is not None) and timestamp is None:
+                        missing_timestamp_messages_excluded += 1
                         continue
-                    seen_message_ids.add(message_id)
-                    new_ids_on_page += 1
+                    if since_utc is not None and timestamp < since_utc:
+                        continue
+                    if until_utc is not None and timestamp > until_utc:
+                        continue
+                    selected_descending.append(message)
+                    messages_retrieved += 1
+                    if limit is not None and messages_retrieved >= limit:
+                        limit_reached = True
+                        break
 
-                timestamp = self._message_datetime(message)
-                if (since_utc is not None or until_utc is not None) and timestamp is None:
-                    continue
-                if since_utc is not None and timestamp < since_utc:
-                    continue
-                if until_utc is not None and timestamp > until_utc:
-                    continue
-                results.append(message)
+                pages_fetched += 1
+                metadata = self._mapping(payload.get("_metadata"))
+                backward_link = metadata.get("backwardLink")
+                if backward_link is not None and not isinstance(backward_link, str):
+                    raise RuntimeError("Unexpected Teams message continuation link.")
+                next_url = backward_link or None
+                if next_url:
+                    self._validate_service_url(
+                        next_url,
+                        self._chat_service_url,
+                        "Chat Service",
+                    )
 
-            if limit is not None and len(results) >= limit:
-                results = results[:limit]
-                break
-
-            pages_without_new_messages = (
-                0 if new_ids_on_page else pages_without_new_messages + 1
-            )
-            if pages_without_new_messages >= 3:
-                raise RuntimeError(
-                    "Teams returned three message pages without new message IDs."
+                pages_without_new_messages = (
+                    0 if new_ids_on_page else pages_without_new_messages + 1
                 )
+                if pages_without_new_messages >= 3 and not limit_reached:
+                    raise RuntimeError(
+                        "Teams returned three message pages without new message IDs."
+                    )
+                if progress_callback is not None:
+                    progress_callback(pages_fetched, messages_retrieved, retry_count)
+                if selected_descending:
+                    yield list(reversed(selected_descending))
 
-            metadata = self._mapping(payload.get("_metadata"))
-            backward_link = metadata.get("backwardLink")
-            if backward_link is not None and not isinstance(backward_link, str):
-                raise RuntimeError("Unexpected Teams message continuation link.")
-            url = backward_link or None
+                if limit_reached or next_url is None:
+                    history_complete = next_url is None
+                    break
+                if next_url in seen_urls:
+                    raise RuntimeError("Teams repeated a message continuation link.")
+                url = next_url
 
-        return sorted(results, key=self._message_order_key)
+            self.last_message_read_coverage["complete"] = history_complete
+        finally:
+            self.last_message_read_coverage.update(
+                {
+                    "pages_fetched": pages_fetched,
+                    "raw_items_scanned": raw_items_scanned,
+                    "messages_retrieved": messages_retrieved,
+                    "duplicate_messages_skipped": duplicate_messages_skipped,
+                    "missing_timestamp_messages_excluded": missing_timestamp_messages_excluded,
+                    "retry_count": retry_count,
+                    "limit_reached": limit_reached,
+                }
+            )
+
+    @staticmethod
+    def _raise_if_cancelled(cancel_event: Event | None) -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            raise ExtractionCancelled("Extraction was cancelled by the caller.")
 
     def get_messages_page(
         self,
@@ -899,6 +1482,8 @@ class TeamsConnector:
         url: str,
         method: str = "GET",
         body: Any | None = None,
+        *,
+        cancel_event: Event | None = None,
     ) -> dict[str, Any]:
         self._require_logged_in()
         self._validate_service_url(url, self._chat_service_url, "Chat Service")
@@ -910,6 +1495,7 @@ class TeamsConnector:
                 "Authentication": f"skypetoken={self._skype_token}",
                 "Accept": "application/json",
             },
+            cancel_event=cancel_event,
         )
 
     def _request_middle_tier(
@@ -971,8 +1557,9 @@ class TeamsConnector:
         method: str = "GET",
         body: Any | None = None,
         headers: dict[str, str] | None = None,
+        cancel_event: Event | None = None,
     ) -> dict[str, Any]:
-        """Send JSON without selecting credentials; callers choose service auth."""
+        """Send JSON with bounded retries for idempotent read requests only."""
         data: bytes | None
         request_headers = dict(headers or {})
         if isinstance(body, bytes):
@@ -983,24 +1570,87 @@ class TeamsConnector:
         else:
             data = None
         request_headers.setdefault("User-Agent", "Microsoft Teams compatible client")
-        request = urllib.request.Request(
-            url, data=data, method=method, headers=request_headers
-        )
-        try:
-            with urllib.request.urlopen(
-                request, timeout=self.REQUEST_TIMEOUT_SECONDS
-            ) as response:
-                response_text = response.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            location = self._safe_location(url)
-            raise RuntimeError(
-                f"Teams request failed with HTTP {exc.code} for {location}."
-            ) from exc
-        except urllib.error.URLError as exc:
-            location = self._safe_location(url)
-            raise RuntimeError(
-                f"Teams request failed for {location}: {exc.reason}"
-            ) from exc
+        read_request = method.upper() in {"GET", "HEAD"}
+        max_attempts = self.READ_REQUEST_MAX_ATTEMPTS if read_request else 1
+        self.last_request_retry_count = 0
+        transient_error: _TransientTeamsRequestError | None = None
+
+        for attempt in range(1, max_attempts + 1):
+            self._raise_if_cancelled(cancel_event)
+            request = urllib.request.Request(
+                url, data=data, method=method, headers=request_headers
+            )
+            try:
+                with urllib.request.urlopen(
+                    request, timeout=self.REQUEST_TIMEOUT_SECONDS
+                ) as response:
+                    response_text = response.read().decode("utf-8")
+                self._raise_if_cancelled(cancel_event)
+                break
+            except urllib.error.HTTPError as exc:
+                location = self._safe_location(url)
+                if exc.code in {401, 403}:
+                    exc.close()
+                    self._clear_session()
+                    raise AuthenticationRequiredError(
+                        "Teams no longer accepts the stored credentials for this request. "
+                        "Run `python -m teams_exporter auth` and retry."
+                    ) from None
+                if read_request and exc.code in self.RETRYABLE_HTTP_STATUSES:
+                    retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                    transient_error = _TransientTeamsRequestError(
+                        f"Teams request failed with HTTP {exc.code} for {location}.",
+                        retry_after,
+                    )
+                    exc.close()
+                else:
+                    error = RuntimeError(
+                        f"Teams request failed with HTTP {exc.code} for {location}."
+                    )
+                    exc.close()
+                    raise error from exc
+            except urllib.error.URLError as exc:
+                location = self._safe_location(url)
+                transient_error = _TransientTeamsRequestError(
+                    f"Teams request failed for {location}: {self._safe_exception_detail(exc.reason)}"
+                )
+            except (http.client.IncompleteRead, TimeoutError, OSError) as exc:
+                location = self._safe_location(url)
+                transient_error = _TransientTeamsRequestError(
+                    f"Teams request failed for {location}: {self._safe_exception_detail(exc)}"
+                )
+            except Exception as exc:
+                location = self._safe_location(url)
+                if not read_request:
+                    raise RuntimeError(
+                        f"Teams request failed for {location}: "
+                        f"{self._safe_exception_detail(exc)}"
+                    ) from None
+                transient_error = _TransientTeamsRequestError(
+                    f"Teams request failed for {location}: {self._safe_exception_detail(exc)}"
+                )
+
+            if transient_error is None:
+                raise RuntimeError("Teams request failed without an error detail.")
+            if attempt >= max_attempts:
+                raise RuntimeError(
+                    f"{transient_error} Read request exhausted its {max_attempts}-attempt limit."
+                ) from transient_error
+
+            self.last_request_retry_count += 1
+            delay = self._read_retry_delay(
+                self.last_request_retry_count,
+                transient_error.retry_after,
+            )
+            if cancel_event is not None:
+                if cancel_event.wait(delay):
+                    raise ExtractionCancelled("Extraction was cancelled during retry backoff.")
+            else:
+                time.sleep(delay)
+            transient_error = None
+        else:
+            raise RuntimeError("Teams request failed without a response.")
+
         if not response_text.strip():
             payload = {}
         else:
@@ -1014,6 +1664,26 @@ class TeamsConnector:
             raise RuntimeError("Teams returned a JSON value that was not an object.")
         return payload
 
+    @classmethod
+    def _read_retry_delay(cls, retry_number: int, retry_after: str | None) -> float:
+        if retry_after:
+            try:
+                delay = float(retry_after)
+            except ValueError:
+                try:
+                    retry_at = parsedate_to_datetime(retry_after)
+                    if retry_at.tzinfo is None:
+                        retry_at = retry_at.replace(tzinfo=timezone.utc)
+                    delay = (retry_at - datetime.now(timezone.utc)).total_seconds()
+                except (TypeError, ValueError, OverflowError):
+                    delay = -1
+            if delay >= 0:
+                return min(delay, cls.READ_RETRY_AFTER_MAX_SECONDS)
+        return min(
+            cls.READ_RETRY_BASE_SECONDS * (2 ** max(0, retry_number - 1)),
+            cls.READ_RETRY_MAX_SECONDS,
+        )
+
     def _acquire_resource_token(
         self,
         app: msal.PublicClientApplication,
@@ -1022,8 +1692,11 @@ class TeamsConnector:
         interactive: bool,
     ) -> tuple[dict[str, Any], str]:
         for account in app.get_accounts():
-            result = app.acquire_token_silent(scopes=[scope], account=account)
-            if result and result.get("access_token"):
+            result = self._retry_token_request(
+                lambda: app.acquire_token_silent(scopes=[scope], account=account),
+                scope=scope,
+            )
+            if isinstance(result, dict) and result.get("access_token"):
                 return result, "cache"
 
         if not interactive:
@@ -1038,60 +1711,281 @@ class TeamsConnector:
                 f"Could not start device-code authentication for {self._scope_name(scope)}."
             )
         print(flow.get("message", "Complete sign-in in the browser window."))
-        result = app.acquire_token_by_device_flow(flow)
+        result = self._retry_token_request(
+            lambda: app.acquire_token_by_device_flow(flow),
+            scope=scope,
+            interactive=True,
+        )
         if not result or not result.get("access_token"):
-            error = result.get("error", "authentication_failed") if result else "authentication_failed"
-            raise RuntimeError(
-                f"Microsoft sign-in failed for {self._scope_name(scope)} ({error})."
-            )
+            self._raise_token_result_error(result, scope=scope)
         return result, "device_code"
+
+    def _retry_token_request(
+        self,
+        operation: Callable[[], Any],
+        *,
+        scope: str,
+        interactive: bool = False,
+    ) -> Any:
+        attempts = 3
+        for attempt in range(attempts):
+            try:
+                result = operation()
+            except Exception as exc:
+                if attempt + 1 >= attempts:
+                    kind = "connectivity" if self._is_network_error(exc) else "service"
+                    raise RuntimeError(
+                        f"Microsoft {kind} request failed after {attempts} attempts. "
+                        "The stored credentials were not reported as rejected; try again later."
+                    ) from None
+                time.sleep(min(0.25 * (2**attempt), 1.0))
+                continue
+
+            if isinstance(result, dict) and result.get("access_token"):
+                return result
+            error = str(result.get("error", "") if isinstance(result, dict) else "").casefold()
+            if error in self._REJECTED_CREDENTIAL_ERRORS:
+                raise self._stored_credentials_rejected() from None
+            if attempt + 1 >= attempts:
+                if error:
+                    kind = "connectivity" if error in self._TRANSIENT_TOKEN_ERRORS else "service"
+                    raise RuntimeError(
+                        f"Microsoft {kind} request failed after {attempts} attempts. "
+                        "The stored credentials were not reported as rejected; try again later."
+                    ) from None
+                if interactive:
+                    self._raise_token_result_error(result, scope=scope)
+                return result
+            time.sleep(min(0.25 * (2**attempt), 1.0))
+        return None
+
+    _REJECTED_CREDENTIAL_ERRORS = {
+        "invalid_grant",
+        "interaction_required",
+        "login_required",
+        "consent_required",
+        "access_denied",
+        "expired_token",
+    }
+    _TRANSIENT_TOKEN_ERRORS = {
+        "temporarily_unavailable",
+        "server_error",
+        "service_not_available",
+        "request_timeout",
+        "timeout",
+    }
+
+    @staticmethod
+    def _is_network_error(exc: Exception) -> bool:
+        return isinstance(exc, (OSError, TimeoutError, urllib.error.URLError)) or (
+            exc.__class__.__module__.startswith(("requests", "httpx"))
+        )
+
+    @staticmethod
+    def _stored_credentials_rejected() -> AuthenticationRequiredError:
+        return AuthenticationRequiredError(
+            "Microsoft no longer accepts the stored credentials. "
+            "Run `python -m teams_exporter auth` to sign in again, then retry."
+        )
+
+    def _raise_token_result_error(self, result: Any, *, scope: str) -> None:
+        error = str(result.get("error", "") if isinstance(result, dict) else "").casefold()
+        if error in self._REJECTED_CREDENTIAL_ERRORS:
+            raise self._stored_credentials_rejected()
+        raise RuntimeError(
+            f"Microsoft sign-in failed for {self._scope_name(scope)}. "
+            "Run `python -m teams_exporter auth` and retry."
+        )
 
     @staticmethod
     def _scope_name(scope: str) -> str:
         return "CSA" if "chatsvcagg" in scope else "Teams"
 
-    def _load_token_cache(self) -> msal.SerializableTokenCache:
-        cache = msal.SerializableTokenCache()
-        if not self._cache_path.exists():
-            return cache
-        try:
-            cache.deserialize(self._cache_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            raise RuntimeError(
-                f"Could not read this application's MSAL cache: {exc.__class__.__name__}."
-            ) from exc
+    def _load_token_cache(self) -> Any:
+        """Load the MSAL cache through the operating system's encrypted store."""
+        self._migrate_plaintext_cache(self._cache_path)
+        cache, _ = self._new_persisted_token_cache(self._cache_path)
         return cache
 
-    def _persist_token_cache(self, cache: msal.SerializableTokenCache) -> None:
-        if not cache.has_state_changed:
-            return
-        self._cache_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary_path = self._cache_path.with_suffix(
-            self._cache_path.suffix + ".tmp"
-        )
+    @staticmethod
+    def _new_persisted_token_cache(path: Path) -> tuple[Any, Any]:
+        """Create encrypted persistence and its MSAL cache, without plaintext fallback."""
         try:
-            temporary_path.write_text(cache.serialize(), encoding="utf-8")
-            if os.name != "nt":
-                os.chmod(temporary_path, 0o600)
-            temporary_path.replace(self._cache_path)
-        except OSError as exc:
+            from msal_extensions import PersistedTokenCache, build_encrypted_persistence
+
+            persistence = build_encrypted_persistence(str(path))
+            return PersistedTokenCache(persistence), persistence
+        except Exception:
             raise RuntimeError(
-                f"Could not save this application's MSAL cache: {exc.__class__.__name__}."
-            ) from exc
-        finally:
-            if temporary_path.exists():
-                try:
-                    temporary_path.unlink()
-                except OSError:
-                    pass
+                "Encrypted Teams credential storage is unavailable. No plaintext cache "
+                "will be used. You may need to sign in again after encrypted storage is available."
+            ) from None
+
+    def _migrate_plaintext_cache(self, source: Path) -> None:
+        """Encrypt a legacy JSON cache, removing it only after encrypted read-back succeeds."""
+        if not source.is_file():
+            return
+        cache_state = self._read_plaintext_cache_state(source)
+        if cache_state is None:
+            return
+
+        destination = self._cache_path
+        same_path = source.resolve() == destination
+        try:
+            if not same_path and destination.exists():
+                existing, _ = self._new_persisted_token_cache(destination)
+                existing.search(msal.TokenCache.CredentialType.ACCOUNT)
+                if existing.serialize() == cache_state:
+                    source.unlink()
+                    return
+                raise RuntimeError(
+                    "An encrypted Teams cache already exists and differs from the legacy "
+                    "cache. The plaintext copy was left intact and will not be used; you "
+                    "may need to sign in again."
+                )
+
+            staging_path = self._new_staging_cache_path(destination)
+            try:
+                staged_cache, persistence = self._new_persisted_token_cache(staging_path)
+                persistence.save(cache_state)
+                staged_cache.search(msal.TokenCache.CredentialType.ACCOUNT)
+                if staged_cache.serialize() != cache_state:
+                    raise RuntimeError("Encrypted cache read-back did not match.")
+
+                if same_path:
+                    os.replace(staging_path, destination)
+                else:
+                    os.link(staging_path, destination)
+                    try:
+                        verified_cache, _ = self._new_persisted_token_cache(destination)
+                        verified_cache.search(msal.TokenCache.CredentialType.ACCOUNT)
+                        if verified_cache.serialize() != cache_state:
+                            destination.unlink(missing_ok=True)
+                            raise RuntimeError("Encrypted cache read-back did not match.")
+                    except Exception:
+                        destination.unlink(missing_ok=True)
+                        raise
+                    source.unlink()
+            finally:
+                staging_path.unlink(missing_ok=True)
+                Path(f"{staging_path}.lockfile").unlink(missing_ok=True)
+        except Exception:
+            raise RuntimeError(
+                "The existing plaintext Teams token cache could not be migrated to "
+                "encrypted storage. The original file was left intact and will not be "
+                "used. You may need to sign in again."
+            ) from None
+
+    @staticmethod
+    def _read_plaintext_cache_state(path: Path) -> str | None:
+        """Recognize and deserialize legacy MSAL JSON without exposing its contents."""
+        try:
+            raw_text = path.read_text(encoding="utf-8")
+            payload = json.loads(raw_text)
+        except (OSError, UnicodeError, ValueError):
+            return None
+        cache_sections = {
+            "AccessToken",
+            "Account",
+            "AppMetadata",
+            "IdToken",
+            "RefreshToken",
+        }
+        if not isinstance(payload, dict) or (
+            payload and not cache_sections.intersection(payload)
+        ):
+            return None
+        try:
+            cache = msal.SerializableTokenCache()
+            cache.deserialize(raw_text)
+            return cache.serialize()
+        except Exception:
+            raise RuntimeError(
+                "The existing plaintext Teams token cache is not a valid MSAL cache. "
+                "It was left intact and will not be used; you may need to sign in again."
+            ) from None
+
+    @staticmethod
+    def _new_staging_cache_path(destination: Path) -> Path:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        handle, name = tempfile.mkstemp(
+            prefix=f".{destination.name}.migration-{uuid.uuid4().hex}.",
+            suffix=".encrypted",
+            dir=destination.parent,
+        )
+        os.close(handle)
+        staging_path = Path(name)
+        staging_path.unlink()
+        return staging_path
+
+    @staticmethod
+    def _default_cache_path() -> Path:
+        if os.name == "nt":
+            root = os.environ.get("LOCALAPPDATA")
+            base = Path(root) if root else Path.home() / "AppData" / "Local"
+        else:
+            root = os.environ.get("XDG_DATA_HOME")
+            base = Path(root) if root else Path.home() / ".local" / "share"
+        return base / "scrape-teams-chat" / ".teams_token_cache.json"
+
+    def _repository_cache_path(self) -> Path:
+        return Path(__file__).resolve().parent.parent / ".teams_token_cache.json"
+
+    def _migrate_repository_cache_if_needed(self) -> None:
+        if not self._uses_default_cache_path:
+            return
+        source = self._repository_cache_path()
+        if source.resolve() == self._cache_path or not source.is_file():
+            return
+        self._migrate_plaintext_cache(source)
+
+    @staticmethod
+    def _safe_exception_detail(value: Any) -> str:
+        detail = str(value).strip()
+        if not detail:
+            return "unknown network error"
+        detail = re.sub(
+            r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]+=*",
+            "Bearer [redacted]",
+            detail,
+        )
+        detail = re.sub(
+            r"(?i)\b(skypetoken|x-skypetoken|access_token|refresh_token|id_token|authorization|cookie|set-cookie|client_secret)\s*[:=]\s*[^&\s,;]+",
+            r"\1=[redacted]",
+            detail,
+        )
+        detail = re.sub(
+            r"https?://[^\s'\"]+",
+            lambda match: TeamsConnector._redact_url(match.group(0)),
+            detail,
+        )
+        return detail[:300]
+
+    @staticmethod
+    def _redact_url(value: str) -> str:
+        parts = urlsplit(value.rstrip(".,);"))
+        host = parts.hostname or ""
+        if parts.port:
+            host = f"{host}:{parts.port}"
+        return f"{parts.scheme}://{host}{parts.path}"
 
     def _require_logged_in(self) -> None:
-        if not (
-            self._spaces_access_token
-            and self._csa_access_token
-            and self._skype_token
-        ):
+        if not self.has_active_session:
             raise RuntimeError("Call TeamsConnector.login() before using the connector.")
+
+    def _clear_session(self) -> None:
+        self._spaces_access_token = None
+        self._csa_access_token = None
+        self._skype_token = None
+        self._spaces_claims = {}
+        self._authz_response = {}
+        self._chat_service_url = None
+        self._middle_tier_url = None
+        self._auth_sources = {}
+
+    def invalidate_session(self) -> None:
+        """Forget the in-memory session after credentials are rejected."""
+        self._clear_session()
 
     def _validate_service_url(
         self,
