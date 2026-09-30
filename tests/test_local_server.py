@@ -321,6 +321,25 @@ class LocalTeamsServerTests(unittest.TestCase):
             ],
         )
 
+    def test_chat_catalog_error_shows_safe_underlying_connection_detail(self):
+        original_list_chats = self.service.list_chats
+
+        def fail_list_chats(**_kwargs):
+            raise ConnectionError("test name-resolution failure")
+
+        self.service.list_chats = fail_list_chats
+        try:
+            status, _, body = self.request("GET", "/api/chats")
+        finally:
+            self.service.list_chats = original_list_chats
+
+        result = json.loads(body)
+        self.assertEqual(status, 502)
+        self.assertIn(
+            "ConnectionError: test name-resolution failure",
+            result["error"]["message"],
+        )
+
     def test_single_chat_download_applies_local_date_and_latest_message_limit(self):
         status, headers, body = self.download_request(
             {
