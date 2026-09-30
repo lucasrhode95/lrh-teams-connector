@@ -7,9 +7,14 @@ import time as time_module
 import unittest
 import zipfile
 from datetime import date, datetime, time, timedelta, timezone
+from http.server import BaseHTTPRequestHandler
 from io import BytesIO
+from unittest.mock import patch
 
-from teams_exporter.local_server import LocalTeamsHTTPServer
+from teams_exporter.local_server import (
+    LocalTeamsHTTPServer,
+    LocalTeamsRequestHandler,
+)
 from teams_exporter.teams_connector import (
     AuthenticationRequiredError,
     ChatSummary,
@@ -267,6 +272,23 @@ class LocalTeamsServerTests(unittest.TestCase):
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=2)
+
+    def test_client_disconnect_during_response_does_not_escape_handler(self):
+        handler = object.__new__(LocalTeamsRequestHandler)
+        with patch.object(
+            BaseHTTPRequestHandler,
+            "handle",
+            side_effect=ConnectionAbortedError("client disconnected"),
+        ):
+            handler.handle()
+
+        with patch.object(
+            BaseHTTPRequestHandler,
+            "handle",
+            side_effect=RuntimeError("unexpected handler failure"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "unexpected handler failure"):
+                handler.handle()
 
     def test_duplicate_server_instance_cannot_share_the_same_port(self):
         with self.assertRaises(OSError):

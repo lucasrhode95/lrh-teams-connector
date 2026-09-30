@@ -279,6 +279,14 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
     server_version = "TeamsExporter"
     sys_version = ""
 
+    def handle(self) -> None:
+        try:
+            super().handle()
+        except ConnectionError:
+            # Browsers can cancel image or other requests after rendering changes.
+            # A disconnected client is expected and should not dump a traceback.
+            return
+
     def do_GET(self) -> None:
         if not self._request_is_local():
             self._send_json(403, self._error("local_only", "This server accepts local browser requests only."))
