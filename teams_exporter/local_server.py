@@ -36,6 +36,10 @@ INDEX_HTML = r"""<!doctype html>
     h1 { margin: 0; font-size: 1.6rem; letter-spacing: -.02em; }
     p { margin: 8px 0 0; color: #596579; }
     .eyebrow { margin: 0 0 6px; color: #5365a9; font-size: .75rem; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+    header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+    .account-info { display: grid; justify-items: end; gap: 2px; padding-top: 3px; text-align: right; }
+    .account-info strong { color: #202735; font-size: .9rem; font-weight: 700; }
+    .account-info span { color: #69758a; font-size: .78rem; font-weight: 400; }
     .filters { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 24px 0 18px; }
     label { display: grid; gap: 6px; color: #394355; font-weight: 600; }
     input[type="date"], input[type="number"], input[type="search"] { width: 100%; min-height: 40px; border: 1px solid #cbd3df; border-radius: 7px; padding: 8px 10px; color: inherit; font: inherit; background: white; }
@@ -53,6 +57,7 @@ INDEX_HTML = r"""<!doctype html>
     .chat-name { display: block; color: #202735; font-weight: 600; overflow-wrap: anywhere; }
     .chat-meta { display: block; margin-top: 2px; color: #69758a; font-size: .82rem; }
     .empty { padding: 20px; color: #69758a; text-align: center; }
+    .database-notice { padding: 11px 12px; border-radius: 7px; background: #fff7e6; color: #594522; }
     .actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; }
     button { min-height: 40px; border: 0; border-radius: 7px; padding: 9px 15px; font: inherit; font-weight: 650; cursor: pointer; }
     button.primary { color: white; background: #4659a8; }
@@ -69,10 +74,17 @@ INDEX_HTML = r"""<!doctype html>
 <body>
 <main>
   <header>
-    <p class="eyebrow">Local Teams export</p>
-    <h1>Download conversations</h1>
-    <p>Choose one or more chats, set optional filters, and download a text export.</p>
+    <div>
+      <p class="eyebrow">Local Teams export</p>
+      <h1>Download conversations</h1>
+      <p>Choose one or more chats, set optional filters, and download a text export.</p>
+    </div>
+    <div id="account-info" class="account-info" aria-label="Signed-in account" hidden>
+      <strong id="account-name"></strong>
+      <span id="account-email"></span>
+    </div>
   </header>
+  <p id="database-notice" class="database-notice" role="status" hidden></p>
   <section class="filters" aria-label="Export filters">
     <label for="from-date">From date <input id="from-date" type="date"></label>
     <label for="message-limit">Maximum messages per chat <input id="message-limit" type="number" min="1" step="1" placeholder="Unlimited"></label>
@@ -104,6 +116,8 @@ INDEX_HTML = r"""<!doctype html>
   const combineInput = document.getElementById('combine');
   const statusText = document.getElementById('status');
   const authHelp = document.getElementById('auth-help');
+  const databaseNotice = document.getElementById('database-notice');
+  const accountInfo = document.getElementById('account-info');
 
   function setStatus(message, isError) {
     statusText.textContent = message;
@@ -176,6 +190,11 @@ INDEX_HTML = r"""<!doctype html>
         return;
       }
       chats.splice(0, chats.length, ...body.chats);
+      databaseNotice.textContent = body.database_notice || '';
+      databaseNotice.hidden = !body.database_notice;
+      document.getElementById('account-name').textContent = body.account?.name || '';
+      document.getElementById('account-email').textContent = body.account?.email || '';
+      accountInfo.hidden = !body.account;
       const known = new Set(chats.map(function (chat) { return chat.id; }));
       Array.from(selected).forEach(function (id) { if (!known.has(id)) selected.delete(id); });
       renderChats();
@@ -328,7 +347,15 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
                     raise RuntimeError("Teams returned an invalid chat-list continuation.")
                 seen_tokens.add(next_token)
                 page_token = next_token
-            self._send_json(200, {"chats": chats, "count": len(chats)})
+            self._send_json(
+                200,
+                {
+                    "chats": chats,
+                    "count": len(chats),
+                    "database_notice": getattr(self.server.service, "database_notice", None),
+                    "account": getattr(self.server.service, "account_info", None),
+                },
+            )
         except AuthenticationRequiredError:
             self._send_json(401, self._error("authentication_required", "Teams sign-in is required."))
         except Exception as exc:

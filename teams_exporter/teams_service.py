@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import time
@@ -54,20 +55,78 @@ class TeamsService:
         self.connector = connector or TeamsConnector()
         self.formatter = formatter or TeamsMessageFormatter()
         configured_index = os.environ.get("TEAMS_SEARCH_INDEX_PATH")
+        self._use_base_index_if_missing = bool(configured_index)
         if configured_index:
             index_path = Path(configured_index)
         elif os.name == "nt" and os.environ.get("LOCALAPPDATA"):
             index_path = Path(os.environ["LOCALAPPDATA"]) / "scrape-teams-chat" / "search-index.sqlite3"
         else:
             index_path = Path.home() / ".local" / "share" / "scrape-teams-chat" / "search-index.sqlite3"
-        self.index = index or TeamsSearchIndex(index_path)
+        self._index_path = index_path
+        self._index = index
+        self._index_is_injected = index is not None
+        self._selected_fingerprint: str | None = None
+        self.database_notice: str | None = None
+        self.account_info: dict[str, str] | None = None
         self._cursors: dict[str, _Cursor] = {}
         self._chats_cache: list[ChatSummary] | None = None
         self._chats_cache_until = 0.0
 
+    @property
+    def index(self) -> TeamsSearchIndex:
+        """Return this account's durable archive, selecting it from cached auth."""
+        if self._index is None:
+            get_cached_identity = getattr(self.connector, "get_cached_account_metadata", None)
+            metadata = get_cached_identity() if callable(get_cached_identity) else None
+            if not metadata:
+                raise AuthenticationRequiredError(
+                    "Teams sign-in is required before this account's local archive can be opened. "
+                    "Run `python -m teams_exporter auth` and retry."
+                )
+            self._select_index_for_account(metadata)
+        return self._index
+
     def _ensure_session(self) -> None:
         # Only the separate `python -m teams_exporter auth` command is interactive.
         self.connector.login(interactive=False)
+        if not self._index_is_injected:
+            self._select_index_for_account(self.connector.get_user_metadata())
+
+    def _select_index_for_account(self, metadata: dict[str, Any]) -> None:
+        if self._index_is_injected:
+            return
+        email = metadata.get("username")
+        display_name = metadata.get("name") or email or "Teams account"
+        self.account_info = {
+            "name": str(display_name),
+            "email": str(email) if email else "Email unavailable",
+        }
+        tenant_id = metadata.get("tenant_id")
+        user_id = metadata.get("user_id")
+        home_account_id = metadata.get("home_account_id")
+        if tenant_id and user_id:
+            identity_key = f"{tenant_id}:{user_id}"
+        elif home_account_id:
+            identity_key = f"{tenant_id or ''}:{home_account_id}"
+        else:
+            raise AuthenticationRequiredError(
+                "The signed-in Teams account does not expose a stable account identifier. "
+                "The local archive was left unopened."
+            )
+        fingerprint = hashlib.sha256(identity_key.encode("utf-8")).hexdigest()
+        if fingerprint == self._selected_fingerprint:
+            return
+        if self._selected_fingerprint is not None:
+            self._chats_cache = None
+            self._chats_cache_until = 0.0
+            self._cursors.clear()
+        path, self.database_notice = TeamsSearchIndex.resolve_account_path(
+            self._index_path,
+            fingerprint,
+            use_base_if_missing=self._use_base_index_if_missing,
+        )
+        self._index = TeamsSearchIndex(path, owner_fingerprint=fingerprint)
+        self._selected_fingerprint = fingerprint
 
     def _get_chats(self, *, refresh: bool = False) -> list[ChatSummary]:
         if refresh or self._chats_cache is None or time.monotonic() >= self._chats_cache_until:
@@ -93,6 +152,7 @@ class TeamsService:
         return {
             "items": [self._chat_record(chat) for chat in page],
             "next_page_token": f"offset:{next_offset}" if next_offset < len(chats) else None,
+            "database_notice": self.database_notice,
             "coverage": {
                 "catalog_complete": True,
                 "total_chats": len(chats),
@@ -140,6 +200,7 @@ class TeamsService:
             "items": items,
             "total_matches_in_index": total,
             "next_cursor": next_cursor,
+            "database_notice": self.database_notice,
             "coverage": {
                 "method": "local SQLite participant index",
                 "server_side_search_used": False,
@@ -231,6 +292,7 @@ class TeamsService:
             },
             "items": [self._message_record(conversation_id, message) for message in unique],
             "next_cursor": next_cursor,
+            "database_notice": self.database_notice,
             "coverage": {
                 "complete": complete,
                 "page_size": page_size,
@@ -316,6 +378,7 @@ class TeamsService:
             "items": items,
             "total_matches_in_index": total,
             "next_cursor": next_cursor,
+            "database_notice": self.database_notice,
             "coverage": {
                 "method": "local SQLite FTS5 index",
                 "server_side_search_used": False,
@@ -491,6 +554,7 @@ class TeamsService:
 
         return {
             "items": results,
+            "database_notice": self.database_notice,
             "coverage": {
                 "chats_attempted": len(results),
                 "messages_remaining_this_call": message_budget,
@@ -565,6 +629,7 @@ class TeamsService:
         return {
             "items": items,
             "next_page_token": f"offset:{next_offset}" if next_offset < total else None,
+            "database_notice": self.database_notice,
             "coverage": {
                 **{key: value for key, value in coverage.items() if key != "items"},
                 "complete_for_requested_scope": (

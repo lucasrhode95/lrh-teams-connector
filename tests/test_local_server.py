@@ -53,6 +53,8 @@ class ExportService:
         self.connector = ExportConnector()
         self.formatter = TeamsMessageFormatter()
         self.auth_required = False
+        self.account_info = {"name": "Taylor Reed", "email": "taylor@example.test"}
+        self.database_notice = None
         self.chats = [
             ChatSummary("19:alpha@thread.v2", "Alpha", chat_type="group"),
             ChatSummary("19:beta@thread.v2", "Beta", chat_type="oneOnOne"),
@@ -117,6 +119,7 @@ class LocalTeamsServerTests(unittest.TestCase):
         result = json.loads(body)
         self.assertEqual(status, 200)
         self.assertEqual(result["count"], 2)
+        self.assertEqual(result["account"], self.service.account_info)
         self.assertEqual([chat["name"] for chat in result["chats"]], ["Alpha", "Beta"])
         self.assertEqual(headers["Cache-Control"], "no-store")
         self.assertEqual(self.service.list_calls, [(100, None)])

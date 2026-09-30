@@ -18,7 +18,17 @@ python -m teams_exporter auth
 
 Microsoft handles the password and verification pages. The application uses the resulting app-owned token cache. MCP startup and tool calls only attempt silent authentication; when the cache needs attention, the client receives an authentication-needed error. Run the sign-in command above, then reconnect to the MCP server.
 
-The server never writes tokens, cookies, or authorization headers to the SQLite index. The index defaults to `%LOCALAPPDATA%\scrape-teams-chat\search-index.sqlite3` on Windows and `~/.local/share/scrape-teams-chat/search-index.sqlite3` on other platforms. Set `TEAMS_SEARCH_INDEX_PATH` to choose another location.
+The archive is persistent across MCP and UI restarts. By default it lives under `%LOCALAPPDATA%\scrape-teams-chat` on Windows and `~/.local/share/scrape-teams-chat` on other platforms. The filename includes a short SHA-256 fingerprint derived from the Teams tenant and user IDs. The database stores that fingerprint for ownership checks; it does not store the account name, tokens, cookies, or authorization headers.
+
+When `TEAMS_SEARCH_INDEX_PATH` points to a new file, the first signed-in account uses that path. If the file is already marked for another account, the existing file is preserved and the other account receives a separate account-specific file. Older indexes without ownership metadata are also preserved and reported as unverified; the application does not assume whose messages they contain. The local UI and MCP tool results include a warning when this happens.
+
+Create a consistent backup while the app is running with:
+
+```powershell
+python -m teams_exporter backup C:\Backups\teams-archive.sqlite3
+```
+
+The backup uses SQLite's online backup API, so it includes committed data even while the archive is open. Copy that `.sqlite3` file to the other machine, then point `TEAMS_SEARCH_INDEX_PATH` at it before starting the app. The same Teams account fingerprint will allow it to open the archive; a different account will get a separate file while the copied backup stays intact. Add `--overwrite` only when you intend to replace an existing backup destination. Database files and common SQLite sidecars are Git-ignored.
 
 ## Laptop follow-through
 
@@ -38,6 +48,8 @@ Every tool is read-only. The MCP input and output schemas are typed, results hav
 - `get_search_index_status`: inspect per-chat history and roster progress and requested-range coverage.
 
 The service does not use a verified server-side message search route. Search results cover only messages already in the local FTS5 index. An empty result with incomplete coverage is not evidence that Teams has no matching message. Participant search likewise depends on the rosters successfully indexed.
+
+Message timestamps returned through MCP are normalized to UTC. The local page formats chat activity times in the browser's local timezone; text export timestamps are UTC.
 
 ## Configure an MCP client
 
@@ -79,7 +91,7 @@ Open the project from its repository root so Python can import `teams_exporter`.
 3. Call `sync_search_index` repeatedly in bounded batches to build local history. Its persisted continuation and fair chat rotation let a later client process resume.
 4. Check `get_search_index_status` before interpreting `search_messages` or `search_chats` results as complete.
 
-The local archive can retain messages after Teams stops exposing them, provided they were indexed first. A 1+ year retention goal therefore needs a successful historical backfill and a recurring sync schedule. This repository does not yet create that schedule; see the [roadmap](teams-exporter-roadmap.md). The database currently has no automatic expiration and is not application-encrypted, so storage and deletion must follow the organization's policy.
+The local archive can retain messages after Teams stops exposing them, provided they were indexed first. A 1+ year retention goal therefore needs a successful historical backfill and a recurring sync schedule. This repository does not yet create that schedule; see the [roadmap](teams-exporter-roadmap.md). The database has no automatic expiration and is not application-encrypted, so storage and deletion must follow the organization's policy.
 
 ## References
 

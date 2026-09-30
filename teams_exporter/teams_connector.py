@@ -124,6 +124,27 @@ class TeamsConnector:
             "tenant_country": claims.get("tenant_ctry"),
         }
 
+    def get_cached_account_metadata(self) -> dict[str, Any] | None:
+        """Return the first cached MSAL account without making network requests.
+
+        This lets local archive searches select the account-specific database
+        without attempting sign-in or contacting Microsoft.
+        """
+        cache = self._load_token_cache()
+        # Read account records directly from MSAL's serialized cache. Creating
+        # PublicClientApplication can perform OpenID metadata discovery, which
+        # would make local-only archive searches depend on network access.
+        accounts = cache.find(msal.TokenCache.CredentialType.ACCOUNT)
+        if not accounts:
+            return None
+        account = accounts[0]
+        return {
+            "username": account.get("username"),
+            "user_id": account.get("local_account_id"),
+            "tenant_id": account.get("tenant_id"),
+            "home_account_id": account.get("home_account_id"),
+        }
+
     def get_connection_metadata(self) -> dict[str, Any]:
         """Return connection diagnostics without exposing credentials."""
         self._require_logged_in()

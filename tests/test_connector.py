@@ -2,7 +2,7 @@ import json
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
 
 from teams_exporter.teams_connector import ChatSummary, TeamsConnector
@@ -38,6 +38,23 @@ class StubConnector(TeamsConnector):
 
 
 class TeamsConnectorTests(unittest.TestCase):
+    def test_cached_account_metadata_reads_identity_without_acquiring_tokens(self):
+        client = TeamsConnector()
+        cached_account = {
+            "username": "taylor@example.test",
+            "local_account_id": "user-guid",
+            "tenant_id": "tenant-guid",
+            "home_account_id": "user-guid.tenant-guid",
+        }
+        cache = Mock()
+        cache.find.return_value = [cached_account]
+        with patch.object(client, "_load_token_cache", return_value=cache):
+            metadata = client.get_cached_account_metadata()
+
+        self.assertEqual(metadata["username"], "taylor@example.test")
+        self.assertEqual(metadata["user_id"], "user-guid")
+        cache.find.assert_called_once_with("Account")
+
     def test_members_enrich_blank_display_names_from_middle_tier_profiles(self):
         client = StubConnector(
             [{"members": [{"id": "8:orgid:ABC123", "displayName": ""}]}]

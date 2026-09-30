@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
-from contextlib import contextmanager
+import tempfile
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
@@ -13,13 +15,130 @@ from teams_exporter.teams_connector import ChatSummary, TeamsConnector
 from teams_exporter.teams_message_formatter import TeamsMessageFormatter
 
 
+class DatabaseOwnerMismatchError(RuntimeError):
+    """Raised when an index path is already bound to another Teams account."""
+
+
 class TeamsSearchIndex:
     """Local SQLite catalog, message archive, and FTS5 search index."""
 
-    def __init__(self, path: str | Path = ".teams_search_index.sqlite3") -> None:
+    OWNER_METADATA_KEY = "account_fingerprint"
+
+    def __init__(
+        self,
+        path: str | Path = ".teams_search_index.sqlite3",
+        *,
+        owner_fingerprint: str | None = None,
+    ) -> None:
         self.path = Path(path)
+        self.owner_fingerprint = owner_fingerprint
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
+
+    @classmethod
+    def resolve_account_path(
+        cls,
+        base_path: str | Path,
+        owner_fingerprint: str,
+        *,
+        use_base_if_missing: bool = False,
+    ) -> tuple[Path, str | None]:
+        """Choose an index file without adopting or overwriting another user's data."""
+        base = Path(base_path)
+        warning = None
+        if base.exists():
+            base_owner = cls.read_owner_fingerprint(base)
+            if base_owner == owner_fingerprint:
+                return base, None
+            if base_owner is None:
+                warning = (
+                    "An existing Teams archive has no verified account owner. "
+                    "It was preserved, and a separate archive was opened for this account."
+                )
+            else:
+                warning = (
+                    "An existing Teams archive belongs to another account. "
+                    "It was preserved, and a separate archive was opened for this account."
+                )
+        elif use_base_if_missing:
+            return base, None
+
+        suffix = base.suffix or ".sqlite3"
+        stem = base.stem if base.suffix else base.name
+        short_path = base.with_name(f"{stem}-{owner_fingerprint[:16]}{suffix}")
+        if not short_path.exists():
+            return short_path, warning
+        if cls.read_owner_fingerprint(short_path) == owner_fingerprint:
+            return short_path, warning
+
+        full_path = base.with_name(f"{stem}-{owner_fingerprint}{suffix}")
+        if not full_path.exists():
+            return full_path, warning
+        if cls.read_owner_fingerprint(full_path) == owner_fingerprint:
+            return full_path, warning
+        raise DatabaseOwnerMismatchError(
+            "An account-specific archive path is occupied by a database with a different or unknown owner. "
+            "The existing file was left untouched. Set TEAMS_SEARCH_INDEX_PATH to another location."
+        )
+
+    @classmethod
+    def read_owner_fingerprint(cls, path: str | Path) -> str | None:
+        """Read ownership metadata without creating or changing the database."""
+        database_path = Path(path)
+        if not database_path.is_file():
+            return None
+        try:
+            uri = database_path.resolve().as_uri() + "?mode=ro"
+            with closing(sqlite3.connect(uri, uri=True, timeout=5)) as connection:
+                has_metadata = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'index_metadata'"
+                ).fetchone()
+                if not has_metadata:
+                    return None
+                row = connection.execute(
+                    "SELECT value FROM index_metadata WHERE key = ?",
+                    (cls.OWNER_METADATA_KEY,),
+                ).fetchone()
+                return str(row[0]) if row else None
+        except (OSError, sqlite3.Error, ValueError):
+            return None
+
+    def backup_to(self, destination: str | Path, *, overwrite: bool = False) -> Path:
+        """Create a transactionally consistent SQLite backup at ``destination``."""
+        target = Path(destination).expanduser().resolve()
+        source = self.path.resolve()
+        if target == source:
+            raise ValueError("The backup destination must differ from the active archive.")
+        if target.exists() and not overwrite:
+            raise FileExistsError(f"Backup destination already exists: {target}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{target.name}.", suffix=".sqlite3", dir=target.parent
+        )
+        os.close(descriptor)
+        temporary = Path(temporary_name)
+        try:
+            source_connection = sqlite3.connect(source, timeout=30)
+            try:
+                destination_connection = sqlite3.connect(temporary, timeout=30)
+                try:
+                    source_connection.backup(destination_connection)
+                    destination_connection.commit()
+                finally:
+                    destination_connection.close()
+            finally:
+                source_connection.close()
+            if overwrite:
+                os.replace(temporary, target)
+            else:
+                # Hard-link creation fails atomically if another process made the
+                # destination after our initial existence check.
+                os.link(temporary, target)
+                temporary.unlink()
+            return target
+        finally:
+            if temporary.exists():
+                temporary.unlink()
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -38,6 +157,15 @@ class TeamsSearchIndex:
     def _initialize(self) -> None:
         try:
             with self._connect() as connection:
+                existing_owner = self._owner_from_connection(connection)
+                if (
+                    self.owner_fingerprint is not None
+                    and existing_owner is not None
+                    and existing_owner != self.owner_fingerprint
+                ):
+                    raise DatabaseOwnerMismatchError(
+                        "The selected Teams archive belongs to another account."
+                    )
                 connection.execute("PRAGMA journal_mode = WAL")
                 connection.executescript(
                     """
@@ -110,28 +238,32 @@ class TeamsSearchIndex:
                     );
                     """
                 )
-                state_columns = {
-                    row["name"]
-                    for row in connection.execute("PRAGMA table_info(chat_index_state)")
-                }
-                if "participants_scanned" not in state_columns:
+                if self.owner_fingerprint is not None:
                     connection.execute(
-                        "ALTER TABLE chat_index_state ADD COLUMN participants_scanned "
-                        "INTEGER NOT NULL DEFAULT 0"
+                        "INSERT OR IGNORE INTO index_metadata(key, value) VALUES (?, ?)",
+                        (self.OWNER_METADATA_KEY, self.owner_fingerprint),
                     )
-                if "unresolved_participants" not in state_columns:
-                    connection.execute(
-                        "ALTER TABLE chat_index_state ADD COLUMN unresolved_participants "
-                        "INTEGER NOT NULL DEFAULT 0"
-                    )
-                if "sync_attempted_at" not in state_columns:
-                    connection.execute(
-                        "ALTER TABLE chat_index_state ADD COLUMN sync_attempted_at TEXT"
-                    )
+                    stored_owner = self._owner_from_connection(connection)
+                    if stored_owner != self.owner_fingerprint:
+                        raise DatabaseOwnerMismatchError(
+                            "The selected Teams archive belongs to another account."
+                        )
         except sqlite3.OperationalError as exc:
             if "fts5" in str(exc).casefold() or "no such module" in str(exc).casefold():
                 raise RuntimeError("This Python SQLite build does not include FTS5.") from exc
             raise
+
+    def _owner_from_connection(self, connection: sqlite3.Connection) -> str | None:
+        has_metadata = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'index_metadata'"
+        ).fetchone()
+        if not has_metadata:
+            return None
+        row = connection.execute(
+            "SELECT value FROM index_metadata WHERE key = ?",
+            (self.OWNER_METADATA_KEY,),
+        ).fetchone()
+        return str(row[0]) if row else None
 
     @staticmethod
     def _now() -> str:

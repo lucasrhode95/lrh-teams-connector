@@ -8,8 +8,10 @@ tokens.json
 .teams_search_index*
 *.sqlite3
 *.sqlite3-*
-*.db-wal
-*.db-shm
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
 
 # Environment / secrets
 .env

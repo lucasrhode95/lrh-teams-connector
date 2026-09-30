@@ -44,6 +44,7 @@ class CatalogCoverage(TypedDict):
 class ListChatsResult(TypedDict):
     items: list[ChatRecord]
     next_page_token: str | None
+    database_notice: str | None
     coverage: CatalogCoverage
 
 
@@ -74,6 +75,7 @@ class SearchChatsResult(TypedDict):
     items: list[ParticipantChatRecord]
     total_matches_in_index: int
     next_cursor: str | None
+    database_notice: str | None
     coverage: ParticipantSearchCoverage
 
 
@@ -108,6 +110,7 @@ class GetMessagesResult(TypedDict):
     conversation: ConversationRecord
     items: list[MessageRecord]
     next_cursor: str | None
+    database_notice: str | None
     coverage: MessagePageCoverage
 
 
@@ -140,6 +143,7 @@ class SearchMessagesResult(TypedDict):
     items: list[SearchMessageRecord]
     total_matches_in_index: int
     next_cursor: str | None
+    database_notice: str | None
     coverage: MessageSearchCoverage
 
 
@@ -187,6 +191,7 @@ class SyncCoverage(TypedDict):
 
 class SyncSearchIndexResult(TypedDict):
     items: list[SyncedChatRecord]
+    database_notice: str | None
     coverage: SyncCoverage
 
 
@@ -229,6 +234,7 @@ class StatusCoverage(TypedDict):
 class SearchIndexStatusResult(TypedDict):
     items: list[ChatIndexStatus]
     next_page_token: str | None
+    database_notice: str | None
     coverage: StatusCoverage
 
 

@@ -61,13 +61,22 @@ class MCPContractTests(unittest.TestCase):
                         result = await session.call_tool(
                             "search_messages", {"query": "sanitized contract probe"}
                         )
-                        self.assertFalse(result.isError)
-                        self.assertEqual(result.structuredContent["items"], [])
-                        self.assertFalse(
-                            result.structuredContent["coverage"][
-                                "complete_for_requested_scope"
-                            ]
-                        )
+                        if result.isError:
+                            # Local archive access is account-bound; without a
+                            # cached account the server must not open an
+                            # unverified database.
+                            error_text = " ".join(
+                                item.text for item in result.content if hasattr(item, "text")
+                            )
+                            self.assertIn("Teams sign-in is required", error_text)
+                        else:
+                            self.assertEqual(result.structuredContent["items"], [])
+                            self.assertIn("database_notice", result.structuredContent)
+                            self.assertFalse(
+                                result.structuredContent["coverage"][
+                                    "complete_for_requested_scope"
+                                ]
+                            )
 
             asyncio.run(exercise_client())
 
