@@ -5,6 +5,7 @@ import json
 import threading
 import unittest
 import zipfile
+from datetime import date, datetime, time, timedelta, timezone
 from io import BytesIO
 
 from teams_exporter.local_server import LocalTeamsHTTPServer
@@ -110,6 +111,7 @@ class LocalTeamsServerTests(unittest.TestCase):
         return result
 
     def test_page_and_chat_api_are_local_and_typed(self):
+        self.service.database_notice = "An unverified archive was preserved."
         page_status, page_headers, page = self.request("GET", "/")
         self.assertEqual(page_status, 200)
         self.assertIn(b"Download conversations", page)
@@ -120,6 +122,7 @@ class LocalTeamsServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(result["count"], 2)
         self.assertEqual(result["account"], self.service.account_info)
+        self.assertEqual(result["database_notice"], self.service.database_notice)
         self.assertEqual([chat["name"] for chat in result["chats"]], ["Alpha", "Beta"])
         self.assertEqual(headers["Cache-Control"], "no-store")
         self.assertEqual(self.service.list_calls, [(100, None)])
@@ -178,8 +181,8 @@ class LocalTeamsServerTests(unittest.TestCase):
         self.assertTrue(all(name.endswith(".txt") for name in archive.namelist()))
         self.assertTrue(all(call[1] is None for call in self.service.connector.calls))
 
-    def test_concatenated_zip_contains_one_file_in_selection_order(self):
-        status, _, body = self.request(
+    def test_combined_chats_download_as_plain_text_in_selection_order(self):
+        status, headers, body = self.request(
             "POST",
             "/api/download",
             {
@@ -188,10 +191,51 @@ class LocalTeamsServerTests(unittest.TestCase):
             },
         )
         self.assertEqual(status, 200)
-        with zipfile.ZipFile(BytesIO(body)) as archive:
-            self.assertEqual(archive.namelist(), ["conversations.txt"])
-            text = archive.read("conversations.txt").decode("utf-8")
+        self.assertEqual(headers["Content-Type"], "text/plain; charset=utf-8")
+        self.assertIn("filename*=UTF-8''conversations.txt", headers["Content-Disposition"])
+        text = body.decode("utf-8")
         self.assertLess(text.index("Conversation: Beta"), text.index("Conversation: Alpha"))
+
+    def test_date_range_is_inclusive_and_uses_the_browser_timezone(self):
+        status, _, body = self.request(
+            "POST",
+            "/api/download",
+            {
+                "chat_ids": ["19:alpha@thread.v2"],
+                "from_date": "2026-09-28",
+                "to_date": "2026-09-28",
+                "from_utc_offset_minutes": 180,
+                "to_utc_offset_minutes": 180,
+                "message_limit": None,
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("Alpha earlier", body.decode("utf-8"))
+        self.assertIn("Alpha latest", body.decode("utf-8"))
+        self.assertNotIn("Before the date", body.decode("utf-8"))
+        chat_id, limit, since, until = self.service.connector.calls[-1]
+        expected_tz = timezone(timedelta(hours=-3))
+        self.assertEqual(chat_id, "19:alpha@thread.v2")
+        self.assertIsNone(limit)
+        self.assertEqual(since, datetime(2026, 9, 28, 0, 0, tzinfo=expected_tz))
+        self.assertEqual(
+            until,
+            datetime.combine(date.fromisoformat("2026-09-28"), time.max, expected_tz),
+        )
+
+    def test_reversed_date_range_is_rejected_before_export(self):
+        status, _, body = self.request(
+            "POST",
+            "/api/download",
+            {
+                "chat_ids": ["19:alpha@thread.v2"],
+                "from_date": "2026-09-29",
+                "to_date": "2026-09-28",
+            },
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(body)["error"]["code"], "invalid_request")
+        self.assertEqual(self.service.connector.calls, [])
 
     def test_authentication_needed_and_invalid_origin_are_clear(self):
         self.service.auth_required = True

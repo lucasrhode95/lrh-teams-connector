@@ -30,10 +30,10 @@ class SearchIndexStorageTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
 
-    def test_legacy_archive_is_preserved_and_account_gets_separate_archive(self):
+    def test_archive_without_verified_owner_is_preserved_for_account_isolation(self):
         base = self.root / "search-index.sqlite3"
-        legacy = TeamsSearchIndex(base)
-        legacy.upsert_chats([ChatSummary("19:legacy@thread.v2", "Legacy")])
+        unowned = TeamsSearchIndex(base)
+        unowned.upsert_chats([ChatSummary("19:unowned@thread.v2", "Unowned")])
 
         selected, warning = TeamsSearchIndex.resolve_account_path(
             base, fingerprint("tenant-a", "user-a")
@@ -41,7 +41,7 @@ class SearchIndexStorageTests(unittest.TestCase):
 
         self.assertNotEqual(selected, base)
         self.assertIn("no verified account owner", warning)
-        self.assertEqual(legacy.counts()["catalog_chats"], 1)
+        self.assertEqual(unowned.counts()["catalog_chats"], 1)
         self.assertFalse(selected.exists())
 
     def test_different_account_uses_a_separate_path_without_overwriting(self):

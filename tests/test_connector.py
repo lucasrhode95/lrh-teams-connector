@@ -457,7 +457,7 @@ class TeamsExporterTests(unittest.TestCase):
                 return [{
                     "id": "one",
                     "sequenceId": 1,
-                    "originalarrivaltime": "2026-09-28T10:00:00Z",
+                    "originalarrivaltime": "2026-09-28T13:00:00+03:00",
                     "imdisplayname": "Taylor",
                     "messagetype": "RichText/Html",
                     "content": "<p>Hi <b>there</b></p>",

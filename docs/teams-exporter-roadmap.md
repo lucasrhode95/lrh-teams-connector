@@ -20,7 +20,7 @@ The project uses app-owned Microsoft authentication and read-only Teams requests
 | Fixture-based tests for connector, filtering, formatting, and export | Implemented |
 | Client-independent MCP access over stdio | Implemented; see Phase 2 status |
 | Persistent local SQLite/FTS5 message index | Implemented; bounded and resumable, but no scheduled refresh is configured |
-| Local loopback web UI for chat selection, date/count filters, and text/ZIP downloads | Implemented; basic export flow only |
+| Local loopback web UI for chat selection, inclusive date-range/count filters, and text/ZIP downloads | Implemented; basic export flow only |
 | CSA delta synchronization for partial/incremental catalogs | Not implemented |
 
 ## Phase 1 — complete the local exporter
@@ -63,14 +63,14 @@ Acceptance:
 
 ### P1.3 Build the local web UI and export flow
 
-**Status:** Implemented as a small, single-page local interface served by Python's standard-library HTTP server. It lists the activity-ordered catalog, filters the list by chat name, supports one inclusive local-calendar start date and an optional per-chat message limit, exports one selected chat as text, and exports multiple selected chats as a ZIP. The ZIP contains one text file per chat by default, or one combined text file when requested. A blank message limit means all matching messages. The server binds to loopback only. When authentication is missing, it shows the separate interactive sign-in command and can reload the catalog after sign-in. The UI does not mark chats or messages read.
+**Status:** Implemented as a small, single-page local interface served by Python's standard-library HTTP server. It lists the activity-ordered catalog, filters the list by chat name, supports one inclusive local-calendar date range and an optional per-chat message limit, and shows the signed-in user's name and email. One selected chat downloads as text. Multiple chats download as a ZIP with one text file per chat, or as one plain-text file when combine is selected. A blank message limit means all matching messages. The date filter uses the browser's timezone; exported timestamps remain UTC. The server binds to loopback only. When authentication is missing, it shows the separate interactive sign-in command and can reload the catalog after sign-in. The UI does not mark chats or messages read.
 
 User flow:
 
 1. Start the local server and open the page to see the available chats.
 2. Select one or more chats.
-3. Optionally choose a start date and a maximum message count per chat; a blank count means unlimited.
-4. Optionally combine multiple selected chats into one text file inside the ZIP.
+3. Optionally choose an inclusive start and end date and a maximum message count per chat; a blank count means unlimited. One calendar click selects a single day; a second click sets the end date.
+4. Optionally combine multiple selected chats into one plain-text download.
 5. Download the selected exports.
 6. If authentication is missing, show the separate sign-in command. After sign-in completes, let the user refresh the chat list.
 
@@ -85,8 +85,9 @@ Requirements:
 Acceptance:
 
 - A user can select one chat and download a text export, or select multiple chats and download a ZIP.
-- A multiple-chat ZIP contains per-chat text files by default and one combined text file when concatenation is selected.
-- A user can combine an inclusive start-date filter with an optional per-chat message limit; leaving the limit blank retrieves all matching messages.
+- Multiple chats download as a ZIP containing per-chat text files by default, or as one plain-text file when combine is selected.
+- A user can combine an inclusive date-range filter with an optional per-chat message limit; leaving the limit blank retrieves all matching messages.
+- The date range is interpreted in the browser's timezone. Exported timestamps use UTC.
 - The UI displays an explicit authentication-needed state and reloads the catalog after the separate device-code sign-in completes.
 - Listing and exporting remain read-only, and the HTTP listener is reachable only on the local machine.
 

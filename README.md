@@ -10,7 +10,7 @@ The backend also exposes read-only operations through a standard MCP server over
 
 ## Local export page
 
-Start the local page from the repository root with `python -m teams_exporter serve` (add `--port 8765` to choose a port), then open `http://127.0.0.1:8765`. It lists conversations in activity order and lets you filter by name, choose a local start date and a per-chat message limit, then download one chat as text or multiple chats as a ZIP. Leave the count blank for all matching messages. The ZIP can contain one text file per chat or one combined text file. The server listens only on loopback; stop it with Ctrl+C. Chat dates are displayed in the browser's local timezone; exports and MCP message timestamps use UTC.
+Start the local page from the repository root with `python -m teams_exporter serve` (add `--port 8765` to choose a port), then open `http://127.0.0.1:8765`. It lists conversations in activity order and lets you filter by name, choose an inclusive date range with one calendar, and set a per-chat message limit. One date click selects a single day; a second selects the end of the range. One chat downloads as text; multiple chats download as a ZIP unless you choose to combine them into one plain text file. Leave the count blank for all matching messages. The server listens only on loopback; stop it with Ctrl+C. Chat dates are displayed in the browser's local timezone; exports and MCP message timestamps use UTC. The signed-in Teams user's name and email appear at the top of the page.
 
 If the page reports that sign-in is needed, run `python -m teams_exporter auth` from the repository root, finish Microsoft's device-code flow, then refresh the page. The local page and its APIs are read-only and do not mark conversations as read.
 

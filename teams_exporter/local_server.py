@@ -5,7 +5,7 @@ import re
 import shutil
 import tempfile
 import zipfile
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
@@ -29,46 +29,64 @@ INDEX_HTML = r"""<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Teams conversation export</title>
   <style>
-    :root { color-scheme: light; font: 15px/1.45 system-ui, sans-serif; color: #202735; background: #f1f4f8; }
+    :root { color-scheme: light; --teams-purple: #5b5fc7; --teams-purple-dark: #444791; --teams-purple-light: #e8ebfa; --teams-neutral: #f5f5f5; font: 15px/1.45 system-ui, sans-serif; color: #242424; background: var(--teams-neutral); }
     * { box-sizing: border-box; }
     body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 28px 16px; }
-    main { width: min(820px, 100%); padding: 28px; background: white; border: 1px solid #dce2ea; border-radius: 14px; box-shadow: 0 12px 36px #1e293b12; }
+    main { width: min(820px, 100%); padding: 28px; background: white; border: 1px solid #e1dfdd; border-radius: 10px; box-shadow: 0 12px 36px #1e293b12; }
     h1 { margin: 0; font-size: 1.6rem; letter-spacing: -.02em; }
-    p { margin: 8px 0 0; color: #596579; }
-    .eyebrow { margin: 0 0 6px; color: #5365a9; font-size: .75rem; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+    p { margin: 8px 0 0; color: #616161; }
+    .eyebrow { margin: 0 0 6px; color: var(--teams-purple); font-size: .75rem; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
     header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
     .account-info { display: grid; justify-items: end; gap: 2px; padding-top: 3px; text-align: right; }
-    .account-info strong { color: #202735; font-size: .9rem; font-weight: 700; }
-    .account-info span { color: #69758a; font-size: .78rem; font-weight: 400; }
+    .account-info strong { color: #242424; font-size: .9rem; font-weight: 700; }
+    .account-info span { color: #737373; font-size: .78rem; font-weight: 400; }
     .filters { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 24px 0 18px; }
-    label { display: grid; gap: 6px; color: #394355; font-weight: 600; }
-    input[type="date"], input[type="number"], input[type="search"] { width: 100%; min-height: 40px; border: 1px solid #cbd3df; border-radius: 7px; padding: 8px 10px; color: inherit; font: inherit; background: white; }
-    input:focus-visible, button:focus-visible { outline: 3px solid #aab7f4; outline-offset: 2px; }
+    label, .filter-field { display: grid; gap: 6px; color: #424242; font-weight: 600; }
+    .field-label { color: #424242; font-weight: 600; }
+    input[type="number"], input[type="search"], .range-toggle { width: 100%; min-height: 40px; border: 1px solid #c8c6c4; border-radius: 4px; padding: 8px 10px; color: inherit; font: inherit; background: white; }
+    input:focus-visible, button:focus-visible { outline: 3px solid #bdbdf2; outline-offset: 2px; }
+    input[type="checkbox"] { accent-color: var(--teams-purple); }
     .combine { grid-column: 1 / -1; display: flex; align-items: center; gap: 9px; font-weight: 500; }
     .combine input { width: 16px; height: 16px; margin: 0; }
     .list-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin: 18px 0 8px; }
     .list-heading label { flex: 1; max-width: 340px; }
-    .count { color: #596579; white-space: nowrap; font-size: .9rem; }
-    .chat-list { max-height: min(44vh, 390px); overflow: auto; border: 1px solid #dce2ea; border-radius: 8px; }
-    .chat-row { display: flex; grid-template-columns: auto 1fr; align-items: start; gap: 11px; padding: 11px 13px; border-bottom: 1px solid #edf0f4; cursor: pointer; }
+    .count { color: #616161; white-space: nowrap; font-size: .9rem; }
+    .chat-list { max-height: min(44vh, 390px); overflow: auto; border: 1px solid #e1dfdd; border-radius: 4px; }
+    .chat-row { display: flex; grid-template-columns: auto 1fr; align-items: start; gap: 11px; padding: 11px 13px; border-bottom: 1px solid #f0f0f0; cursor: pointer; }
     .chat-row:last-child { border-bottom: 0; }
-    .chat-row:hover { background: #f7f8fc; }
+    .chat-row:hover { background: #f5f5ff; }
     .chat-row input { margin: 4px 0 0; }
-    .chat-name { display: block; color: #202735; font-weight: 600; overflow-wrap: anywhere; }
-    .chat-meta { display: block; margin-top: 2px; color: #69758a; font-size: .82rem; }
-    .empty { padding: 20px; color: #69758a; text-align: center; }
+    .chat-name { display: block; color: #242424; font-weight: 600; overflow-wrap: anywhere; }
+    .chat-meta { display: block; margin-top: 2px; color: #737373; font-size: .82rem; }
+    .empty { padding: 20px; color: #737373; text-align: center; }
     .database-notice { padding: 11px 12px; border-radius: 7px; background: #fff7e6; color: #594522; }
     .actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; }
-    button { min-height: 40px; border: 0; border-radius: 7px; padding: 9px 15px; font: inherit; font-weight: 650; cursor: pointer; }
-    button.primary { color: white; background: #4659a8; }
-    button.primary:hover:not(:disabled) { background: #35478f; }
-    button.secondary { color: #394355; background: #edf0f5; }
+    button { min-height: 40px; border: 0; border-radius: 4px; padding: 9px 15px; font: inherit; font-weight: 650; cursor: pointer; }
+    button.primary { color: white; background: var(--teams-purple); }
+    button.primary:hover:not(:disabled) { background: var(--teams-purple-dark); }
+    button.secondary { color: #424242; background: #f0f0f0; }
     button:disabled { opacity: .52; cursor: not-allowed; }
-    #status { min-height: 1.4em; color: #596579; }
+    #status { min-height: 1.4em; color: #616161; }
     #status.error { color: #a83232; }
     .auth-help { margin-top: 12px; padding: 12px; border-radius: 7px; background: #fff7e6; color: #594522; }
     code { font-family: ui-monospace, Consolas, monospace; }
-    @media (max-width: 560px) { main { padding: 20px; } .filters { grid-template-columns: 1fr; } .combine { grid-column: auto; } .list-heading { align-items: stretch; flex-direction: column; } .list-heading label { max-width: none; } .actions { align-items: stretch; flex-direction: column-reverse; } .actions button { width: 100%; } }
+    .range-picker { position: relative; }
+    .range-toggle { display: flex; align-items: center; justify-content: space-between; text-align: left; font-weight: 400; }
+    .calendar { position: absolute; z-index: 5; top: calc(100% + 7px); left: 0; width: min(352px, calc(100vw - 72px)); padding: 14px; background: white; border: 1px solid #e1dfdd; border-radius: 8px; box-shadow: 0 10px 28px #24242424; }
+    .calendar-header { display: grid; grid-template-columns: 36px 1fr 36px; align-items: center; gap: 8px; margin-bottom: 10px; text-align: center; }
+    .calendar-header strong { font-size: .95rem; }
+    .calendar-nav { min-height: 34px; padding: 4px; color: var(--teams-purple-dark); background: transparent; font-size: 1.2rem; }
+    .weekdays, .calendar-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); justify-items: center; }
+    .weekdays { margin-bottom: 4px; color: #737373; font-size: .75rem; font-weight: 600; }
+    .calendar-day { display: grid; place-items: center; width: 38px; height: 38px; min-height: 0; padding: 0; border-radius: 50%; color: #242424; background: transparent; font-weight: 400; }
+    .calendar-day:hover { background: #f1f0ff; }
+    .calendar-day.outside-month { color: #a19f9d; }
+    .calendar-day.in-range { background: var(--teams-purple-light); border-radius: 0; }
+    .calendar-day.range-start, .calendar-day.range-end { color: white; background: var(--teams-purple); font-weight: 650; }
+    .calendar-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; border-top: 1px solid #f0f0f0; padding-top: 10px; }
+    .calendar-hint { flex: 1; color: #616161; font-size: .72rem; line-height: 1.3; }
+    .calendar-footer button { min-height: 32px; padding: 6px 9px; font-size: .8rem; }
+    @media (max-width: 560px) { main { padding: 20px; } header { gap: 12px; } .account-info { max-width: 42%; overflow-wrap: anywhere; } .filters { grid-template-columns: 1fr; } .combine { grid-column: auto; } .list-heading { align-items: stretch; flex-direction: column; } .list-heading label { max-width: none; } .actions { align-items: stretch; flex-direction: column-reverse; } .actions button { width: 100%; } }
   </style>
 </head>
 <body>
@@ -86,9 +104,30 @@ INDEX_HTML = r"""<!doctype html>
   </header>
   <p id="database-notice" class="database-notice" role="status" hidden></p>
   <section class="filters" aria-label="Export filters">
-    <label for="from-date">From date <input id="from-date" type="date"></label>
+    <div class="filter-field range-picker" id="range-picker">
+      <span class="field-label">Message date range</span>
+      <button id="range-toggle" class="range-toggle" type="button" aria-haspopup="dialog" aria-expanded="false">
+        <span id="range-label">Any date</span><span aria-hidden="true">⌄</span>
+      </button>
+      <div id="calendar" class="calendar" role="dialog" aria-label="Choose an inclusive message date range" hidden>
+        <div class="calendar-header">
+          <button id="previous-month" class="calendar-nav" type="button" aria-label="Previous month">‹</button>
+          <strong id="calendar-month"></strong>
+          <button id="next-month" class="calendar-nav" type="button" aria-label="Next month">›</button>
+        </div>
+        <div class="weekdays" aria-hidden="true"><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span><span>S</span></div>
+        <div id="calendar-days" class="calendar-days"></div>
+        <div class="calendar-footer">
+          <button id="clear-dates" class="secondary" type="button">Clear</button>
+          <span id="calendar-hint" class="calendar-hint">Click once for one day; click again to set the end date.</span>
+          <button id="calendar-done" class="secondary" type="button">Done</button>
+        </div>
+      </div>
+      <input id="from-date" type="hidden">
+      <input id="to-date" type="hidden">
+    </div>
     <label for="message-limit">Maximum messages per chat <input id="message-limit" type="number" min="1" step="1" placeholder="Unlimited"></label>
-    <label class="combine"><input id="combine" type="checkbox" disabled><span>Combine selected chats into one text file inside the ZIP</span></label>
+    <label class="combine"><input id="combine" type="checkbox" disabled><span>Combine selected conversations into one text file</span></label>
   </section>
   <section aria-label="Conversation selection">
     <div class="list-heading">
@@ -118,6 +157,113 @@ INDEX_HTML = r"""<!doctype html>
   const authHelp = document.getElementById('auth-help');
   const databaseNotice = document.getElementById('database-notice');
   const accountInfo = document.getElementById('account-info');
+  const calendar = document.getElementById('calendar');
+  const calendarDays = document.getElementById('calendar-days');
+  const calendarMonthLabel = document.getElementById('calendar-month');
+  const rangeToggle = document.getElementById('range-toggle');
+  const rangeLabel = document.getElementById('range-label');
+  const fromDateInput = document.getElementById('from-date');
+  const toDateInput = document.getElementById('to-date');
+  let calendarMonth = new Date();
+  calendarMonth.setDate(1);
+  let choosingEnd = false;
+  let rangeStartDraft = null;
+
+  function dateKey(date) {
+    return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
+  }
+
+  function dateFromKey(value) {
+    const parts = value.split('-').map(Number);
+    return new Date(parts[0], parts[1] - 1, parts[2]);
+  }
+
+  function formatCalendarDate(value) {
+    return dateFromKey(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+
+  function updateRangeLabel() {
+    if (!fromDateInput.value) {
+      rangeLabel.textContent = 'Any date';
+      return;
+    }
+    rangeLabel.textContent = fromDateInput.value === toDateInput.value
+      ? formatCalendarDate(fromDateInput.value)
+      : formatCalendarDate(fromDateInput.value) + ' – ' + formatCalendarDate(toDateInput.value);
+  }
+
+  function setDateRange(start, end) {
+    fromDateInput.value = start || '';
+    toDateInput.value = end || '';
+    updateRangeLabel();
+    renderCalendar();
+  }
+
+  function setCalendarOpen(open) {
+    calendar.hidden = !open;
+    rangeToggle.setAttribute('aria-expanded', String(open));
+    if (open) {
+      calendarMonth = fromDateInput.value ? dateFromKey(fromDateInput.value) : new Date();
+      calendarMonth.setDate(1);
+      choosingEnd = false;
+      rangeStartDraft = null;
+      renderCalendar();
+    }
+  }
+
+  function renderCalendar() {
+    calendarMonthLabel.textContent = calendarMonth.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    document.getElementById('calendar-hint').textContent = choosingEnd
+      ? 'Choose an end date, or press Done to keep one day.'
+      : 'Click once for one day; click again to set the end date.';
+    calendarDays.replaceChildren();
+    const firstOfMonth = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1);
+    const mondayOffset = (firstOfMonth.getDay() + 6) % 7;
+    const firstVisible = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1 - mondayOffset);
+    for (let index = 0; index < 42; index += 1) {
+      const day = new Date(firstVisible.getFullYear(), firstVisible.getMonth(), firstVisible.getDate() + index);
+      const key = dateKey(day);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'calendar-day';
+      button.textContent = String(day.getDate());
+      button.setAttribute('aria-label', day.toLocaleDateString(undefined, { dateStyle: 'full' }));
+      if (day.getMonth() !== calendarMonth.getMonth()) button.classList.add('outside-month');
+      const start = fromDateInput.value;
+      const end = toDateInput.value;
+      if (start && end && key >= start && key <= end) button.classList.add('in-range');
+      if (start && key === start) button.classList.add('range-start');
+      if (end && key === end) button.classList.add('range-end');
+      button.addEventListener('click', function () { chooseCalendarDate(key); });
+      calendarDays.appendChild(button);
+    }
+  }
+
+  function chooseCalendarDate(key) {
+    if (!choosingEnd) {
+      rangeStartDraft = key;
+      choosingEnd = true;
+      setDateRange(key, key);
+      return;
+    }
+    if (key < rangeStartDraft) {
+      rangeStartDraft = key;
+      setDateRange(key, key);
+      return;
+    }
+    setDateRange(rangeStartDraft, key);
+    choosingEnd = false;
+    setCalendarOpen(false);
+  }
+
+  function browserUtcOffsetMinutes(value, endOfDay) {
+    const date = dateFromKey(value);
+    const probe = new Date(
+      date.getFullYear(), date.getMonth(), date.getDate(),
+      endOfDay ? 23 : 0, endOfDay ? 59 : 0
+    );
+    return probe.getTimezoneOffset();
+  }
 
   function setStatus(message, isError) {
     statusText.textContent = message;
@@ -231,7 +377,10 @@ INDEX_HTML = r"""<!doctype html>
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chat_ids: Array.from(selected),
-          from_date: document.getElementById('from-date').value || null,
+          from_date: fromDateInput.value || null,
+          to_date: toDateInput.value || null,
+          from_utc_offset_minutes: fromDateInput.value ? browserUtcOffsetMinutes(fromDateInput.value, false) : null,
+          to_utc_offset_minutes: toDateInput.value ? browserUtcOffsetMinutes(toDateInput.value, true) : null,
           message_limit: limitText || null,
           concatenate: combineInput.checked
         })
@@ -261,6 +410,28 @@ INDEX_HTML = r"""<!doctype html>
   }
 
   search.addEventListener('input', renderChats);
+  rangeToggle.addEventListener('click', function () { setCalendarOpen(calendar.hidden); });
+  document.getElementById('previous-month').addEventListener('click', function () {
+    calendarMonth.setMonth(calendarMonth.getMonth() - 1);
+    renderCalendar();
+  });
+  document.getElementById('next-month').addEventListener('click', function () {
+    calendarMonth.setMonth(calendarMonth.getMonth() + 1);
+    renderCalendar();
+  });
+  document.getElementById('clear-dates').addEventListener('click', function () {
+    choosingEnd = false;
+    rangeStartDraft = null;
+    setDateRange('', '');
+    setCalendarOpen(false);
+  });
+  document.getElementById('calendar-done').addEventListener('click', function () { setCalendarOpen(false); });
+  document.addEventListener('pointerdown', function (event) {
+    if (!calendar.hidden && !document.getElementById('range-picker').contains(event.target)) setCalendarOpen(false);
+  });
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && !calendar.hidden) setCalendarOpen(false);
+  });
   document.getElementById('refresh').addEventListener('click', loadChats);
   downloadButton.addEventListener('click', downloadSelected);
   loadChats();
@@ -372,7 +543,18 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
         chat_ids = list(dict.fromkeys(chat_id.strip() for chat_id in chat_ids))
 
         from_date_value = payload.get("from_date")
-        since = self._parse_local_date(from_date_value)
+        to_date_value = payload.get("to_date")
+        since = self._parse_local_date(
+            from_date_value,
+            utc_offset_minutes=payload.get("from_utc_offset_minutes"),
+        )
+        until = self._parse_local_date(
+            to_date_value,
+            end_of_day=True,
+            utc_offset_minutes=payload.get("to_utc_offset_minutes"),
+        )
+        if since is not None and until is not None and since > until:
+            raise ValueError("from_date must be earlier than or equal to to_date.")
         limit = self._parse_message_limit(payload.get("message_limit"))
         concatenate = payload.get("concatenate", False)
         if not isinstance(concatenate, bool):
@@ -392,6 +574,7 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
                 temp_dir / f"{self.server.exporter.filename_stem(chat)}.txt",
                 limit=limit,
                 since=since,
+                until=until,
             )
             return output_path.name, "text/plain; charset=utf-8", output_path
 
@@ -402,21 +585,22 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
             files_dir,
             limit=limit,
             since=since,
+            until=until,
         )
+        if concatenate:
+            combined_path = temp_dir / "conversations.txt"
+            with combined_path.open("wb") as combined:
+                for index, path in enumerate(exported):
+                    if index:
+                        combined.write(b"\n")
+                    with path.open("rb") as source:
+                        shutil.copyfileobj(source, combined, DOWNLOAD_CHUNK_SIZE)
+            return combined_path.name, "text/plain; charset=utf-8", combined_path
+
         archive_path = temp_dir / "teams-conversations.zip"
         with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            if concatenate:
-                combined_path = temp_dir / "conversations.txt"
-                with combined_path.open("wb") as combined:
-                    for index, path in enumerate(exported):
-                        if index:
-                            combined.write(b"\n")
-                        with path.open("rb") as source:
-                            shutil.copyfileobj(source, combined, DOWNLOAD_CHUNK_SIZE)
-                archive.write(combined_path, arcname="conversations.txt")
-            else:
-                for path in exported:
-                    archive.write(path, arcname=path.name)
+            for path in exported:
+                archive.write(path, arcname=path.name)
         return archive_path.name, "application/zip", archive_path
 
     def _all_chats(self) -> list[dict[str, Any]]:
@@ -448,16 +632,33 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
         )
 
     @staticmethod
-    def _parse_local_date(value: Any) -> datetime | None:
+    def _parse_local_date(
+        value: Any,
+        *,
+        end_of_day: bool = False,
+        utc_offset_minutes: Any = None,
+    ) -> datetime | None:
+        field_name = "to_date" if end_of_day else "from_date"
         if value in (None, ""):
             return None
         if not isinstance(value, str):
-            raise ValueError("from_date must be a calendar date.")
+            raise ValueError(f"{field_name} must be a calendar date.")
         try:
             parsed = date.fromisoformat(value)
         except ValueError as exc:
-            raise ValueError("from_date must use YYYY-MM-DD format.") from exc
-        return datetime.combine(parsed, time.min).astimezone()
+            raise ValueError(f"{field_name} must use YYYY-MM-DD format.") from exc
+        if utc_offset_minutes is None:
+            local_time = time.max if end_of_day else time.min
+            return datetime.combine(parsed, local_time).astimezone()
+        if (
+            isinstance(utc_offset_minutes, bool)
+            or not isinstance(utc_offset_minutes, int)
+            or not -840 <= utc_offset_minutes <= 840
+        ):
+            raise ValueError("UTC offset must be a whole number of minutes from -840 to 840.")
+        local_offset = timezone(timedelta(minutes=-utc_offset_minutes))
+        local_time = time.max if end_of_day else time.min
+        return datetime.combine(parsed, local_time, tzinfo=local_offset)
 
     @staticmethod
     def _parse_message_limit(value: Any) -> int | None:

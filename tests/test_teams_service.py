@@ -115,6 +115,15 @@ class TeamsServiceTests(unittest.TestCase):
         self.assertTrue(item["content_truncated"])
         self.assertEqual(item["content_char_count"], 1_250)
 
+    def test_mcp_message_timestamps_are_normalized_to_utc(self):
+        localized_message = message("localized", 1, "time zone probe")
+        localized_message["originalarrivaltime"] = "2026-09-28T13:00:01+03:00"
+        self.connector.pages["19:alpha@thread.v2"] = [([localized_message], None)]
+
+        result = self.service.get_messages("19:alpha@thread.v2")
+
+        self.assertEqual(result["items"][0]["timestamp"], "2026-09-28T10:00:01Z")
+
     def test_get_messages_cursor_is_bound_to_conversation_and_dates(self):
         self.connector.pages["19:alpha@thread.v2"] = [
             ([message("m1", 1, "first")], "page:1"),
