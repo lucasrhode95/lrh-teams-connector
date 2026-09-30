@@ -1,0 +1,25 @@
+{
+  "messages": [
+    {
+      "id": "message-3",
+      "sequenceId": 3,
+      "originalarrivaltime": "2026-09-28T10:02:00Z",
+      "imdisplayname": "Casey",
+      "messagetype": "RichText/Html",
+      "contenttype": "text",
+      "content": "<p>Third</p>"
+    },
+    {
+      "id": "message-2",
+      "sequenceId": 2,
+      "originalarrivaltime": "2026-09-28T10:01:00Z",
+      "imdisplayname": "Jordan",
+      "messagetype": "RichText/Html",
+      "contenttype": "text",
+      "content": "<p>Second</p>"
+    }
+  ],
+  "_metadata": {
+    "backwardLink": "https://chat.example.test/v1/users/ME/conversations/19%3Afixture%40thread.v2/messages?syncState=opaque%2Fcursor%2B1&pageSize=100&view=msnp24Equivalent"
+  }
+}

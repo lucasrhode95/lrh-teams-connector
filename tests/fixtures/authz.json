@@ -1,0 +1,10 @@
+{
+  "region": "test-region",
+  "regionGtms": {
+    "chatService": "https://chat.example.test",
+    "middleTier": "https://middle.example.test"
+  },
+  "tokens": {
+    "skypeToken": "fixture-skype-token"
+  }
+}

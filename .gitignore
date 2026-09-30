@@ -4,6 +4,15 @@
 *.token-cache
 tokens.json
 
+# Locally indexed Teams message archive (database and SQLite sidecars)
+.teams_search_index*
+*.sqlite3
+*.sqlite3-*
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+
 # Environment / secrets
 .env
 .env.*
@@ -43,6 +52,7 @@ dist/
 *.egg-info/
 .eggs/
 pip-wheel-metadata/
+exports/
 
 # Jupyter
 .ipynb_checkpoints/

@@ -1,58 +1,28 @@
-# Scrape Teams Chat
+# Teams Exporter
 
-Small browser-console helper for exporting text from a Microsoft Teams chat.
+This project provides two ways to retrieve Teams conversations: a local page for direct, user-operated exports and a standard MCP server for clients and AI agents. Both use the shared Teams connector and application-owned Microsoft sign-in.
 
-## Where to run it
+The connector follows Teams Desktop client conventions and uses endpoint behavior reverse-engineered from signed-in Teams Web traffic. The assumption that Web and Desktop use the same relevant service routes must be verified feature by feature. These are private, undocumented Microsoft routes, not a stable public API. This work is also inspired by [Maxim-Mazurok/teams-api](https://github.com/Maxim-Mazurok/teams-api).
 
-Run `scrape_teams_chat.js` in the Microsoft Teams V2 web UI, not in Node.js.
+## Sign in
 
-Use Teams in a browser, for example:
+Run `python -m teams_exporter auth` from the repository root to complete Microsoft's sign-in flow. Microsoft handles the password and any verification; this application never sees or stores the password. It stores opaque tokens in its own local token cache and uses them for Teams requests.
 
-- `https://teams.microsoft.com/v2/`
-- `https://teams.cloud.microsoft/`
+## Use the MCP server
 
-The script depends on Teams' web page DOM, so it will not work from the desktop app unless you can open and run JavaScript in that app's embedded web view.
+The standard MCP server uses `stdio`, so an MCP client starts it when needed. It does not need a continuously running HTTP service. Its tools list chats, find chats by indexed participant names, search indexed message text, retrieve live messages, sync and inspect the local archive, and send a message. Sending is the only write operation and requires explicit user authorization for the destination and content.
 
-## How to use
+Search uses the local SQLite/FTS5 archive and reports its coverage. It does not claim to search history that has not been indexed. See the [MCP server guide](docs/teams-mcp-server.md) for installation, client configuration, tool details, and archive behavior.
 
-1. Open Teams V2 in your browser.
-2. Open the chat you want to scrape.
-3. Click directly inside a visible chat message bubble.
-   - Do not click the left chat list, the chat header, or the compose/input box.
-   - Selecting or focusing a message helps the script find the correct scroll container.
-4. Open the browser developer console.
-5. Paste the contents of `scrape_teams_chat.js` into the console and run it.
-6. When the scrape finishes, use the on-screen panel to copy or download the exported text.
+## Use the local export page
 
-By default, the script runs:
+Run `python -m teams_exporter serve`, then open `http://127.0.0.1:8765`. The page lets you find and select conversations, apply an inclusive date range and optional per-chat message limit, and download the results. One chat produces a text file; multiple chats produce a ZIP unless you combine them into one text file. The page follows the system light/dark theme at load time and uses account/chat pictures when available, with local icon fallbacks.
 
-```js
-scrapeTeamsByID();
-```
+This is the direct, user-operated export path: it does not require AI, an MCP client, or another application. It still needs network access to Teams and a valid application sign-in; “offline” here means independent of an AI tool, not disconnected from Teams. The server listens only on the local machine. The page is read-only and does not mark chats or messages as read. UI times use the browser's timezone; exported message timestamps use UTC.
 
-That attempts to scrape as much history as Teams will lazy-load. To limit the export, run:
+## Project documentation
 
-```js
-scrapeTeamsByID(50);
-```
-
-To finish a running extraction and export the messages collected so far, enter this in the same browser console:
-
-```js
-stop();
-```
-
-The export panel appears after the current collection pass. `stop()` also interrupts the script's waits, including the initial move to the newest messages. If you stop before any readable messages are collected, there is nothing to export. A second scrape cannot start until the first export panel is closed or used.
-
-Console progress shows `added` since the previous printed line and `total` collected so far. The script prints every tenth pass while scrolling, so `added` includes messages collected in the intervening passes.
-
-## Tips and caveats
-
-- Start from the actual target chat before running the script. It scrapes the currently open chat.
-- Click message text or a message bubble first. If the script says it cannot find the chat scroll container, click a visible message and run it again.
-- Avoid the compose box. If the input area has focus, the script may identify the wrong part of the page.
-- Leave the Teams tab active while it runs. Teams lazy-loads older messages as the script scrolls upward.
-- Large chats can take a while because Teams only exposes part of the chat history at a time. At the top of the loaded history, the script allows up to 20 consecutive attempts for older messages to appear. The counter resets whenever Teams shows progress, and `stop()` lets you export early.
-- The export is text-focused. Images, reactions, cards, files, and other rich content may be skipped or represented incompletely.
-- If clipboard access is blocked by the browser, use the Download button or copy from the manual text box shown by the script.
-- Teams DOM attributes can change. If Microsoft updates the Teams V2 UI, the selectors in the script may need adjustment.
+- [Project architecture and module guide](docs/project-architecture.md)
+- [Teams API research](docs/teams-api-research.md)
+- [Product roadmap](docs/teams-exporter-roadmap.md)
+- [MCP server guide](docs/teams-mcp-server.md)

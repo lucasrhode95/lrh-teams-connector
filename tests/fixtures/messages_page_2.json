@@ -1,0 +1,19 @@
+{
+  "messages": [
+    {
+      "id": "message-2",
+      "sequenceId": 2,
+      "originalarrivaltime": "2026-09-28T10:01:00Z",
+      "imdisplayname": "Jordan",
+      "content": "Second duplicate"
+    },
+    {
+      "id": "message-1",
+      "sequenceId": 1,
+      "originalarrivaltime": "2026-09-28T10:00:00Z",
+      "imdisplayname": "Taylor",
+      "content": "First"
+    }
+  ],
+  "_metadata": {}
+}
