@@ -1988,11 +1988,21 @@ that the browser's requests were intercepted.
   or activity-date filter was identified in the tested request shape.
 - The CSA startup response returned 943 chats and reported `isPartialData=false`
   and `hasMoreChats=false`; every CSA ID was present in the raw Chat Service
-  list. The raw list had 17 additional entries, consisting of notification,
-  mention, call-log, notes, annotation, generic, space, and topic stream types.
-  These raw-only rows should not be merged into the ordinary complete CSA list
-  without an explicit product decision. The connector uses the raw list only as
-  a fallback when CSA explicitly reports partial data.
+  list. The raw list had 17 additional rows: one notes-to-self conversation
+  (`StreamOfNotes`), four `TeamsTeam`, six `TeamsStandardChannel`, one
+  `TeamsSharedChannel`, and one each of `StreamOfNotifications`,
+  `StreamOfMentions`, `StreamOfCallLogs`, `StreamOfAnnotations`, and
+  `StreamOfGeneric`. Thus, in this snapshot, the only raw-only chat-scope row
+  was notes-to-self; the other 16 rows were team/channel entities or service
+  streams. Product type labels were read from `threadProperties`.
+- The connector's catalog scope treats CSA chat/meeting rows as canonical,
+  supplements the known `48:notes` row, and uses the paginated raw feed as a
+  type-filtered fallback if CSA reports partial data or omits a completeness
+  flag. The fallback accepts chat, one-to-one chat, meeting, and the known
+  self-chat ID; it excludes identified team/channel and service-stream types.
+  An unrecognized raw-only type is excluded and reported as incomplete coverage.
+  This is application behavior based on the observed payloads, not a Microsoft
+  contract.
 - A first-page request with `pageSize=3` returned three messages. A 100-message
   page was also observed. This verifies those samples only, not a universal
   page-size limit.
@@ -2038,6 +2048,17 @@ The following details remain unverified or may vary by tenant/build:
 - whether `lastCompleteSegmentStartTime` and `lastCompleteSegmentEndTime` can safely terminate date-bounded history retrieval;
 - exact page-size limits and whether all continuation links retain the original requested page size;
 - which CSA headers beyond the resource bearer token and Skype token are mandatory across tenants.
+
+For the catalog implementation, `catalog_complete` is intentionally scoped:
+it means CSA reported complete, or that a paginated fallback finished without
+an unclassified raw-only row. It does not prove that every hidden, archived,
+or tenant-specific conversation is exposed by either service. When CSA marks
+its catalog complete, the connector does not make an extra raw-feed request on
+every listing; it includes the separately observed notes-to-self ID directly.
+When CSA is partial or its flags are absent, the full `backwardLink` chain is
+followed. Untitled fallback one-to-one chats can be named through a read-only
+thread-members lookup when the roster provides one resolvable peer; this lookup
+is bounded, and the catalog coverage reports unresolved fallback names.
 
 # Source notes
 

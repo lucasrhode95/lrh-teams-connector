@@ -40,7 +40,11 @@ The SQLite archive can support long retention after a full backfill, but this re
 
 The MCP input and output schemas are typed, results have bounded page sizes, and search responses state whether the indexed chats and requested dates are fully covered. All tools except `send_message` are read-only.
 
-- `list_chats`: page through the live chat catalog, ordered by activity.
+- `list_chats`: page through the live chat catalog, ordered by activity. Its
+  `coverage` object identifies the source and scope, CSA's reported partial
+  state, raw-feed counts, excluded non-chat/unclassified rows, and unresolved
+  fallback names. `catalog_complete` applies only to `catalog_scope`; it is not
+  a guarantee that every hidden or tenant-specific Teams object is exposed.
 - `search_chats`: find chats by participant-name substring in locally indexed rosters. Use `sync_search_index` first; coverage reports missing rosters and unresolved names.
 - `get_messages`: retrieve a bounded page for a conversation ID with optional inclusive timestamp bounds. Each message body is capped at 1,200 characters; `content_truncated` and `content_char_count` make clipping explicit. Follow `next_cursor` for older messages.
 - `search_messages`: search locally indexed content with exact token-phrase or all-terms matching, optionally scoped to one chat and/or date range. Follow `next_cursor` for more matches.
