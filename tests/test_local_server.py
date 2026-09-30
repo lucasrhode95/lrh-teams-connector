@@ -276,8 +276,13 @@ class LocalTeamsServerTests(unittest.TestCase):
         page_status, page_headers, page = self.request("GET", "/")
         self.assertEqual(page_status, 200)
         self.assertIn(b"Download conversations", page)
+        self.assertIn(b'href="/static/app.css"', page)
+        self.assertIn(b'src="/static/app.js"', page)
+        self.assertIn(b"Loading conversations", page)
+        self.assertIn(b"class=\"spinner\"", page)
         self.assertEqual(page_headers["Content-Security-Policy"].split(";", 1)[0], "default-src 'none'")
         self.assertIn("img-src 'self' https:", page_headers["Content-Security-Policy"])
+        self.assertIn("style-src 'self'; script-src 'self'", page_headers["Content-Security-Policy"])
 
         status, headers, body = self.request("GET", "/api/chats")
         result = json.loads(body)
@@ -300,6 +305,18 @@ class LocalTeamsServerTests(unittest.TestCase):
                 self.assertIn(b"<svg", body)
 
         status, _, body = self.request("GET", "/assets/not-an-avatar.svg")
+        self.assertEqual(status, 404)
+        self.assertEqual(json.loads(body)["error"]["code"], "not_found")
+
+    def test_page_static_assets_are_available_and_unknown_files_are_rejected(self):
+        for asset, content_type in (("app.css", "text/css"), ("app.js", "text/javascript")):
+            with self.subTest(asset=asset):
+                status, headers, body = self.request("GET", f"/static/{asset}")
+                self.assertEqual(status, 200)
+                self.assertTrue(headers["Content-Type"].startswith(content_type))
+                self.assertGreater(len(body), 0)
+
+        status, _, body = self.request("GET", "/static/not-an-asset.js")
         self.assertEqual(status, 404)
         self.assertEqual(json.loads(body)["error"]["code"], "not_found")
 
