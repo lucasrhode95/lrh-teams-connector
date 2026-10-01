@@ -20,6 +20,10 @@ Run `python -m teams_exporter serve`, then open `http://127.0.0.1:8765`. The pag
 
 This is the direct, user-operated export path: it does not require AI, an MCP client, or another application. It still needs network access to Teams and a valid application sign-in; “offline” here means independent of an AI tool, not disconnected from Teams. The server listens only on the local machine. The page is read-only and does not mark chats or messages as read. UI times use the browser's timezone; exported message timestamps use UTC.
 
+## Application logs
+
+The HTTP server writes formatted logs to stdout and to a daily-rotated file. The MCP server writes to the file only, keeping stdout available for MCP protocol messages. Logs are stored under `%LOCALAPPDATA%\scrape-teams-chat\logs` on Windows, or the standard per-user application data directory on other platforms. Each process uses its own log file so concurrent MCP and HTTP processes do not race while rotating files; seven daily backups are retained and older files are pruned at startup. Python warnings are redirected to the same logging system. The default level is `INFO`; set `TEAMS_EXPORTER_LOG_LEVEL=DEBUG` before starting a process for request and pagination detail. Operational logs record timings, statuses, and counts, not message bodies, search terms, chat names, identifiers, tokens, or authorization headers.
+
 ## Project documentation
 
 - [Project architecture and module guide](docs/project-architecture.md)

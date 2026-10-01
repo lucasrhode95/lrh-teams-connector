@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import http.client
 import json
+import logging
 import os
 import re
 import tempfile
@@ -19,6 +20,9 @@ from typing import Any, Callable, Iterator
 from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsplit
 
 import msal
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -244,6 +248,7 @@ class TeamsConnector:
         MCP callers must use ``interactive=False`` so an expired or missing
         session returns a clear error instead of waiting on a terminal prompt.
         """
+        logger.debug("Teams authentication check started interactive=%s", interactive)
         with _TokenCacheLock(self._cache_lock_path):
             self._migrate_repository_cache_if_needed()
             cache = self._load_token_cache()
@@ -283,6 +288,11 @@ class TeamsConnector:
         self._middle_tier_url = region_gtms.get("middleTier")
         if not self._chat_service_url:
             raise RuntimeError("Teams AuthZ did not return regionGtms.chatService.")
+        logger.info(
+            "Teams authentication accepted token_sources=spaces:%s,csa:%s",
+            spaces_source,
+            csa_source,
+        )
 
     def get_user_metadata(self) -> dict[str, Any]:
         """Return non-secret account fields from the Teams access token."""
@@ -390,6 +400,7 @@ class TeamsConnector:
                         raise RuntimeError("Teams profile picture exceeded the image size limit.")
                     return content, content_type
             except urllib.error.HTTPError as exc:
+                location = self._safe_location(url)
                 if exc.code in {401, 403}:
                     exc.close()
                     self._clear_session()
@@ -692,6 +703,7 @@ class TeamsConnector:
     def list_chats(self) -> list[ChatSummary]:
         """Return a normalized chat catalog in Teams-visible activity order."""
         self._require_logged_in()
+        logger.info("Teams chat catalog fetch started")
         payload = self._request_csa(self.CSA_STARTUP_URL)
         metadata = self._mapping(payload.get("metadata"))
         is_partial = metadata.get("isPartialData") is True or metadata.get(
@@ -833,6 +845,14 @@ class TeamsConnector:
             unclassified_service_rows_excluded=unclassified_rows_excluded,
             fallback_name_lookups_attempted=fallback_name_lookups_attempted,
             fallback_chats_without_resolved_name=fallback_chats_without_name,
+        )
+        logger.info(
+            "Teams chat catalog fetch completed chats=%d csa_partial=%s fallback_added=%d excluded_non_chat=%d excluded_unclassified=%d",
+            len(ordered),
+            csa_reported_partial,
+            fallback_chats_added,
+            non_chat_rows_excluded,
+            unclassified_rows_excluded,
         )
         return ordered
 
@@ -1422,6 +1442,13 @@ class TeamsConnector:
                         break
 
                 pages_fetched += 1
+                logger.debug(
+                    "Teams message page fetched page=%d scanned=%d retrieved_total=%d retries_total=%d",
+                    pages_fetched,
+                    len(page),
+                    messages_retrieved,
+                    retry_count,
+                )
                 metadata = self._mapping(payload.get("_metadata"))
                 backward_link = metadata.get("backwardLink")
                 if backward_link is not None and not isinstance(backward_link, str):
@@ -1465,6 +1492,15 @@ class TeamsConnector:
                     "retry_count": retry_count,
                     "limit_reached": limit_reached,
                 }
+            )
+            logger.info(
+                "Teams history read finished pages=%d scanned=%d retrieved=%d duplicates=%d retries=%d complete=%s",
+                pages_fetched,
+                raw_items_scanned,
+                messages_retrieved,
+                duplicate_messages_skipped,
+                retry_count,
+                history_complete,
             )
 
     @staticmethod
@@ -1513,6 +1549,13 @@ class TeamsConnector:
             url = continuation_url
         self._validate_message_page_url(url, conversation_id)
 
+        logger.debug(
+            "Teams bounded message page request started page_size=%d has_since=%s has_until=%s continuation=%s",
+            page_size,
+            since_utc is not None,
+            until_utc is not None,
+            continuation_url is not None,
+        )
         payload = self._request_chat_service(url)
         page = payload.get("messages")
         if not isinstance(page, list) or any(
@@ -1539,6 +1582,13 @@ class TeamsConnector:
             raise RuntimeError("Unexpected Teams message continuation link.")
         if next_url:
             self._validate_message_page_url(next_url, conversation_id)
+        logger.debug(
+            "Teams bounded message page received scanned=%d selected=%d missing_timestamps=%d has_continuation=%s",
+            len(page),
+            len(selected),
+            missing_timestamp_count,
+            bool(next_url),
+        )
         return (
             sorted(selected, key=self._message_order_key),
             next_url or None,
@@ -1630,6 +1680,7 @@ class TeamsConnector:
             "imdisplayname": sender_name,
             "properties": {"importance": "", "subject": None},
         }
+        logger.info("Teams message send started characters=%d", len(normalized_text))
         response = self._request_chat_service(
             self._messages_url(conversation_id.strip()),
             method="POST",
@@ -1650,6 +1701,7 @@ class TeamsConnector:
             None,
         )
         sent_at = self._message_datetime(response_message)
+        logger.info("Teams message send accepted response_has_message_id=%s", message_id is not None)
         return {
             "message_id": message_id,
             "client_message_id": client_message_id,
@@ -1800,6 +1852,9 @@ class TeamsConnector:
 
         for attempt in range(1, max_attempts + 1):
             self._raise_if_cancelled(cancel_event)
+            attempt_started = time.perf_counter()
+            failure_kind = "request"
+            failure_status: int | None = None
             request = urllib.request.Request(
                 url, data=data, method=method, headers=request_headers
             )
@@ -1807,12 +1862,31 @@ class TeamsConnector:
                 with urllib.request.urlopen(
                     request, timeout=self.REQUEST_TIMEOUT_SECONDS
                 ) as response:
+                    candidate_status = getattr(response, "status", 200)
+                    response_status = (
+                        candidate_status
+                        if isinstance(candidate_status, int)
+                        and not isinstance(candidate_status, bool)
+                        else 200
+                    )
                     response_text = response.read().decode("utf-8")
                 self._raise_if_cancelled(cancel_event)
+                logger.debug(
+                    "Teams request completed method=%s status=%d attempt=%d duration_ms=%.1f",
+                    method.upper(),
+                    response_status,
+                    attempt,
+                    (time.perf_counter() - attempt_started) * 1000,
+                )
                 break
             except urllib.error.HTTPError as exc:
                 location = self._safe_location(url)
                 if exc.code in {401, 403}:
+                    logger.warning(
+                        "Teams request rejected stored credentials method=%s status=%d",
+                        method.upper(),
+                        exc.code,
+                    )
                     exc.close()
                     self._clear_session()
                     raise AuthenticationRequiredError(
@@ -1820,6 +1894,8 @@ class TeamsConnector:
                         "Run `python -m teams_exporter auth` and retry."
                     ) from None
                 if read_request and exc.code in self.RETRYABLE_HTTP_STATUSES:
+                    failure_kind = "http"
+                    failure_status = exc.code
                     retry_after = exc.headers.get("Retry-After") if exc.headers else None
                     transient_error = _TransientTeamsRequestError(
                         f"Teams request failed with HTTP {exc.code} for {location}.",
@@ -1834,16 +1910,19 @@ class TeamsConnector:
                     exc.close()
                     raise error from exc
             except urllib.error.URLError as exc:
+                failure_kind = "network"
                 location = self._safe_location(url)
                 transient_error = _TransientTeamsRequestError(
                     f"Teams request failed for {location}: {self._safe_exception_detail(exc.reason)}"
                 )
             except (http.client.IncompleteRead, TimeoutError, OSError) as exc:
+                failure_kind = "network"
                 location = self._safe_location(url)
                 transient_error = _TransientTeamsRequestError(
                     f"Teams request failed for {location}: {self._safe_exception_detail(exc)}"
                 )
             except Exception as exc:
+                failure_kind = "request"
                 location = self._safe_location(url)
                 if not read_request:
                     raise RuntimeError(
@@ -1857,6 +1936,13 @@ class TeamsConnector:
             if transient_error is None:
                 raise RuntimeError("Teams request failed without an error detail.")
             if attempt >= max_attempts:
+                logger.error(
+                    "Teams request exhausted retries method=%s failure=%s status=%s attempts=%d",
+                    method.upper(),
+                    failure_kind,
+                    failure_status if failure_status is not None else "none",
+                    attempt,
+                )
                 raise RuntimeError(
                     f"{transient_error} Read request exhausted its {max_attempts}-attempt limit."
                 ) from transient_error
@@ -1865,6 +1951,15 @@ class TeamsConnector:
             delay = self._read_retry_delay(
                 self.last_request_retry_count,
                 transient_error.retry_after,
+            )
+            logger.warning(
+                "Teams request retry method=%s failure=%s status=%s attempt=%d/%d delay_ms=%.0f",
+                method.upper(),
+                failure_kind,
+                failure_status if failure_status is not None else "none",
+                attempt,
+                max_attempts,
+                delay * 1000,
             )
             if cancel_event is not None:
                 if cancel_event.wait(delay):
