@@ -206,7 +206,7 @@ class TokenProvider:
         if not interactive:
             raise AuthenticationRequiredError(
                 "Teams sign-in is required. Run "
-                f"{self._auth_command()} in a terminal, complete Microsoft sign-in, then retry."
+                f"`{self.sign_in_command}` in a terminal, complete Microsoft sign-in, then retry."
             )
 
         flow = app.initiate_device_flow(scopes=[scope])
@@ -271,7 +271,7 @@ class TokenProvider:
     def _stored_credentials_rejected(self) -> AuthenticationRequiredError:
         return AuthenticationRequiredError(
             "Microsoft no longer accepts the stored credentials. "
-            f"Run {self._auth_command()} to sign in again, then retry."
+            f"Run `{self.sign_in_command}` to sign in again, then retry."
         )
 
     def _raise_token_result_error(self, result: Any, *, scope: str) -> None:
@@ -280,11 +280,8 @@ class TokenProvider:
             raise self._stored_credentials_rejected()
         raise RuntimeError(
             f"Microsoft sign-in failed for {self._scope_name(scope)}. "
-            f"Run {self._auth_command()} and retry."
+            f"Run `{self.sign_in_command}` and retry."
         )
-
-    def _auth_command(self) -> str:
-        return f"`{self.sign_in_command}`"
 
     @staticmethod
     def _scope_name(scope: str) -> str:

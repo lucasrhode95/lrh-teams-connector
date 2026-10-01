@@ -333,7 +333,7 @@ class TeamsConnector:
                 location = self._safe_location(url)
                 if exc.code in {401, 403}:
                     exc.close()
-                    self._clear_session()
+                    self.invalidate_session()
                     raise AuthenticationRequiredError(
                         "Teams no longer accepts the stored credentials for this request. "
                         "Run `python -m teams_exporter auth` and retry."
@@ -1976,7 +1976,7 @@ class TeamsConnector:
                         exc.code,
                     )
                     exc.close()
-                    self._clear_session()
+                    self.invalidate_session()
                     raise AuthenticationRequiredError(
                         "Teams no longer accepts the stored credentials for this request. "
                         "Run `python -m teams_exporter auth` and retry."
@@ -2125,7 +2125,8 @@ class TeamsConnector:
         if not self.has_active_session:
             raise RuntimeError("Call TeamsConnector.login() before using the connector.")
 
-    def _clear_session(self) -> None:
+    def invalidate_session(self) -> None:
+        """Forget the in-memory session after credentials are rejected."""
         self._spaces_access_token = None
         self._csa_access_token = None
         self._skype_token = None
@@ -2134,10 +2135,6 @@ class TeamsConnector:
         self._chat_service_url = None
         self._middle_tier_url = None
         self._auth_sources = {}
-
-    def invalidate_session(self) -> None:
-        """Forget the in-memory session after credentials are rejected."""
-        self._clear_session()
 
     def _validate_service_url(
         self,
