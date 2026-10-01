@@ -132,8 +132,9 @@ class TeamsConnector:
     READ_RETRY_AFTER_MAX_SECONDS = 10.0
     RETRYABLE_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
     _MESSAGE_AUTHOR_MRI = re.compile(
-        r"(?i)(?<![a-z0-9])(8:orgid:[0-9a-f]{8}-[0-9a-f]{4}-"
-        r"[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?![0-9a-f])"
+        r"(?i)(?<![a-z0-9])((?:8:orgid:[0-9a-f]{8}-[0-9a-f]{4}-"
+        r"[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})|"
+        r"(?:28:[a-z0-9._-]+))(?![a-z0-9])"
     )
     _OBJECT_ID = re.compile(
         r"(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
@@ -482,7 +483,7 @@ class TeamsConnector:
                         known_ids.add(chat.id)
             self._ensure_self_chat(normalized)
 
-        self._resolve_untitled_one_to_one_names(
+        self._resolve_untitled_chat_names(
             raw_chats,
             normalized,
             payload.get("users"),
@@ -738,7 +739,7 @@ class TeamsConnector:
             summary = self._summarize_csa_row(chat, entity_type="chat")
             if summary is not None:
                 normalized.append(summary)
-        self._resolve_untitled_one_to_one_names(
+        self._resolve_untitled_chat_names(
             chats,
             normalized,
             payload.get("users"),
@@ -1120,6 +1121,8 @@ class TeamsConnector:
             if len(peers) != 1:
                 continue
             peer_id, (source_id, member_name) = next(iter(peers.items()))
+            if peer_id.startswith("28:"):
+                continue
             display_name = member_name or summary.display_name
             summary.avatar_url = self.get_profile_picture_uri(
                 source_id, display_name
@@ -1140,13 +1143,13 @@ class TeamsConnector:
                     return candidate
         return None
 
-    def _resolve_untitled_one_to_one_names(
+    def _resolve_untitled_chat_names(
         self,
         raw_chats: list[Any],
         summaries: list[ChatSummary],
         raw_users: Any,
     ) -> None:
-        """Use CSA membership and Middle Tier profiles for untitled 1:1 chats."""
+        """Resolve untitled human/app chats and fully rostered groups in batches."""
         summaries_by_id = {chat.id: chat for chat in summaries}
         own_id = self._profile_identifier(self._spaces_claims.get("oid"))
         names_by_id: dict[str, str] = {}
@@ -1160,10 +1163,11 @@ class TeamsConnector:
                 continue
             for value in (user.get("objectId"), user.get("mri")):
                 identifier = self._profile_identifier(value)
-                if identifier:
+                if identifier and not identifier.startswith("28:"):
                     names_by_id[identifier] = name.strip()
 
         profile_targets: dict[str, list[ChatSummary]] = {}
+        group_candidates: list[tuple[ChatSummary, list[str], dict[str, str], int]] = []
         for row in raw_chats:
             if not isinstance(row, dict):
                 continue
@@ -1171,68 +1175,146 @@ class TeamsConnector:
             summary = summaries_by_id.get(chat_id) if isinstance(chat_id, str) else None
             if summary is None:
                 continue
-            has_title = any(
-                isinstance(row.get(key), str) and row[key].strip()
-                for key in ("title", "displayName", "topic")
-            )
-            if has_title or self._optional_bool(row.get("isOneOnOne")) is not True:
+            if summary.display_name != summary.id:
                 continue
 
-            member_names: dict[str, str] = {}
-            member_ids: list[str] = []
             members = row.get("members")
             if not isinstance(members, list):
                 continue
+            member_names: dict[str, str] = {}
+            member_ids: list[str] = []
             for member in members:
                 if not isinstance(member, dict):
                     continue
-                member_ids_for_record = {
-                    identifier
-                    for identifier in (
-                        self._profile_identifier(member.get("objectId")),
-                        self._profile_identifier(member.get("mri")),
-                    )
-                    if identifier
-                }
-                member_ids.extend(
-                    identifier
-                    for identifier in member_ids_for_record
-                    if identifier not in member_ids
+                member_id = next(
+                    (
+                        identifier
+                        for key in ("id", "mri", "objectId", "userId", "userMri")
+                        if (identifier := self._profile_identifier(member.get(key)))
+                    ),
+                    None,
                 )
+                if not member_id:
+                    continue
+                if member_id not in member_ids:
+                    member_ids.append(member_id)
                 member_name = member.get("displayName") or member.get("name")
                 if isinstance(member_name, str) and member_name.strip():
-                    for identifier in member_ids_for_record:
-                        member_names[identifier] = member_name.strip()
+                    member_names[member_id] = member_name.strip()
 
             peers = [identifier for identifier in member_ids if identifier != own_id]
-            if len(peers) != 1:
+            if summary.chat_type == "oneOnOne" and len(peers) == 1:
+                peer_id = peers[0]
+                if peer_id.startswith("28:"):
+                    complete_count = self._complete_csa_member_count(row)
+                    last_message = self._mapping(row.get("lastMessage"))
+                    properties = self._mapping(last_message.get("properties"))
+                    app_metadata = self._mapping(properties.get("fromAppMetadata"))
+                    app_name = app_metadata.get("name")
+                    app_id = app_metadata.get("id")
+                    sender_id = self._message_author_id(last_message)
+                    if (
+                        complete_count == 2
+                        and own_id in member_ids
+                        and sender_id == peer_id
+                        and isinstance(app_id, str)
+                        and app_id.strip()
+                        and isinstance(app_name, str)
+                        and app_name.strip()
+                    ):
+                        summary.display_name = app_name.strip()
+                    continue
+                name = member_names.get(peer_id) or names_by_id.get(peer_id)
+                if name:
+                    summary.display_name = name
+                else:
+                    profile_targets.setdefault(peer_id, []).append(summary)
                 continue
-            peer_id = peers[0]
-            name = member_names.get(peer_id) or names_by_id.get(peer_id)
-            if name:
-                summary.display_name = name
-            else:
-                profile_targets.setdefault(peer_id, []).append(summary)
 
-        if not profile_targets:
-            return
-        try:
-            profile_names = self._fetch_middle_tier_profile_names(
-                list(profile_targets)
-            )
-        except RuntimeError:
-            # A profile lookup must not make the CSA catalog unavailable.
-            return
+            complete_count = self._complete_csa_member_count(row)
+            if (
+                summary.chat_type == "group"
+                and complete_count is not None
+                and complete_count > 2
+                and own_id in member_ids
+            ):
+                group_candidates.append(
+                    (summary, member_ids, member_names, complete_count)
+                )
+                for member_id in peers:
+                    if (
+                        not member_names.get(member_id)
+                        and member_id not in names_by_id
+                        and not member_id.startswith("28:")
+                    ):
+                        profile_targets.setdefault(member_id, []).append(summary)
+
+        profile_names: dict[str, str] = {}
+        if profile_targets:
+            try:
+                profile_names = self._fetch_middle_tier_profile_names(
+                    list(profile_targets)
+                )
+            except RuntimeError:
+                # A profile lookup must not make the CSA catalog unavailable.
+                pass
         for profile_id, summaries_for_profile in profile_targets.items():
             name = profile_names.get(profile_id)
             if name:
                 for summary in summaries_for_profile:
-                    summary.display_name = name
+                    if summary.chat_type != "group":
+                        summary.display_name = name
+
+        for summary, member_ids, member_names, participant_count in group_candidates:
+            resolved_names = [
+                member_names.get(member_id)
+                or names_by_id.get(member_id)
+                or profile_names.get(member_id)
+                for member_id in member_ids
+                if member_id != own_id and not member_id.startswith("28:")
+            ]
+            display_name = self._unnamed_group_display_name(
+                [name for name in resolved_names if name],
+                participant_count,
+            )
+            if display_name:
+                summary.display_name = display_name
+
+    @staticmethod
+    def _unnamed_group_display_name(
+        participant_names: list[str],
+        participant_count: int,
+    ) -> str | None:
+        """Build a deterministic group label from names in a complete roster."""
+        names = sorted(
+            [
+                name.strip()
+                for name in participant_names
+                if isinstance(name, str) and name.strip()
+            ],
+            key=lambda name: (name.casefold(), name),
+        )
+        if not names:
+            return None
+
+        shown: list[str] = []
+        for name in names:
+            candidate = " | ".join([*shown, name])
+            if len(candidate) > 87:
+                if not shown:
+                    shown.append(name[:80].rstrip() + "…")
+                break
+            shown.append(name)
+
+        omitted = max(0, participant_count - len(shown))
+        label = " | ".join(shown)
+        return f"{label} +{omitted}" if omitted else label
 
     def _fetch_middle_tier_profile_names(
         self,
         user_ids: list[str],
     ) -> dict[str, str]:
+        user_ids = [user_id for user_id in user_ids if not user_id.startswith("28:")]
         if not self._middle_tier_url or not user_ids:
             return {}
         url = (

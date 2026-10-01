@@ -497,6 +497,211 @@ class TeamsConnectorTests(unittest.TestCase):
         )
         self.assertEqual(client._csa_chat_type({"chatType": "channel"}), "channel")
 
+    def test_untitled_one_to_one_app_uses_matching_sender_metadata_name(self):
+        client = StubConnector()
+        row = {
+            "id": "19:app@example.test",
+            "chatType": "chat",
+            "isOneOnOne": True,
+            "rosterVersion": 1,
+            "members": [
+                {"mri": "8:orgid:self-guid", "objectId": "self-guid"},
+                {"mri": "28:app-mri", "objectId": "app-guid"},
+            ],
+            "lastMessage": {
+                "from": {"id": "28:app-mri"},
+                "properties": {
+                    "fromAppMetadata": {
+                        "id": "app-guid",
+                        "name": "Fixture Support App",
+                    }
+                },
+            },
+        }
+        summary = client._summarize_csa_row(row, "chat")
+        profile_lookup = Mock(return_value={})
+        client._fetch_middle_tier_profile_names = profile_lookup
+
+        client._resolve_untitled_chat_names([row], [summary], [])
+
+        self.assertEqual(summary.display_name, "Fixture Support App")
+        profile_lookup.assert_not_called()
+
+    def test_app_metadata_does_not_rename_a_human_one_to_one_chat(self):
+        client = StubConnector()
+        row = {
+            "id": "19:human@example.test",
+            "chatType": "chat",
+            "isOneOnOne": True,
+            "rosterVersion": 1,
+            "members": [
+                {"mri": "8:orgid:self-guid", "objectId": "self-guid"},
+                {
+                    "mri": "8:orgid:human-guid",
+                    "objectId": "human-guid",
+                    "displayName": "Human Participant",
+                },
+            ],
+            "lastMessage": {
+                "from": {"id": "8:orgid:human-guid"},
+                "properties": {
+                    "fromAppMetadata": {
+                        "id": "unrelated-app-guid",
+                        "name": "Unrelated App",
+                    }
+                },
+            },
+        }
+        summary = client._summarize_csa_row(row, "chat")
+
+        client._resolve_untitled_chat_names([row], [summary], [])
+
+        self.assertEqual(summary.display_name, "Human Participant")
+
+    def test_untitled_group_name_uses_complete_roster_and_sorted_resolved_names(self):
+        client = StubConnector()
+        names = {
+            "self-guid": "Taylor Example",
+            "z-guid": "Sutton, Dana",
+            "g-guid": "Grant, Fiona",
+            "p-guid": "Parker, Juniper",
+            "a-guid": "Archer, Nico",
+        }
+        row = {
+            "id": "19:untitled-group@thread.v2",
+            "chatType": "chat",
+            "isOneOnOne": False,
+            "rosterVersion": 42,
+            "members": [
+                {"mri": f"8:orgid:{identifier}", "objectId": identifier}
+                for identifier in ("z-guid", "p-guid", "self-guid", "a-guid", "g-guid")
+            ],
+        }
+        summary = client._summarize_csa_row(row, "chat")
+        users = [
+            {"objectId": identifier, "displayName": name}
+            for identifier, name in names.items()
+        ]
+
+        client._resolve_untitled_chat_names([row], [summary], users)
+
+        self.assertEqual(
+            summary.display_name,
+            "Archer, Nico | Grant, Fiona | Parker, Juniper | Sutton, Dana +1",
+        )
+
+    def test_unnamed_group_title_uses_87_character_cutoff_and_counts_unknowns(self):
+        names = [
+            "Alpha Person With A Long Display Name",
+            "Beta Person With A Long Display Name",
+            "Gamma Person With A Long Display Name",
+            "Delta Person With A Long Display Name",
+        ]
+
+        self.assertEqual(
+            TeamsConnector._unnamed_group_display_name(names, participant_count=5),
+            "Alpha Person With A Long Display Name | Beta Person With A Long Display Name +3",
+        )
+        self.assertEqual(
+            TeamsConnector._unnamed_group_display_name(["Known Person"], participant_count=4),
+            "Known Person +3",
+        )
+
+    def test_unnamed_group_requires_complete_roster_and_preserves_explicit_title(self):
+        client = StubConnector()
+        members = [
+            {"mri": "8:orgid:self-guid", "objectId": "self-guid"},
+            {"mri": "8:orgid:peer-guid", "objectId": "peer-guid"},
+            {"mri": "8:orgid:third-guid", "objectId": "third-guid"},
+        ]
+        incomplete = {
+            "id": "19:incomplete-group@thread.v2",
+            "chatType": "chat",
+            "isOneOnOne": False,
+            "members": members,
+        }
+        titled = {
+            **incomplete,
+            "id": "19:titled-group@thread.v2",
+            "title": "Authoritative title",
+            "rosterVersion": 7,
+        }
+        incomplete_summary = client._summarize_csa_row(incomplete, "chat")
+        titled_summary = client._summarize_csa_row(titled, "chat")
+        users = [
+            {"objectId": "peer-guid", "displayName": "Peer Name"},
+            {"objectId": "third-guid", "displayName": "Third Name"},
+        ]
+
+        client._resolve_untitled_chat_names(
+            [incomplete, titled], [incomplete_summary, titled_summary], users
+        )
+
+        self.assertEqual(incomplete_summary.display_name, incomplete["id"])
+        self.assertEqual(titled_summary.display_name, "Authoritative title")
+
+    def test_unnamed_group_batches_missing_profiles_and_counts_unresolved_people(self):
+        client = StubConnector()
+        member_ids = ["self-guid", "known-guid", "missing-a", "missing-b", "missing-c"]
+        row = {
+            "id": "19:partially-resolved-group@thread.v2",
+            "chatType": "chat",
+            "isOneOnOne": False,
+            "rosterVersion": 8,
+            "members": [
+                {"mri": f"8:orgid:{identifier}", "objectId": identifier}
+                for identifier in member_ids
+            ],
+        }
+        summary = client._summarize_csa_row(row, "chat")
+        profile_lookup = Mock(return_value={})
+        client._fetch_middle_tier_profile_names = profile_lookup
+
+        client._resolve_untitled_chat_names(
+            [row],
+            [summary],
+            [{"objectId": "known-guid", "displayName": "Known Participant"}],
+        )
+
+        self.assertEqual(summary.display_name, "Known Participant +4")
+        profile_lookup.assert_called_once_with(["missing-a", "missing-b", "missing-c"])
+
+    def test_generated_group_name_changes_with_the_complete_roster(self):
+        client = StubConnector()
+
+        def summarize_group(member_ids):
+            row = {
+                "id": "19:mutable-group@thread.v2",
+                "chatType": "chat",
+                "isOneOnOne": False,
+                "rosterVersion": 7,
+                "members": [
+                    {"mri": f"8:orgid:{member_id}", "objectId": member_id}
+                    for member_id in ["self-guid", *member_ids]
+                ],
+            }
+            names = {
+                "self-guid": "Current User",
+                **{member_id: f"Member {member_id}" for member_id in member_ids},
+            }
+            summary = client._summarize_csa_row(row, "chat")
+            client._resolve_untitled_chat_names(
+                [row],
+                [summary],
+                [
+                    {"objectId": member_id, "displayName": name}
+                    for member_id, name in names.items()
+                ],
+            )
+            return summary.display_name
+
+        first = summarize_group(["a-guid", "b-guid"])
+        second = summarize_group(["a-guid", "c-guid"])
+
+        self.assertNotEqual(first, second)
+        self.assertIn("Member b-guid", first)
+        self.assertIn("Member c-guid", second)
+
     def test_empty_chat_filter_uses_explicit_csa_flag_and_can_include_all_rows(self):
         rows = [
             {"id": "19:empty", "title": "Empty", "isEmptyConversation": True},
