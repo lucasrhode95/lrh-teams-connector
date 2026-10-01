@@ -1280,9 +1280,9 @@ class TeamsMessageFormatterTests(unittest.TestCase):
             "messageType": "RichText/Html",
             "content": (
                 "<p><span itemtype='http://schema.skype.com/Mention' "
-                "itemid='8:orgid:juniper'>Parker,</span> "
+                "itemid='0'>Parker,</span> "
                 "<span itemtype='http://schema.skype.com/Mention' "
-                "itemid='8:orgid:juniper'>Juniper</span>"
+                "itemid='1'>Juniper</span>"
                 " Please review the example plan.</p>"
             ),
         })
@@ -1290,6 +1290,68 @@ class TeamsMessageFormatterTests(unittest.TestCase):
             text,
             "@(Parker, Juniper) Please review the example plan.",
         )
+
+    def test_split_mentions_merge_across_nbsp_whitespace_and_direct_adjacency(self):
+        separators = {
+            "nbsp": "&nbsp;",
+            "ordinary whitespace": " ",
+            "line-break whitespace": "\n\t",
+            "no separator": "",
+        }
+        for label, separator in separators.items():
+            with self.subTest(separator=label):
+                text = self.formatter.format_message({
+                    "messageType": "RichText/Html",
+                    "content": (
+                        "<span itemtype='http://schema.skype.com/Mention' "
+                        "itemid='0'>Rhode,</span>"
+                        f"{separator}"
+                        "<span itemtype='http://schema.skype.com/Mention' "
+                        "itemid='1'>Lucas</span>"
+                    ),
+                })
+                self.assertEqual(text, "@(Rhode, Lucas)")
+
+    def test_sequential_split_people_merge_without_merging_complete_mentions(self):
+        text = self.formatter.format_message({
+            "messageType": "RichText/Html",
+            "content": (
+                "<span itemtype='http://schema.skype.com/Mention' itemid='0'>Baxter,</span>"
+                "<span itemtype='http://schema.skype.com/Mention' itemid='1'>Jonah</span> "
+                "<span itemtype='http://schema.skype.com/Mention' itemid='2'>Reyes,</span>"
+                "<span itemtype='http://schema.skype.com/Mention' itemid='3'>Carla</span> "
+                "<span itemtype='http://schema.skype.com/Mention' itemid='4'>Parker, Juniper</span>"
+                "<span itemtype='http://schema.skype.com/Mention' itemid='5'>Rhode, Lucas</span>"
+            ),
+        })
+        self.assertEqual(
+            text,
+            "@(Baxter, Jonah) @(Reyes, Carla) "
+            "@(Parker, Juniper)@(Rhode, Lucas)",
+        )
+
+    def test_complete_mentions_do_not_merge_across_connective_text(self):
+        text = self.formatter.format_message({
+            "messageType": "RichText/Html",
+            "content": (
+                "<span itemtype='http://schema.skype.com/Mention'>"
+                "Baxter, Jonah</span> and "
+                "<span itemtype='http://schema.skype.com/Mention'>"
+                "Reyes, Carla</span>"
+            ),
+        })
+        self.assertEqual(text, "@(Baxter, Jonah) and @(Reyes, Carla)")
+
+    def test_surname_fragment_is_not_merged_with_another_complete_mention(self):
+        text = self.formatter.format_message({
+            "messageType": "RichText/Html",
+            "content": (
+                "<span itemtype='http://schema.skype.com/Mention' itemid='0'>Baxter,</span>"
+                "<span itemtype='http://schema.skype.com/Mention' itemid='1'>"
+                "Reyes, Carla</span>"
+            ),
+        })
+        self.assertEqual(text, "@(Baxter,)@(Reyes, Carla)")
 
     def test_adjacent_different_mentions_keep_separate_delimiters(self):
         text = self.formatter.format_message({
