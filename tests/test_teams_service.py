@@ -43,6 +43,7 @@ class ServiceConnector(TeamsConnector):
             ChatSummary("19:beta@thread.v2", "Beta", last_message_at=latest, chat_type="oneOnOne"),
         ]
         self.pages = {}
+        self.message_page_calls = []
         self.members = {}
         self.page_calls = []
         self.retry_counts = []
@@ -105,6 +106,7 @@ class ServiceConnector(TeamsConnector):
         cancel_event=None,
         progress_callback=None,
     ):
+        self.message_page_calls.append((conversation_id, limit, since, until))
         pages = self.pages.get(conversation_id, [([], None)])
         messages_read = 0
         retries = 0
@@ -265,6 +267,66 @@ class TeamsServiceTests(unittest.TestCase):
         channel = next(item for item in cached["items"] if item["chat_type"] == "channel")
         self.assertEqual(channel["avatar_url"], "https://images.example.test/channel.png")
         self.assertEqual(cached["coverage"]["source"], "local SQLite cache")
+
+    def test_refreshes_self_chat_activity_when_csa_delta_omits_self_chat(self):
+        self_chat = ChatSummary(
+            "48:notes",
+            "Taylor Example (You)",
+            chat_type="chat",
+            is_self_chat=True,
+        )
+        self.connector.chats.append(self_chat)
+        self.connector.pages["48:notes"] = [
+            ([message("self-1", 4, "harmless fixture")], None),
+        ]
+
+        first = self.service.list_chats(page_size=10, refresh=True)
+
+        self.assertEqual(first["items"][0]["id"], "48:notes")
+        self.assertEqual(
+            first["items"][0]["last_message_at"],
+            "2026-09-28T10:00:04Z",
+        )
+        self.assertEqual(
+            self.connector.message_page_calls,
+            [("48:notes", 1, None, None)],
+        )
+        self.assertEqual(
+            self.service.index.chat_catalog()[0]["conversation_id"],
+            "48:notes",
+        )
+
+        # The next CSA update omits 48:notes, but the explicit one-message
+        # refresh still notices newer self-chat activity and persists ordering.
+        self.connector.chats = [
+            ChatSummary(
+                "19:alpha@thread.v2",
+                "Alpha",
+                last_message_at=datetime(2026, 9, 28, 10, 0, 3, tzinfo=timezone.utc),
+                chat_type="group",
+            )
+        ]
+        self.connector.pages["48:notes"] = [
+            ([message("self-2", 5, "another harmless fixture")], None),
+        ]
+        self.connector.next_sync_token = "sanitized-sync-2"
+
+        second = self.service.list_chats(page_size=10, refresh=True)
+
+        self.assertEqual(self.connector.sync_calls, [None, "sanitized-sync-1"])
+        self.assertEqual(second["items"][0]["id"], "48:notes")
+        self.assertEqual(
+            second["items"][0]["last_message_at"],
+            "2026-09-28T10:00:05Z",
+        )
+        self.assertEqual(
+            self.service.index.chat_catalog()[0]["conversation_id"],
+            "48:notes",
+        )
+
+        cached = self.service.list_chats(page_size=10)
+        self.assertEqual(cached["items"][0]["id"], "48:notes")
+        self.assertEqual(len(self.connector.message_page_calls), 2)
 
     def test_avatar_uris_are_opt_in_for_local_ui_and_omitted_by_default(self):
         default_result = self.service.list_chats(page_size=1)
