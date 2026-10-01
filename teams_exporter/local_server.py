@@ -33,6 +33,7 @@ MAX_REQUEST_BYTES = 1_000_000
 MAX_CHAT_CATALOG_SIZE = 10_000
 MAX_MESSAGE_LIMIT = 1_000_000
 MAX_PROFILE_IMAGE_BYTES = 2_000_000
+PROFILE_PICTURE_CACHE_CONTROL = "private, max-age=3600, must-revalidate"
 DOWNLOAD_CHUNK_SIZE = 64 * 1024
 LOCAL_IMAGE_ASSETS = {
     "avatar-person.svg",
@@ -391,8 +392,22 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
             ):
                 self._send_json(502, self._error("profile_picture_failed", "Teams returned an invalid image."))
                 return
+            etag = f'"{hashlib.sha256(image).hexdigest()}"'
+            if self._if_none_match_matches(etag):
+                self.send_response(304)
+                self._security_headers(
+                    content_type,
+                    cache_control=PROFILE_PICTURE_CACHE_CONTROL,
+                )
+                self.send_header("ETag", etag)
+                self.end_headers()
+                return
             self.send_response(200)
-            self._security_headers(content_type)
+            self._security_headers(
+                content_type,
+                cache_control=PROFILE_PICTURE_CACHE_CONTROL,
+            )
+            self.send_header("ETag", etag)
             self.send_header("Content-Length", str(len(image)))
             self.end_headers()
             self.wfile.write(image)
@@ -620,10 +635,26 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
         # query values such as export IDs or other user-specific identifiers.
         started = getattr(self, "_request_started_at", time_module.perf_counter())
         method = self.command if re.fullmatch(r"[A-Z]{1,12}", self.command or "") else "OTHER"
-        logger.info(
+        try:
+            status = int(code)
+        except (TypeError, ValueError):
+            status = None
+        route = self._safe_route()
+        if status is not None and status >= 400:
+            log_level = logging.WARNING
+        elif route in {
+            "/api/profile-picture/{key}",
+            "/static/{asset}",
+            "/assets/{asset}",
+        }:
+            log_level = logging.DEBUG
+        else:
+            log_level = logging.INFO
+        logger.log(
+            log_level,
             "HTTP request method=%s route=%s status=%s duration_ms=%.1f",
             method,
-            self._safe_route(),
+            route,
             code,
             (time_module.perf_counter() - started) * 1000,
         )
@@ -934,11 +965,22 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _security_headers(self, content_type: str) -> None:
+    def _security_headers(
+        self,
+        content_type: str,
+        cache_control: str = "no-store",
+    ) -> None:
         self.send_header("Content-Type", content_type)
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache_control)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
+
+    def _if_none_match_matches(self, etag: str) -> bool:
+        values = self.headers.get("If-None-Match", "")
+        return any(
+            candidate == "*" or candidate.removeprefix("W/") == etag
+            for candidate in (value.strip() for value in values.split(","))
+        )
 
     @staticmethod
     def _error(code: str, message: str) -> dict[str, Any]:
