@@ -78,6 +78,9 @@ class MCPContractTests(unittest.TestCase):
                             "message_retries_this_call",
                             str(tools_by_name["sync_search_index"].outputSchema),
                         )
+                        export_schema = str(tools_by_name["export_chat"].outputSchema)
+                        self.assertIn("remote_messages_retrieved_total", export_schema)
+                        self.assertIn("message_limit_reached", export_schema)
 
                         search_tool = tools_by_name["search_messages"]
                         self.assertEqual(
@@ -228,6 +231,8 @@ class MCPContractTests(unittest.TestCase):
                         "complete": True,
                         "remote_pages_fetched_total": 1,
                         "remote_items_scanned_total": 1,
+                        "remote_messages_retrieved_total": 1,
+                        "message_limit_reached": True,
                         "missing_timestamp_items_excluded_total": 0,
                         "retry_count_this_call": 0,
                         "archive_included": True,
@@ -263,6 +268,15 @@ class MCPContractTests(unittest.TestCase):
                 self.assertFalse(exported.isError)
                 uri = exported.structuredContent["resource_uri"]
                 self.assertTrue(uri.startswith("teams-export://exports/"))
+                self.assertEqual(
+                    exported.structuredContent["coverage"][
+                        "remote_messages_retrieved_total"
+                    ],
+                    1,
+                )
+                self.assertTrue(
+                    exported.structuredContent["coverage"]["message_limit_reached"]
+                )
 
                 resource = await session.read_resource(AnyUrl(uri))
                 payload = json.loads(resource.contents[0].text)
