@@ -20,9 +20,14 @@ def fingerprint(tenant_id: str, user_id: str) -> str:
 class CachedIdentityConnector:
     def __init__(self, identity: dict[str, str]) -> None:
         self.identity = identity
+        self.account_picture_uris = []
 
     def get_cached_account_metadata(self) -> dict[str, str]:
         return self.identity
+
+    def get_profile_picture_uri(self, display_name: str | None = None) -> str | None:
+        self.account_picture_uris.append(display_name)
+        return None
 
 
 class SearchIndexStorageTests(unittest.TestCase):

@@ -4,9 +4,9 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from teams_exporter.teams_connector import (
-    AuthenticationRequiredError,
     ChatCatalogCoverage,
     ChatSummary,
     TeamsConnector,
@@ -14,6 +14,7 @@ from teams_exporter.teams_connector import (
 from teams_exporter.teams_exporter import TeamsExporter
 from teams_exporter.teams_search_index import TeamsSearchIndex
 from teams_exporter.teams_service import InvalidCursorError, TeamsService
+from teams_exporter.token_provider import AuthenticationRequiredError
 
 
 def message(identifier: str, second: int, content: str, author: str = "A Sender"):
@@ -81,7 +82,6 @@ class ServiceConnector(TeamsConnector):
     def get_messages_page(
         self,
         conversation_id,
-        *,
         page_size=50,
         since=None,
         until=None,
@@ -99,7 +99,6 @@ class ServiceConnector(TeamsConnector):
     def iter_message_pages(
         self,
         conversation_id,
-        *,
         limit=None,
         since=None,
         until=None,
@@ -185,6 +184,13 @@ class TeamsServiceTests(unittest.TestCase):
         self.assertEqual(self.connector.login_calls, 1)
         self.assertEqual(self.connector.interactive_login_values, [False])
         self.assertEqual(self.connector.page_calls, [])
+
+    def test_missing_identity_uses_selected_token_provider_sign_in_command(self):
+        connector = TeamsConnector(unsecure=True)
+        with patch.object(connector.token_provider, "get_cached_account", return_value=None):
+            service = TeamsService(connector=connector)
+            with self.assertRaisesRegex(AuthenticationRequiredError, "auth --unsecure"):
+                _ = service.index
 
     def test_profile_picture_uses_shared_authentication_hook(self):
         image, content_type = self.service.get_profile_picture(

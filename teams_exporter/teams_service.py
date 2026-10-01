@@ -10,19 +10,19 @@ import tempfile
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from secrets import token_urlsafe
 from typing import Any
 
 from teams_exporter.teams_connector import (
-    AuthenticationRequiredError,
     ChatSummary,
     TeamsConnector,
 )
 from teams_exporter.teams_message_formatter import TeamsMessageFormatter
 from teams_exporter.teams_search_index import TeamsSearchIndex
+from teams_exporter.token_provider import AuthenticationRequiredError
 
 
 logger = logging.getLogger(__name__)
@@ -117,8 +117,9 @@ class TeamsService:
         connector: TeamsConnector | None = None,
         formatter: TeamsMessageFormatter | None = None,
         index: TeamsSearchIndex | None = None,
+        unsecure_tokens: bool = False,
     ) -> None:
-        self.connector = connector or TeamsConnector()
+        self.connector = connector or TeamsConnector(unsecure=unsecure_tokens)
         self.formatter = formatter or TeamsMessageFormatter()
         configured_index = os.environ.get("TEAMS_SEARCH_INDEX_PATH")
         self._use_base_index_if_missing = bool(configured_index)
@@ -144,12 +145,11 @@ class TeamsService:
     def index(self) -> TeamsSearchIndex:
         """Return this account's durable archive, selecting it from cached auth."""
         if self._index is None:
-            get_cached_identity = getattr(self.connector, "get_cached_account_metadata", None)
-            metadata = get_cached_identity() if callable(get_cached_identity) else None
+            metadata = self.connector.get_cached_account_metadata()
             if not metadata:
                 raise AuthenticationRequiredError(
                     "Teams sign-in is required before this account's local archive can be opened. "
-                    "Run `python -m teams_exporter auth` and retry."
+                    f"Run `{self.connector.token_provider.sign_in_command}` and retry."
                 )
             self._select_index_for_account(metadata)
         return self._index
@@ -158,10 +158,7 @@ class TeamsService:
         # Only the separate `python -m teams_exporter auth` command is interactive.
         with self._auth_check_lock:
             now = time.monotonic()
-            active_session = getattr(self.connector, "has_active_session", None)
-            if callable(active_session):
-                active_session = active_session()
-            if now < self._auth_checked_until and active_session is not False:
+            if now < self._auth_checked_until and self.connector.has_active_session:
                 return
             try:
                 self.connector.login(interactive=False)
@@ -169,9 +166,7 @@ class TeamsService:
                     self._select_index_for_account(self.connector.get_user_metadata())
             except AuthenticationRequiredError:
                 self._auth_checked_until = 0.0
-                invalidate = getattr(self.connector, "invalidate_session", None)
-                if callable(invalidate):
-                    invalidate()
+                self.connector.invalidate_session()
                 raise
             self._auth_checked_until = time.monotonic() + AUTH_CHECK_TTL_SECONDS
 
@@ -185,10 +180,7 @@ class TeamsService:
         """Whether a recent check confirmed that the connector still has a session."""
         if time.monotonic() >= self._auth_checked_until:
             return False
-        active_session = getattr(self.connector, "has_active_session", None)
-        if callable(active_session):
-            active_session = active_session()
-        return active_session is not False
+        return self.connector.has_active_session
 
     @_logged_service_operation
     def check_authentication(self) -> dict[str, Any]:
@@ -200,10 +192,7 @@ class TeamsService:
     def get_profile_picture(self, url: str) -> tuple[bytes, str]:
         """Fetch one picture through the authenticated connector without caching it."""
         self._ensure_session()
-        fetch_picture = getattr(self.connector, "get_profile_picture", None)
-        if not callable(fetch_picture):
-            raise RuntimeError("The configured Teams connector cannot fetch profile pictures.")
-        return fetch_picture(url)
+        return self.connector.get_profile_picture(url)
 
     def _select_index_for_account(self, metadata: dict[str, Any]) -> None:
         if self._index_is_injected:
@@ -214,11 +203,9 @@ class TeamsService:
             "name": str(display_name),
             "email": str(email) if email else "Email unavailable",
         }
-        get_picture_uri = getattr(self.connector, "get_profile_picture_uri", None)
-        if callable(get_picture_uri):
-            picture_uri = get_picture_uri(display_name=str(display_name))
-            if isinstance(picture_uri, str) and picture_uri.startswith("https://"):
-                self.account_info["picture_url"] = picture_uri
+        picture_uri = self.connector.get_profile_picture_uri(display_name=str(display_name))
+        if isinstance(picture_uri, str) and picture_uri.startswith("https://"):
+            self.account_info["picture_url"] = picture_uri
         tenant_id = metadata.get("tenant_id")
         user_id = metadata.get("user_id")
         home_account_id = metadata.get("home_account_id")
@@ -248,34 +235,28 @@ class TeamsService:
 
     def _get_chats(self, *, refresh: bool = False) -> list[ChatSummary]:
         if refresh or self._chats_cache is None or time.monotonic() >= self._chats_cache_until:
-            sync_updates = getattr(self.connector, "get_chat_updates", None)
-            if callable(sync_updates):
-                update = sync_updates(self.index.get_chat_sync_token())
-                chats = update.get("chats")
-                sync_token = update.get("sync_token")
-                if not isinstance(chats, list):
-                    raise RuntimeError("Teams returned an invalid chat update list.")
-                deleted_ids = update.get("deleted_ids", [])
-                if not isinstance(deleted_ids, list):
-                    raise RuntimeError("Teams returned an invalid deleted chat list.")
-                self.index.upsert_chat_updates(
-                    chats,
-                    sync_token,
-                    deleted_ids=deleted_ids,
-                )
-                self._chats_cache = [
-                    self._chat_from_record(record)
-                    for record in self.index.chat_catalog()
-                ]
-            else:
-                self._chats_cache = self.connector.list_chats()
-                self.index.upsert_chats(self._chats_cache)
+            update = self.connector.get_chat_updates(self.index.get_chat_sync_token())
+            chats = update.get("chats")
+            sync_token = update.get("sync_token")
+            if not isinstance(chats, list):
+                raise RuntimeError("Teams returned an invalid chat update list.")
+            deleted_ids = update.get("deleted_ids", [])
+            if not isinstance(deleted_ids, list):
+                raise RuntimeError("Teams returned an invalid deleted chat list.")
+            self.index.upsert_chat_updates(
+                chats,
+                sync_token,
+                deleted_ids=deleted_ids,
+            )
+            self._chats_cache = [
+                self._chat_from_record(record)
+                for record in self.index.chat_catalog()
+            ]
             self._chats_cache_until = time.monotonic() + 60
         return self._chats_cache
 
     def list_cached_chats(
         self,
-        *,
         page_size: int = MAX_LIST_PAGE_SIZE,
         page_token: str | None = None,
         include_avatar_uris: bool = False,
@@ -306,9 +287,9 @@ class TeamsService:
         }
 
     def _catalog_coverage_record(self) -> dict[str, Any]:
-        coverage = getattr(self.connector, "catalog_coverage", None)
-        if getattr(coverage, "catalog_source", None) == "not loaded":
-            coverage = None
+        coverage = self.connector.catalog_coverage
+        if coverage.catalog_source != "not loaded":
+            return asdict(coverage)
         defaults = {
             "catalog_complete": True,
             "catalog_source": "connector catalog",
@@ -321,15 +302,11 @@ class TeamsService:
             "fallback_name_lookups_attempted": 0,
             "fallback_chats_without_resolved_name": 0,
         }
-        return {
-            key: getattr(coverage, key, default) if coverage is not None else default
-            for key, default in defaults.items()
-        }
+        return defaults
 
     @_logged_service_operation
     def list_chats(
         self,
-        *,
         page_size: int = 50,
         page_token: str | None = None,
         refresh: bool = False,
@@ -365,7 +342,6 @@ class TeamsService:
         conversation_id: str,
         expected_chat_name: str,
         text: str,
-        *,
         user_confirmation: str,
     ) -> dict[str, Any]:
         """Send one message after the caller has recorded explicit user consent.
@@ -415,10 +391,7 @@ class TeamsService:
                 "expected_chat_name does not match the current Teams chat catalog entry."
             )
 
-        send = getattr(self.connector, "send_message", None)
-        if not callable(send):
-            raise RuntimeError("This Teams connector does not support message sending.")
-        result = send(chat_id, text)
+        result = self.connector.send_message(chat_id, text)
         if not isinstance(result, dict):
             raise RuntimeError("Teams did not return a valid message-send result.")
         return {
@@ -435,7 +408,6 @@ class TeamsService:
     def search_chats(
         self,
         participant_query: str,
-        *,
         page_size: int = 25,
         cursor: str | None = None,
     ) -> dict[str, Any]:
@@ -498,7 +470,6 @@ class TeamsService:
     def get_messages(
         self,
         conversation_id: str,
-        *,
         page_size: int = 25,
         since: datetime | None = None,
         until: datetime | None = None,
@@ -560,7 +531,7 @@ class TeamsService:
             messages,
             formatter=self.formatter,
         )
-        retry_count = int(getattr(self.connector, "last_request_retry_count", 0))
+        retry_count = int(self.connector.last_request_retry_count)
         if next_url and next_url in state["seen_continuation_urls"]:
             raise RuntimeError("Teams repeated a message continuation link.")
         state["continuation_url"] = next_url
@@ -695,7 +666,6 @@ class TeamsService:
     def fetch_chat_to_archive(
         self,
         conversation_id: str,
-        *,
         since: datetime | None = None,
         until: datetime | None = None,
         cancel_event=None,
@@ -732,7 +702,7 @@ class TeamsService:
                 formatter=self.formatter,
             )
 
-        coverage = dict(getattr(self.connector, "last_message_read_coverage", {}))
+        coverage = dict(self.connector.last_message_read_coverage)
         since_key = self._bound_key(since_utc) or None
         until_key = self._bound_key(until_utc) or None
         archive_count = self.index.count_messages_in_range(
@@ -750,7 +720,6 @@ class TeamsService:
     def archived_export_message_count(
         self,
         conversation_id: str,
-        *,
         since: datetime | None = None,
         until: datetime | None = None,
         limit: int | None = None,
@@ -778,7 +747,6 @@ class TeamsService:
     def iter_archived_export_pages(
         self,
         conversation_id: str,
-        *,
         since: datetime | None = None,
         until: datetime | None = None,
         from_key: tuple[str, str] | None = None,
@@ -818,7 +786,6 @@ class TeamsService:
         self,
         conversation_id: str,
         message_id: str,
-        *,
         offset: int = 0,
         max_chars: int = MAX_MESSAGE_CONTENT_PAGE_CHARS,
     ) -> dict[str, Any]:
@@ -851,7 +818,6 @@ class TeamsService:
     def export_chat(
         self,
         conversation_id: str | None = None,
-        *,
         since: datetime | None = None,
         until: datetime | None = None,
         message_limit: int | None = None,
@@ -921,9 +887,7 @@ class TeamsService:
                         continuation_url=request_url,
                     )
                 )
-                retries_this_call += int(
-                    getattr(self.connector, "last_request_retry_count", 0)
-                )
+                retries_this_call += int(self.connector.last_request_retry_count)
                 job = self.index.save_export_job_page(
                     export_id,
                     messages,
@@ -995,7 +959,6 @@ class TeamsService:
     def read_export(
         self,
         export_id: str,
-        *,
         offset_bytes: int = 0,
         max_bytes: int = EXPORT_RESOURCE_PAGE_BYTES,
     ) -> dict[str, Any]:
@@ -1147,7 +1110,6 @@ class TeamsService:
     def search_messages(
         self,
         query: str,
-        *,
         match_mode: str = "substring",
         conversation_ids: list[str] | None = None,
         all_catalog: bool = False,
@@ -1393,7 +1355,6 @@ class TeamsService:
     @_logged_service_operation
     def sync_search_index(
         self,
-        *,
         conversation_id: str | None = None,
         max_chats_to_sync: int = 25,
         max_messages_to_fetch: int = 1_000,
@@ -1502,19 +1463,13 @@ class TeamsService:
                             )
                         )
                     except AuthenticationRequiredError:
-                        message_retries += int(
-                            getattr(self.connector, "last_request_retry_count", 0)
-                        )
+                        message_retries += int(self.connector.last_request_retry_count)
                         raise
                     except (RuntimeError, ValueError) as exc:
-                        message_retries += int(
-                            getattr(self.connector, "last_request_retry_count", 0)
-                        )
+                        message_retries += int(self.connector.last_request_retry_count)
                         message_error = self._safe_error(exc)
                         break
-                    message_retries += int(
-                        getattr(self.connector, "last_request_retry_count", 0)
-                    )
+                    message_retries += int(self.connector.last_request_retry_count)
                     saved_next_url = None if is_latest_refresh else next_url
                     new_state = self.index.save_message_page(
                         chat.id,
@@ -1572,7 +1527,6 @@ class TeamsService:
     @_logged_service_operation
     def get_search_index_status(
         self,
-        *,
         page_size: int = 50,
         page_token: str | None = None,
         conversation_id: str | None = None,
@@ -1651,7 +1605,6 @@ class TeamsService:
     def _stored_message_record(
         self,
         row: dict[str, Any],
-        *,
         account_user_id: str | None = None,
     ) -> dict[str, Any]:
         author_id = row.get("author_id")
@@ -1685,7 +1638,6 @@ class TeamsService:
         self,
         row: dict[str, Any],
         query: str,
-        *,
         account_user_id: str | None = None,
     ) -> dict[str, Any]:
         author_id = row.get("author_id")
@@ -1714,20 +1666,12 @@ class TeamsService:
         }
 
     def _current_account_user_id(self) -> str | None:
-        for method_name in ("get_user_metadata", "get_cached_account_metadata"):
-            get_metadata = getattr(self.connector, method_name, None)
-            if not callable(get_metadata):
-                continue
-            try:
-                metadata = get_metadata()
-            except RuntimeError:
-                continue
-            if not isinstance(metadata, dict):
-                continue
-            user_id = metadata.get("user_id")
-            if isinstance(user_id, str) and user_id.strip():
-                return user_id.strip()
-        return None
+        try:
+            metadata = self.connector.get_user_metadata()
+        except RuntimeError:
+            metadata = self.connector.get_cached_account_metadata()
+        user_id = metadata.get("user_id") if isinstance(metadata, dict) else None
+        return user_id.strip() if isinstance(user_id, str) and user_id.strip() else None
 
     @staticmethod
     def _participant_record(member: dict[str, Any]) -> dict[str, str | None]:
@@ -1856,7 +1800,6 @@ class TeamsService:
         kind: str,
         scope: tuple[str, ...],
         state: dict[str, Any],
-        *,
         old: str | None,
     ) -> str:
         if old:

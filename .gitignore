@@ -18,6 +18,7 @@ tokens.json
 *.db-*
 
 # Environment / secrets
+.local/
 .env
 .env.*
 !.env.example

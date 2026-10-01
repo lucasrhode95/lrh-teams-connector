@@ -16,11 +16,11 @@ from teams_exporter.local_server import (
     LocalTeamsRequestHandler,
 )
 from teams_exporter.teams_connector import (
-    AuthenticationRequiredError,
     ChatSummary,
     ExtractionCancelled,
     TeamsConnector,
 )
+from teams_exporter.token_provider import AuthenticationRequiredError
 from teams_exporter.teams_message_formatter import TeamsMessageFormatter
 
 
@@ -59,7 +59,6 @@ class ExportConnector:
     def iter_message_pages(
         self,
         conversation_id,
-        *,
         limit=None,
         since=None,
         until=None,
@@ -173,6 +172,9 @@ class ExportService:
             raise AuthenticationRequiredError("Teams sign-in is required.")
         return {"authenticated": True}
 
+    def invalidate_authentication(self):
+        self.connection_recent = False
+
     def get_profile_picture(self, url):
         if self.auth_required:
             raise AuthenticationRequiredError("not signed in")
@@ -204,7 +206,6 @@ class ExportService:
     def fetch_chat_to_archive(
         self,
         conversation_id,
-        *,
         since=None,
         until=None,
         cancel_event=None,

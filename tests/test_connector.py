@@ -12,13 +12,13 @@ from urllib.parse import parse_qs, urlsplit
 import msal
 
 from teams_exporter.teams_connector import (
-    AuthenticationRequiredError,
     ChatSummary,
     ExtractionCancelled,
     TeamsConnector,
 )
 from teams_exporter.teams_exporter import TeamsExporter
 from teams_exporter.teams_message_formatter import TeamsHtmlParser, TeamsMessageFormatter
+from teams_exporter.token_provider import AuthenticationRequiredError, TokenProvider
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -95,7 +95,6 @@ class StubConnector(TeamsConnector):
     def _http_json(
         self,
         url,
-        *,
         method="GET",
         body=None,
         headers=None,
@@ -117,14 +116,13 @@ class TeamsConnectorTests(unittest.TestCase):
             "tenant_id": "tenant-guid",
             "home_account_id": "user-guid.tenant-guid",
         }
-        cache = Mock()
-        cache.search.return_value = [cached_account]
-        with patch.object(client, "_load_token_cache", return_value=cache):
+        get_cached_account = Mock(return_value=cached_account)
+        with patch.object(client.token_provider, "get_cached_account", get_cached_account):
             metadata = client.get_cached_account_metadata()
 
         self.assertEqual(metadata["username"], "taylor@example.test")
         self.assertEqual(metadata["user_id"], "user-guid")
-        cache.search.assert_called_once_with("Account")
+        get_cached_account.assert_called_once_with()
 
     def test_profile_picture_uri_uses_teams_web_route_without_fetching_an_image(self):
         client = StubConnector()
@@ -271,7 +269,9 @@ class TeamsConnectorTests(unittest.TestCase):
     def test_http_client_accepts_an_empty_successful_response(self):
         client = TeamsConnector()
         with patch("urllib.request.urlopen") as open_url:
-            open_url.return_value.__enter__.return_value.read.return_value = b""
+            response = open_url.return_value.__enter__.return_value
+            response.status = 200
+            response.read.return_value = b""
 
             result = client._http_json(
                 "https://chat.example.test/send",
@@ -756,6 +756,7 @@ class TeamsConnectorTests(unittest.TestCase):
         response = Mock()
         response.__enter__ = Mock(return_value=response)
         response.__exit__ = Mock(return_value=False)
+        response.status = 200
         response.read.return_value = b'{"ok": true}'
         with patch("urllib.request.urlopen", side_effect=[unavailable, response]) as urlopen:
             with patch("time.sleep"):
@@ -786,6 +787,7 @@ class TeamsConnectorTests(unittest.TestCase):
         response = Mock()
         response.__enter__ = Mock(return_value=response)
         response.__exit__ = Mock(return_value=False)
+        response.status = 200
         response.read.return_value = b'{"ok": true}'
         with patch(
             "urllib.request.urlopen",
@@ -871,91 +873,10 @@ class TeamsConnectorTests(unittest.TestCase):
             elsewhere.mkdir()
             with patch.dict("os.environ", {"LOCALAPPDATA": str(root)}):
                 with patch("os.getcwd", return_value=str(elsewhere)):
-                    cache_path = TeamsConnector()._cache_path
+                    cache_path = TeamsConnector().token_provider.cache_path
 
         self.assertEqual(cache_path, root / "scrape-teams-chat" / ".teams_token_cache.json")
         self.assertTrue(cache_path.is_absolute())
-
-    def test_legacy_repository_cache_is_encrypted_and_verified_before_removal(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / "repository" / ".teams_token_cache.json"
-            destination = root / "localappdata" / "scrape-teams-chat" / ".teams_token_cache.json"
-            source.parent.mkdir()
-            source_state = sanitized_msal_cache_state()
-            source.write_text(source_state, encoding="utf-8")
-            client = TeamsConnector(cache_path=destination)
-            client._uses_default_cache_path = True
-            with (
-                patch.object(client, "_repository_cache_path", return_value=source),
-                patch("msal_extensions.build_encrypted_persistence", FakeEncryptedPersistence),
-            ):
-                client._migrate_repository_cache_if_needed()
-                migrated = client._load_token_cache()
-
-            self.assertFalse(source.exists())
-            self.assertTrue(destination.is_file())
-            self.assertNotIn(source_state.encode("utf-8"), destination.read_bytes())
-            self.assertEqual(list(migrated.search(msal.TokenCache.CredentialType.ACCOUNT))[0]["username"], "fixture@example.test")
-
-    def test_plaintext_appdata_cache_is_replaced_after_encrypted_readback(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            destination = root / "localappdata" / ".teams_token_cache.json"
-            destination.parent.mkdir()
-            source_state = sanitized_msal_cache_state()
-            destination.write_text(source_state, encoding="utf-8")
-            client = TeamsConnector(cache_path=destination)
-            with patch("msal_extensions.build_encrypted_persistence", FakeEncryptedPersistence):
-                migrated = client._load_token_cache()
-
-            self.assertNotIn(source_state.encode("utf-8"), destination.read_bytes())
-            self.assertEqual(list(migrated.search(msal.TokenCache.CredentialType.ACCOUNT))[0]["username"], "fixture@example.test")
-
-    def test_failed_encrypted_migration_preserves_plaintext_without_fallback(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / "repository" / ".teams_token_cache.json"
-            destination = root / "localappdata" / "scrape-teams-chat" / ".teams_token_cache.json"
-            source.parent.mkdir()
-            source_state = sanitized_msal_cache_state()
-            source.write_text(source_state, encoding="utf-8")
-            client = TeamsConnector(cache_path=destination)
-            client._uses_default_cache_path = True
-            with (
-                patch.object(client, "_repository_cache_path", return_value=source),
-                patch("msal_extensions.build_encrypted_persistence", side_effect=OSError("fixture failure")),
-            ):
-                with self.assertRaisesRegex(RuntimeError, "original file was left intact"):
-                    client._migrate_repository_cache_if_needed()
-
-            self.assertTrue(source.is_file())
-            self.assertEqual(source.read_text(encoding="utf-8"), source_state)
-            self.assertFalse(destination.exists())
-
-    def test_migration_does_not_overwrite_a_different_encrypted_destination(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / "repository" / ".teams_token_cache.json"
-            destination = root / "localappdata" / ".teams_token_cache.json"
-            source.parent.mkdir()
-            source_state = sanitized_msal_cache_state()
-            source.write_text(source_state, encoding="utf-8")
-            FakeEncryptedPersistence(destination).save(
-                sanitized_msal_cache_state("other-fixture@example.test")
-            )
-            destination_bytes = destination.read_bytes()
-            client = TeamsConnector(cache_path=destination)
-            with (
-                patch.object(client, "_repository_cache_path", return_value=source),
-                patch("msal_extensions.build_encrypted_persistence", FakeEncryptedPersistence),
-            ):
-                with self.assertRaisesRegex(RuntimeError, "original file was left intact"):
-                    client._migrate_plaintext_cache(source)
-
-            self.assertTrue(source.is_file())
-            self.assertEqual(source.read_text(encoding="utf-8"), source_state)
-            self.assertEqual(destination.read_bytes(), destination_bytes)
 
     def test_injected_cache_path_uses_encrypted_persistence(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -963,9 +884,38 @@ class TeamsConnectorTests(unittest.TestCase):
             client = TeamsConnector(cache_path=cache_path)
             build = Mock(side_effect=FakeEncryptedPersistence)
             with patch("msal_extensions.build_encrypted_persistence", build):
-                client._load_token_cache()
+                client.token_provider.load_cache()
 
             build.assert_called_once_with(str(cache_path))
+
+    def test_unsecure_mode_uses_separate_plaintext_development_cache(self):
+        from msal_extensions import FilePersistence, PersistedTokenCache
+
+        with tempfile.TemporaryDirectory() as directory:
+            cache_path = Path(directory) / "debug-cache.json"
+            provider = TokenProvider(cache_path=cache_path, unsecure=True)
+            cache = provider.load_cache()
+            sanitized_state = sanitized_msal_cache_state()
+            self.assertIsInstance(cache, PersistedTokenCache)
+            self.assertIsInstance(cache._persistence, FilePersistence)
+            cache._persistence.save(sanitized_state)
+
+            self.assertEqual(cache_path.read_text(encoding="utf-8"), sanitized_state)
+            self.assertEqual(
+                list(provider.load_cache().search(msal.TokenCache.CredentialType.ACCOUNT))[0]["username"],
+                "fixture@example.test",
+            )
+            self.assertEqual(provider.cache_path, cache_path.resolve())
+            self.assertEqual(provider.mode, "plaintext-development")
+
+    def test_unsecure_connector_uses_the_development_cache_path(self):
+        client = TeamsConnector(unsecure=True)
+        self.assertTrue(client.token_provider.unsecure)
+        self.assertEqual(
+            client.token_provider.cache_path,
+            (Path(__file__).parent.parent / ".local" / "teams-msal-debug-cache.json").resolve(),
+        )
+        self.assertIn(str(client.token_provider.cache_path), TokenProvider.unsecure_warning(client.token_provider.cache_path))
 
     def test_login_keeps_the_existing_scopes_and_uses_persisted_msal_cache(self):
         from msal_extensions import PersistedTokenCache
@@ -988,8 +938,8 @@ class TeamsConnectorTests(unittest.TestCase):
             }
             with (
                 patch("msal_extensions.build_encrypted_persistence", FakeEncryptedPersistence),
-                patch("teams_exporter.teams_connector.msal.PublicClientApplication", return_value=app) as create_app,
-                patch.object(client, "_acquire_resource_token", acquire),
+                patch("teams_exporter.token_provider.msal.PublicClientApplication", return_value=app) as create_app,
+                patch.object(client.token_provider, "_acquire_resource_token", acquire),
                 patch.object(client, "_request_teams_authz", return_value=authz),
             ):
                 client.login(interactive=False)
@@ -1015,19 +965,20 @@ class TeamsConnectorTests(unittest.TestCase):
                 side_effect=RuntimeError("fixture failure"),
             ):
                 with self.assertRaisesRegex(RuntimeError, "No plaintext cache will be used") as raised:
-                    client._load_token_cache()
+                    client.token_provider.load_cache()
 
             self.assertNotIn("fixture failure", str(raised.exception))
             self.assertFalse(cache_path.exists())
 
     def test_silent_msal_acquisition_renews_cached_expiring_access_token(self):
         client = TeamsConnector(cache_path="unused-cache.json")
+        provider = client.token_provider
         account = {"home_account_id": "sanitized-account"}
         app = Mock()
         app.get_accounts.return_value = [account]
         app.acquire_token_silent.return_value = {"access_token": "sanitized-renewed-token"}
 
-        result, source = client._acquire_resource_token(
+        result, source = provider._acquire_resource_token(
             app, client.SPACES_SCOPE, interactive=False
         )
 
@@ -1039,24 +990,38 @@ class TeamsConnectorTests(unittest.TestCase):
 
     def test_invalid_refresh_token_fails_fast_with_sign_in_guidance(self):
         client = TeamsConnector(cache_path="unused-cache.json")
+        provider = client.token_provider
         app = Mock()
         app.get_accounts.return_value = [{"home_account_id": "sanitized-account"}]
         app.acquire_token_silent.return_value = {"error": "invalid_grant"}
 
         with self.assertRaisesRegex(AuthenticationRequiredError, "no longer accepts") as raised:
-            client._acquire_resource_token(app, client.SPACES_SCOPE, interactive=False)
+            provider._acquire_resource_token(app, client.SPACES_SCOPE, interactive=False)
 
         self.assertIn("python -m teams_exporter auth", str(raised.exception))
         app.acquire_token_silent.assert_called_once()
 
+    def test_missing_unsecure_session_points_to_unsecure_sign_in_command(self):
+        provider = TokenProvider(cache_path="unused-debug-cache.json", unsecure=True)
+        app = Mock()
+        app.get_accounts.return_value = []
+
+        with self.assertRaisesRegex(AuthenticationRequiredError, "auth --unsecure"):
+            provider._acquire_resource_token(
+                app,
+                TeamsConnector.SPACES_SCOPE,
+                interactive=False,
+            )
+
     def test_unknown_msal_errors_retry_without_claiming_credentials_are_invalid(self):
         client = TeamsConnector(cache_path="unused-cache.json")
+        provider = client.token_provider
         app = Mock()
         app.get_accounts.return_value = [{"home_account_id": "sanitized-account"}]
         app.acquire_token_silent.return_value = {"error": "unclassified_fixture_error"}
         with patch("time.sleep") as sleep:
             with self.assertRaisesRegex(RuntimeError, "service request failed after 3 attempts") as raised:
-                client._acquire_resource_token(app, client.SPACES_SCOPE, interactive=False)
+                provider._acquire_resource_token(app, client.SPACES_SCOPE, interactive=False)
 
         self.assertNotIn("credentials are invalid", str(raised.exception).casefold())
         self.assertEqual(app.acquire_token_silent.call_count, 3)
@@ -1281,7 +1246,6 @@ class TeamsExporterTests(unittest.TestCase):
             def iter_message_pages(
                 self,
                 conversation_id,
-                *,
                 limit=None,
                 since=None,
                 until=None,

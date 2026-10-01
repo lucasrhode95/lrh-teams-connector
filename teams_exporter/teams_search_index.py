@@ -28,7 +28,6 @@ class TeamsSearchIndex:
     def __init__(
         self,
         path: str | Path = ".teams_search_index.sqlite3",
-        *,
         owner_fingerprint: str | None = None,
     ) -> None:
         self.path = Path(path)
@@ -41,7 +40,6 @@ class TeamsSearchIndex:
         cls,
         base_path: str | Path,
         owner_fingerprint: str,
-        *,
         use_base_if_missing: bool = False,
     ) -> tuple[Path, str | None]:
         """Choose an index file without adopting or overwriting another user's data."""
@@ -260,41 +258,6 @@ class TeamsSearchIndex:
                         VALUES ('generation', '0');
                     """
                 )
-                chat_columns = {
-                    row["name"]
-                    for row in connection.execute("PRAGMA table_info(chats)")
-                }
-                if "avatar_url" not in chat_columns:
-                    connection.execute("ALTER TABLE chats ADD COLUMN avatar_url TEXT")
-                if "is_deleted" not in chat_columns:
-                    connection.execute(
-                        "ALTER TABLE chats ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0"
-                    )
-                connection.execute("DROP TABLE IF EXISTS message_fts")
-                message_columns = {
-                    row["name"]
-                    for row in connection.execute("PRAGMA table_info(messages)")
-                }
-                if "author_id" not in message_columns:
-                    connection.execute("ALTER TABLE messages ADD COLUMN author_id TEXT")
-                for name, declaration in (
-                    ("body_folded", "TEXT NOT NULL DEFAULT ''"),
-                    ("edited_at", "TEXT"),
-                    ("deleted_at", "TEXT"),
-                    ("is_deleted", "INTEGER NOT NULL DEFAULT 0"),
-                ):
-                    if name not in message_columns:
-                        connection.execute(
-                            f"ALTER TABLE messages ADD COLUMN {name} {declaration}"
-                        )
-                legacy_rows = connection.execute(
-                    "SELECT row_id, body FROM messages WHERE body_folded = ''"
-                ).fetchall()
-                for row in legacy_rows:
-                    connection.execute(
-                        "UPDATE messages SET body_folded = ? WHERE row_id = ?",
-                        (self._normalize_search_text(str(row["body"])), row["row_id"]),
-                    )
                 if self.owner_fingerprint is not None:
                     connection.execute(
                         "INSERT OR IGNORE INTO index_metadata(key, value) VALUES (?, ?)",
@@ -341,7 +304,6 @@ class TeamsSearchIndex:
         self,
         chats: list[ChatSummary],
         sync_token: str,
-        *,
         deleted_ids: list[str] | None = None,
     ) -> None:
         """Atomically merge a CSA delta and persist its continuation token."""
@@ -479,7 +441,6 @@ class TeamsSearchIndex:
         self,
         conversation_id: str,
         messages: list[dict[str, Any]],
-        *,
         next_url: str | None,
         raw_scanned: int,
         missing_timestamp_count: int,
@@ -549,7 +510,6 @@ class TeamsSearchIndex:
         self,
         conversation_id: str,
         messages: list[dict[str, Any]],
-        *,
         formatter: TeamsMessageFormatter,
     ) -> dict[str, int]:
         """Upsert one fresh remote page without changing full-history progress."""
@@ -588,7 +548,6 @@ class TeamsSearchIndex:
         connection: sqlite3.Connection,
         conversation_id: str,
         messages: list[dict[str, Any]],
-        *,
         formatter: TeamsMessageFormatter,
         now: str,
         oldest: str | None,
@@ -778,7 +737,6 @@ class TeamsSearchIndex:
     def query_message_page(
         self,
         conversation_id: str,
-        *,
         since: str | None,
         until: str | None,
         before: tuple[str, str] | None,
@@ -814,7 +772,6 @@ class TeamsSearchIndex:
     def query_messages_chronological(
         self,
         conversation_id: str,
-        *,
         since: str | None,
         until: str | None,
         after: tuple[str, str] | None = None,
@@ -866,7 +823,6 @@ class TeamsSearchIndex:
     def latest_message_cutoff(
         self,
         conversation_id: str,
-        *,
         since: str | None,
         until: str | None,
         limit: int,
@@ -939,7 +895,6 @@ class TeamsSearchIndex:
         self,
         export_id: str,
         messages: list[dict[str, Any]],
-        *,
         requested_url: str | None,
         next_url: str | None,
         raw_scanned: int,
@@ -1010,7 +965,6 @@ class TeamsSearchIndex:
     def complete_export_job(
         self,
         export_id: str,
-        *,
         snapshot_path: str,
         byte_size: int,
         message_count: int,
@@ -1032,7 +986,6 @@ class TeamsSearchIndex:
         self,
         conversation_id: str,
         participants: list[dict[str, str | None]],
-        *,
         error: str | None = None,
         scanned_count: int | None = None,
         unresolved_count: int = 0,
@@ -1096,7 +1049,6 @@ class TeamsSearchIndex:
     def search_messages(
         self,
         query: str,
-        *,
         match_mode: str,
         conversation_ids: list[str],
         since: str,
@@ -1151,7 +1103,6 @@ class TeamsSearchIndex:
     def search_chats_by_participant(
         self,
         query: str,
-        *,
         limit: int,
         offset: int,
     ) -> tuple[list[dict[str, Any]], int]:
@@ -1210,7 +1161,6 @@ class TeamsSearchIndex:
 
     def index_status(
         self,
-        *,
         limit: int,
         offset: int,
         conversation_id: str | None = None,
@@ -1290,7 +1240,6 @@ class TeamsSearchIndex:
 
     def coverage_summary(
         self,
-        *,
         since: str | None,
         until: str | None,
         conversation_id: str | None = None,

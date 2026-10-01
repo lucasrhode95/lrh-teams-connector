@@ -35,7 +35,6 @@ class TeamsExporter:
         self,
         chat: ChatSummary,
         destination: Path,
-        *,
         limit: int | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
@@ -104,7 +103,7 @@ class TeamsExporter:
                 if self.service is None:
                     message_count += len(page)
 
-            coverage = getattr(self.connector, "last_message_read_coverage", {})
+            coverage = self.connector.last_message_read_coverage
             missing_timestamps = int(
                 coverage.get("missing_timestamp_messages_excluded", 0)
             )
@@ -152,7 +151,7 @@ class TeamsExporter:
                             self._raise_if_cancelled(cancel_event)
                             if written:
                                 output.write("\n")
-                            timestamp = self._message_datetime(message)
+                            timestamp = TeamsConnector._message_datetime(message)
                             timestamp_text = (
                                 timestamp.isoformat().replace("+00:00", "Z")
                                 if timestamp
@@ -207,7 +206,6 @@ class TeamsExporter:
         self,
         chats: list[ChatSummary],
         destination: Path,
-        *,
         limit: int | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
@@ -265,10 +263,6 @@ class TeamsExporter:
             if isinstance(value, str) and value.strip():
                 return value.strip()
         return "Unknown sender"
-
-    @staticmethod
-    def _message_datetime(message: dict[str, Any]) -> datetime | None:
-        return TeamsConnector._message_datetime(message)
 
     @staticmethod
     def filename_stem(chat: ChatSummary) -> str:

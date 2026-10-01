@@ -4,11 +4,8 @@ import html
 import http.client
 import json
 import logging
-import os
 import re
-import tempfile
 import time
-import uuid
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -19,7 +16,7 @@ from threading import Event
 from typing import Any, Callable, Iterator
 from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsplit
 
-import msal
+from teams_exporter.token_provider import AuthenticationRequiredError, TokenProvider
 
 
 logger = logging.getLogger(__name__)
@@ -53,64 +50,6 @@ class ChatCatalogCoverage:
     unclassified_service_rows_excluded: int = 0
     fallback_name_lookups_attempted: int = 0
     fallback_chats_without_resolved_name: int = 0
-
-
-class AuthenticationRequiredError(RuntimeError):
-    """Raised when the cached Microsoft session needs an interactive sign-in."""
-
-
-class _TokenCacheLock:
-    """Small cross-process lock for the app-owned MSAL cache file."""
-
-    def __init__(self, path: Path, timeout_seconds: float = 30.0) -> None:
-        self.path = path
-        self.timeout_seconds = timeout_seconds
-        self._stream = None
-
-    def __enter__(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._stream = self.path.open("a+b")
-        if self._stream.seek(0, os.SEEK_END) == 0:
-            self._stream.write(b"0")
-            self._stream.flush()
-        deadline = time.monotonic() + self.timeout_seconds
-        while True:
-            try:
-                if os.name == "nt":
-                    import msvcrt
-
-                    self._stream.seek(0)
-                    msvcrt.locking(self._stream.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    import fcntl
-
-                    fcntl.flock(self._stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                return self
-            except (OSError, BlockingIOError):
-                if time.monotonic() >= deadline:
-                    self._stream.close()
-                    self._stream = None
-                    raise RuntimeError(
-                        "The Teams token cache is busy in another process. Retry shortly."
-                    )
-                time.sleep(0.1)
-
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
-        if self._stream is None:
-            return
-        try:
-            if os.name == "nt":
-                import msvcrt
-
-                self._stream.seek(0)
-                msvcrt.locking(self._stream.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(self._stream.fileno(), fcntl.LOCK_UN)
-        finally:
-            self._stream.close()
-            self._stream = None
 
 
 class ExtractionCancelled(RuntimeError):
@@ -206,15 +145,14 @@ class TeamsConnector:
         self,
         tenant: str = "organizations",
         cache_path: str | Path | None = None,
+        unsecure: bool = False,
+        token_provider: TokenProvider | None = None,
     ) -> None:
-        self._authority = f"https://login.microsoftonline.com/{tenant}"
-        self._uses_default_cache_path = cache_path is None
-        self._cache_path = (
-            self._default_cache_path() if cache_path is None else Path(cache_path)
-        )
-        self._cache_path = self._cache_path.expanduser().resolve()
-        self._cache_lock_path = self._cache_path.with_suffix(
-            self._cache_path.suffix + ".lock"
+        self.token_provider = token_provider or TokenProvider(
+            tenant=tenant,
+            client_id=self.TEAMS_CLIENT_ID,
+            cache_path=cache_path,
+            unsecure=unsecure,
         )
         self._spaces_access_token: str | None = None
         self._csa_access_token: str | None = None
@@ -249,27 +187,17 @@ class TeamsConnector:
         session returns a clear error instead of waiting on a terminal prompt.
         """
         logger.debug("Teams authentication check started interactive=%s", interactive)
-        with _TokenCacheLock(self._cache_lock_path):
-            self._migrate_repository_cache_if_needed()
-            cache = self._load_token_cache()
-            app = msal.PublicClientApplication(
-                client_id=self.TEAMS_CLIENT_ID,
-                authority=self._authority,
-                token_cache=cache,
-            )
-            spaces_result, spaces_source = self._acquire_resource_token(
-                app, self.SPACES_SCOPE, interactive=interactive
-            )
-            csa_result, csa_source = self._acquire_resource_token(
-                app, self.CSA_SCOPE, interactive=interactive
-            )
+        spaces_token, csa_token = self.token_provider.get_access_tokens(
+            (self.SPACES_SCOPE, self.CSA_SCOPE),
+            interactive=interactive,
+        )
 
         self._auth_sources = {
-            "spaces": spaces_source,
-            "csa": csa_source,
+            "spaces": spaces_token.source,
+            "csa": csa_token.source,
         }
-        self._spaces_access_token = spaces_result["access_token"]
-        self._csa_access_token = csa_result["access_token"]
+        self._spaces_access_token = spaces_token.value
+        self._csa_access_token = csa_token.value
         self._spaces_claims = self._decode_jwt_payload(self._spaces_access_token)
         self._authz_response = self._request_teams_authz()
 
@@ -290,8 +218,8 @@ class TeamsConnector:
             raise RuntimeError("Teams AuthZ did not return regionGtms.chatService.")
         logger.info(
             "Teams authentication accepted token_sources=spaces:%s,csa:%s",
-            spaces_source,
-            csa_source,
+            self._auth_sources["spaces"],
+            self._auth_sources["csa"],
         )
 
     def get_user_metadata(self) -> dict[str, Any]:
@@ -439,16 +367,12 @@ class TeamsConnector:
         This lets local archive searches select the account-specific database
         without attempting sign-in or contacting Microsoft.
         """
-        with _TokenCacheLock(self._cache_lock_path):
-            self._migrate_repository_cache_if_needed()
-            cache = self._load_token_cache()
+        account = self.token_provider.get_cached_account()
         # Read the cached account directly. Creating PublicClientApplication
         # can perform OpenID metadata discovery, which would make local-only
         # archive searches depend on network access.
-        accounts = list(cache.search(msal.TokenCache.CredentialType.ACCOUNT))
-        if not accounts:
+        if not account:
             return None
-        account = accounts[0]
         return {
             "username": account.get("username"),
             "user_id": account.get("local_account_id"),
@@ -609,7 +533,6 @@ class TeamsConnector:
     def _summarize_csa_update_row(
         cls,
         row: Any,
-        *,
         entity_type: str,
     ) -> ChatSummary | None:
         if not isinstance(row, dict):
@@ -1291,7 +1214,6 @@ class TeamsConnector:
     def get_messages(
         self,
         conversation_id: str,
-        *,
         limit: int | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
@@ -1322,7 +1244,6 @@ class TeamsConnector:
     def iter_message_pages(
         self,
         conversation_id: str,
-        *,
         limit: int | None = None,
         since: datetime | None = None,
         until: datetime | None = None,
@@ -1511,7 +1432,6 @@ class TeamsConnector:
     def get_messages_page(
         self,
         conversation_id: str,
-        *,
         page_size: int = 50,
         since: datetime | None = None,
         until: datetime | None = None,
@@ -1752,7 +1672,6 @@ class TeamsConnector:
         url: str,
         method: str = "GET",
         body: Any | None = None,
-        *,
         cancel_event: Event | None = None,
     ) -> dict[str, Any]:
         self._require_logged_in()
@@ -1791,7 +1710,6 @@ class TeamsConnector:
         url: str,
         method: str = "GET",
         body: Any | None = None,
-        *,
         sync_token: str | None = None,
     ) -> dict[str, Any]:
         self._require_logged_in()
@@ -1828,7 +1746,6 @@ class TeamsConnector:
     def _http_json(
         self,
         url: str,
-        *,
         method: str = "GET",
         body: Any | None = None,
         headers: dict[str, str] | None = None,
@@ -1862,13 +1779,7 @@ class TeamsConnector:
                 with urllib.request.urlopen(
                     request, timeout=self.REQUEST_TIMEOUT_SECONDS
                 ) as response:
-                    candidate_status = getattr(response, "status", 200)
-                    response_status = (
-                        candidate_status
-                        if isinstance(candidate_status, int)
-                        and not isinstance(candidate_status, bool)
-                        else 200
-                    )
+                    response_status = response.status
                     response_text = response.read().decode("utf-8")
                 self._raise_if_cancelled(cancel_event)
                 logger.debug(
@@ -2002,261 +1913,6 @@ class TeamsConnector:
             cls.READ_RETRY_BASE_SECONDS * (2 ** max(0, retry_number - 1)),
             cls.READ_RETRY_MAX_SECONDS,
         )
-
-    def _acquire_resource_token(
-        self,
-        app: msal.PublicClientApplication,
-        scope: str,
-        *,
-        interactive: bool,
-    ) -> tuple[dict[str, Any], str]:
-        for account in app.get_accounts():
-            result = self._retry_token_request(
-                lambda: app.acquire_token_silent(scopes=[scope], account=account),
-                scope=scope,
-            )
-            if isinstance(result, dict) and result.get("access_token"):
-                return result, "cache"
-
-        if not interactive:
-            raise AuthenticationRequiredError(
-                "Teams sign-in is required. Run `python -m teams_exporter auth` "
-                "in a terminal, complete Microsoft sign-in, then retry."
-            )
-
-        flow = app.initiate_device_flow(scopes=[scope])
-        if not isinstance(flow, dict) or not flow.get("user_code"):
-            raise RuntimeError(
-                f"Could not start device-code authentication for {self._scope_name(scope)}."
-            )
-        print(flow.get("message", "Complete sign-in in the browser window."))
-        result = self._retry_token_request(
-            lambda: app.acquire_token_by_device_flow(flow),
-            scope=scope,
-            interactive=True,
-        )
-        if not result or not result.get("access_token"):
-            self._raise_token_result_error(result, scope=scope)
-        return result, "device_code"
-
-    def _retry_token_request(
-        self,
-        operation: Callable[[], Any],
-        *,
-        scope: str,
-        interactive: bool = False,
-    ) -> Any:
-        attempts = 3
-        for attempt in range(attempts):
-            try:
-                result = operation()
-            except Exception as exc:
-                if attempt + 1 >= attempts:
-                    kind = "connectivity" if self._is_network_error(exc) else "service"
-                    raise RuntimeError(
-                        f"Microsoft {kind} request failed after {attempts} attempts. "
-                        "The stored credentials were not reported as rejected; try again later."
-                    ) from None
-                time.sleep(min(0.25 * (2**attempt), 1.0))
-                continue
-
-            if isinstance(result, dict) and result.get("access_token"):
-                return result
-            error = str(result.get("error", "") if isinstance(result, dict) else "").casefold()
-            if error in self._REJECTED_CREDENTIAL_ERRORS:
-                raise self._stored_credentials_rejected() from None
-            if attempt + 1 >= attempts:
-                if error:
-                    kind = "connectivity" if error in self._TRANSIENT_TOKEN_ERRORS else "service"
-                    raise RuntimeError(
-                        f"Microsoft {kind} request failed after {attempts} attempts. "
-                        "The stored credentials were not reported as rejected; try again later."
-                    ) from None
-                if interactive:
-                    self._raise_token_result_error(result, scope=scope)
-                return result
-            time.sleep(min(0.25 * (2**attempt), 1.0))
-        return None
-
-    _REJECTED_CREDENTIAL_ERRORS = {
-        "invalid_grant",
-        "interaction_required",
-        "login_required",
-        "consent_required",
-        "access_denied",
-        "expired_token",
-    }
-    _TRANSIENT_TOKEN_ERRORS = {
-        "temporarily_unavailable",
-        "server_error",
-        "service_not_available",
-        "request_timeout",
-        "timeout",
-    }
-
-    @staticmethod
-    def _is_network_error(exc: Exception) -> bool:
-        return isinstance(exc, (OSError, TimeoutError, urllib.error.URLError)) or (
-            exc.__class__.__module__.startswith(("requests", "httpx"))
-        )
-
-    @staticmethod
-    def _stored_credentials_rejected() -> AuthenticationRequiredError:
-        return AuthenticationRequiredError(
-            "Microsoft no longer accepts the stored credentials. "
-            "Run `python -m teams_exporter auth` to sign in again, then retry."
-        )
-
-    def _raise_token_result_error(self, result: Any, *, scope: str) -> None:
-        error = str(result.get("error", "") if isinstance(result, dict) else "").casefold()
-        if error in self._REJECTED_CREDENTIAL_ERRORS:
-            raise self._stored_credentials_rejected()
-        raise RuntimeError(
-            f"Microsoft sign-in failed for {self._scope_name(scope)}. "
-            "Run `python -m teams_exporter auth` and retry."
-        )
-
-    @staticmethod
-    def _scope_name(scope: str) -> str:
-        return "CSA" if "chatsvcagg" in scope else "Teams"
-
-    def _load_token_cache(self) -> Any:
-        """Load the MSAL cache through the operating system's encrypted store."""
-        self._migrate_plaintext_cache(self._cache_path)
-        cache, _ = self._new_persisted_token_cache(self._cache_path)
-        return cache
-
-    @staticmethod
-    def _new_persisted_token_cache(path: Path) -> tuple[Any, Any]:
-        """Create encrypted persistence and its MSAL cache, without plaintext fallback."""
-        try:
-            from msal_extensions import PersistedTokenCache, build_encrypted_persistence
-
-            persistence = build_encrypted_persistence(str(path))
-            return PersistedTokenCache(persistence), persistence
-        except Exception:
-            raise RuntimeError(
-                "Encrypted Teams credential storage is unavailable. No plaintext cache "
-                "will be used. You may need to sign in again after encrypted storage is available."
-            ) from None
-
-    def _migrate_plaintext_cache(self, source: Path) -> None:
-        """Encrypt a legacy JSON cache, removing it only after encrypted read-back succeeds."""
-        if not source.is_file():
-            return
-        cache_state = self._read_plaintext_cache_state(source)
-        if cache_state is None:
-            return
-
-        destination = self._cache_path
-        same_path = source.resolve() == destination
-        try:
-            if not same_path and destination.exists():
-                existing, _ = self._new_persisted_token_cache(destination)
-                existing.search(msal.TokenCache.CredentialType.ACCOUNT)
-                if existing.serialize() == cache_state:
-                    source.unlink()
-                    return
-                raise RuntimeError(
-                    "An encrypted Teams cache already exists and differs from the legacy "
-                    "cache. The plaintext copy was left intact and will not be used; you "
-                    "may need to sign in again."
-                )
-
-            staging_path = self._new_staging_cache_path(destination)
-            try:
-                staged_cache, persistence = self._new_persisted_token_cache(staging_path)
-                persistence.save(cache_state)
-                staged_cache.search(msal.TokenCache.CredentialType.ACCOUNT)
-                if staged_cache.serialize() != cache_state:
-                    raise RuntimeError("Encrypted cache read-back did not match.")
-
-                if same_path:
-                    os.replace(staging_path, destination)
-                else:
-                    os.link(staging_path, destination)
-                    try:
-                        verified_cache, _ = self._new_persisted_token_cache(destination)
-                        verified_cache.search(msal.TokenCache.CredentialType.ACCOUNT)
-                        if verified_cache.serialize() != cache_state:
-                            destination.unlink(missing_ok=True)
-                            raise RuntimeError("Encrypted cache read-back did not match.")
-                    except Exception:
-                        destination.unlink(missing_ok=True)
-                        raise
-                    source.unlink()
-            finally:
-                staging_path.unlink(missing_ok=True)
-                Path(f"{staging_path}.lockfile").unlink(missing_ok=True)
-        except Exception:
-            raise RuntimeError(
-                "The existing plaintext Teams token cache could not be migrated to "
-                "encrypted storage. The original file was left intact and will not be "
-                "used. You may need to sign in again."
-            ) from None
-
-    @staticmethod
-    def _read_plaintext_cache_state(path: Path) -> str | None:
-        """Recognize and deserialize legacy MSAL JSON without exposing its contents."""
-        try:
-            raw_text = path.read_text(encoding="utf-8")
-            payload = json.loads(raw_text)
-        except (OSError, UnicodeError, ValueError):
-            return None
-        cache_sections = {
-            "AccessToken",
-            "Account",
-            "AppMetadata",
-            "IdToken",
-            "RefreshToken",
-        }
-        if not isinstance(payload, dict) or (
-            payload and not cache_sections.intersection(payload)
-        ):
-            return None
-        try:
-            cache = msal.SerializableTokenCache()
-            cache.deserialize(raw_text)
-            return cache.serialize()
-        except Exception:
-            raise RuntimeError(
-                "The existing plaintext Teams token cache is not a valid MSAL cache. "
-                "It was left intact and will not be used; you may need to sign in again."
-            ) from None
-
-    @staticmethod
-    def _new_staging_cache_path(destination: Path) -> Path:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        handle, name = tempfile.mkstemp(
-            prefix=f".{destination.name}.migration-{uuid.uuid4().hex}.",
-            suffix=".encrypted",
-            dir=destination.parent,
-        )
-        os.close(handle)
-        staging_path = Path(name)
-        staging_path.unlink()
-        return staging_path
-
-    @staticmethod
-    def _default_cache_path() -> Path:
-        if os.name == "nt":
-            root = os.environ.get("LOCALAPPDATA")
-            base = Path(root) if root else Path.home() / "AppData" / "Local"
-        else:
-            root = os.environ.get("XDG_DATA_HOME")
-            base = Path(root) if root else Path.home() / ".local" / "share"
-        return base / "scrape-teams-chat" / ".teams_token_cache.json"
-
-    def _repository_cache_path(self) -> Path:
-        return Path(__file__).resolve().parent.parent / ".teams_token_cache.json"
-
-    def _migrate_repository_cache_if_needed(self) -> None:
-        if not self._uses_default_cache_path:
-            return
-        source = self._repository_cache_path()
-        if source.resolve() == self._cache_path or not source.is_file():
-            return
-        self._migrate_plaintext_cache(source)
 
     @staticmethod
     def _safe_exception_detail(value: Any) -> str:

@@ -21,12 +21,12 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from teams_exporter.app_logging import configure_app_logging
 from teams_exporter.teams_connector import (
-    AuthenticationRequiredError,
     ChatSummary,
     ExtractionCancelled,
 )
 from teams_exporter.teams_exporter import TeamsExporter
 from teams_exporter.teams_service import TeamsService
+from teams_exporter.token_provider import AuthenticationRequiredError
 
 
 MAX_REQUEST_BYTES = 1_000_000
@@ -84,8 +84,13 @@ class LocalTeamsHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = False
     JOB_RETENTION_SECONDS = 60 * 60
 
-    def __init__(self, server_address: tuple[str, int], service: TeamsService | None = None):
-        self.service = service or TeamsService()
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        service: TeamsService | None = None,
+        unsecure_tokens: bool = False,
+    ):
+        self.service = service or TeamsService(unsecure_tokens=unsecure_tokens)
         self.exporter = TeamsExporter(
             self.service.connector,
             self.service.formatter,
@@ -120,16 +125,14 @@ class LocalTeamsHTTPServer(ThreadingHTTPServer):
 
     def register_avatar_uris(self, urls: list[str | None]) -> dict[str, str]:
         """Make authenticated Middle Tier picture URLs available by opaque local IDs."""
-        can_fetch = getattr(self.service.connector, "can_fetch_profile_picture", None)
         registered: dict[str, str] = {}
         routes: dict[str, str] = {}
-        if callable(can_fetch):
-            for url in urls:
-                if not isinstance(url, str) or not can_fetch(url):
-                    continue
-                key = hashlib.sha256(url.encode("utf-8")).hexdigest()
-                registered[key] = url
-                routes[url] = f"/api/profile-picture/{key}"
+        for url in urls:
+            if not isinstance(url, str) or not self.service.connector.can_fetch_profile_picture(url):
+                continue
+            key = hashlib.sha256(url.encode("utf-8")).hexdigest()
+            registered[key] = url
+            routes[url] = f"/api/profile-picture/{key}"
         with self._avatar_lock:
             self._avatar_urls = registered
         return routes
@@ -243,7 +246,6 @@ class LocalTeamsHTTPServer(ThreadingHTTPServer):
         self,
         request: DownloadRequest,
         temp_dir: Path,
-        *,
         cancel_event: threading.Event,
         progress_callback,
     ) -> tuple[str, str, Path]:
@@ -338,7 +340,7 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
         parsed_target = urlsplit(self.path)
         path = parsed_target.path
         if path == "/":
-            if getattr(self.server.service, "has_recent_connection", False):
+            if self.server.service.has_recent_connection:
                 self._redirect_to_chats()
                 return
             self._send_html_template("auth.html")
@@ -507,7 +509,7 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
             self.server.service.check_authentication()
             return True
         except AuthenticationRequiredError as exc:
-            self._invalidate_service_authentication()
+            self.server.service.invalidate_authentication()
             logger.warning("HTTP connection check requires authentication")
             if page_request:
                 self._redirect_to_authentication()
@@ -530,11 +532,6 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
                     ),
                 )
             return False
-
-    def _invalidate_service_authentication(self) -> None:
-        invalidate = getattr(self.server.service, "invalidate_authentication", None)
-        if callable(invalidate):
-            invalidate()
 
     def _redirect_to_authentication(self) -> None:
         self.send_response(303)
@@ -676,7 +673,7 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
                     raise RuntimeError("Teams returned an invalid chat-list continuation.")
                 seen_tokens.add(next_token)
                 page_token = next_token
-            account = getattr(self.server.service, "account_info", None)
+            account = self.server.service.account_info
             account_payload = dict(account) if isinstance(account, dict) else account
             avatar_uris = [chat.get("avatar_url") for chat in chats]
             if isinstance(account_payload, dict):
@@ -695,7 +692,7 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
                 {
                     "chats": chats,
                     "count": len(chats),
-                    "database_notice": getattr(self.server.service, "database_notice", None),
+                    "database_notice": self.server.service.database_notice,
                     "account": account_payload,
                     "source": "cache" if cached else "teams",
                 },
@@ -811,7 +808,6 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
     @staticmethod
     def _parse_local_date(
         value: Any,
-        *,
         end_of_day: bool = False,
         utc_offset_minutes: Any = None,
     ) -> datetime | None:
@@ -926,12 +922,15 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
         return {"error": {"code": code, "message": message}}
 
 
-def serve_local_ui(port: int = 8765) -> None:
+def serve_local_ui(port: int = 8765, unsecure_tokens: bool = False) -> None:
     """Serve the local export UI on loopback until interrupted."""
     if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
         raise ValueError("port must be between 1 and 65535.")
     configure_app_logging("http", stdout=True)
-    server = LocalTeamsHTTPServer(("127.0.0.1", port))
+    server = LocalTeamsHTTPServer(
+        ("127.0.0.1", port),
+        unsecure_tokens=unsecure_tokens,
+    )
     logger.info("HTTP server listening address=http://127.0.0.1:%d", server.server_port)
     try:
         server.serve_forever()

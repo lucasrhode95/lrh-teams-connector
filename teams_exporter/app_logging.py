@@ -74,7 +74,6 @@ def log_directory() -> Path:
 
 def configure_app_logging(
     component: str,
-    *,
     stdout: bool = False,
     stream: TextIO | None = None,
     directory: str | Path | None = None,

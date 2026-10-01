@@ -3,16 +3,29 @@ from __future__ import annotations
 import argparse
 import sys
 
-from teams_exporter.teams_connector import AuthenticationRequiredError, TeamsConnector
+from teams_exporter.teams_connector import TeamsConnector
 from teams_exporter.teams_service import TeamsService
+from teams_exporter.token_provider import AuthenticationRequiredError, TokenProvider
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="python -m teams_exporter")
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("auth", help="complete the interactive Microsoft device-code sign-in")
+    auth_parser = commands.add_parser(
+        "auth", help="complete the interactive Microsoft device-code sign-in"
+    )
+    auth_parser.add_argument(
+        "--unsecure",
+        action="store_true",
+        help="store tokens in a plaintext development cache for direct agent probes",
+    )
     serve_parser = commands.add_parser("serve", help="serve the local conversation export UI")
     serve_parser.add_argument("--port", type=int, default=8765, help="loopback port (default: 8765)")
+    serve_parser.add_argument(
+        "--unsecure",
+        action="store_true",
+        help="use the plaintext development MSAL cache instead of encrypted storage",
+    )
     backup_parser = commands.add_parser("backup", help="make a consistent backup of the local Teams archive")
     backup_parser.add_argument("destination", help="destination file, preferably ending in .sqlite3")
     backup_parser.add_argument(
@@ -20,8 +33,14 @@ def main() -> int:
     )
     args = parser.parse_args()
     if args.command == "auth":
+        connector = TeamsConnector(unsecure=args.unsecure)
+        if args.unsecure:
+            print(
+                TokenProvider.unsecure_warning(connector.token_provider.cache_path),
+                file=sys.stderr,
+            )
         try:
-            TeamsConnector().login(interactive=True)
+            connector.login(interactive=True)
         except Exception as exc:
             # Authentication library diagnostics can contain sensitive values;
             # keep the CLI output actionable without echoing exception text.
@@ -36,7 +55,10 @@ def main() -> int:
         from teams_exporter.local_server import serve_local_ui
 
         try:
-            serve_local_ui(args.port)
+            if args.unsecure:
+                debug_path = TokenProvider(unsecure=True).cache_path
+                print(TokenProvider.unsecure_warning(debug_path), file=sys.stderr)
+            serve_local_ui(args.port, unsecure_tokens=args.unsecure)
         except ValueError as exc:
             parser.error(str(exc))
         return 0

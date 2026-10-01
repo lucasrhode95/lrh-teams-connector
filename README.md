@@ -6,7 +6,9 @@ The connector follows Teams Desktop client conventions and uses endpoint behavio
 
 ## Sign in
 
-Run `python -m teams_exporter auth` from the repository root to complete Microsoft's sign-in flow. Microsoft handles the password and any verification; this application never sees or stores the password. The shared connector stores opaque tokens in an OS-encrypted cache under `%LOCALAPPDATA%\scrape-teams-chat` on Windows (DPAPI), or the per-user data directory on other platforms, independent of the working directory. UI and MCP use the same MSAL cache; access tokens renew silently when Microsoft accepts the stored refresh token. If encrypted storage is unavailable, the connector fails closed and never writes a plaintext cache. A legacy plaintext cache is migrated only after an encrypted write and read-back succeed; otherwise it is preserved and the user may need to sign in again.
+Run `python -m teams_exporter auth` from the repository root to complete Microsoft's sign-in flow. Microsoft handles the password and any verification; this application never sees or stores the password. The shared connector stores opaque tokens in an OS-encrypted cache under `%LOCALAPPDATA%\scrape-teams-chat` on Windows (DPAPI), or the per-user data directory on other platforms, independent of the working directory. UI and MCP use the same MSAL cache; access tokens renew silently when Microsoft accepts the stored refresh token. If encrypted storage is unavailable, the connector fails closed and never writes a plaintext cache.
+
+For explicitly requested local development probes, `python -m teams_exporter auth --unsecure` stores a separate plaintext MSAL cache in the repository's ignored `.local` folder. Any process that can read it can reuse the signed-in session. Direct scripts can select the same cache with `TeamsConnector(unsecure=True)`. The normal UI, MCP server, and sign-in command stay encrypted by default; development mode must be selected explicitly and its cache should be deleted when no longer needed.
 
 ## Use the MCP server
 

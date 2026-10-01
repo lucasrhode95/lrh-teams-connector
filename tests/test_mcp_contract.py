@@ -23,6 +23,7 @@ class MCPContractTests(unittest.TestCase):
             environment["TEAMS_SEARCH_INDEX_PATH"] = str(
                 Path(temp_dir) / "contract-test.sqlite3"
             )
+            environment["LOCALAPPDATA"] = str(Path(temp_dir) / "appdata")
             parameters = StdioServerParameters(
                 command=sys.executable,
                 args=["-m", "teams_exporter.mcp_server"],

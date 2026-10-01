@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import argparse
 import logging
 import functools
 import json
+import sys
 import time
 from datetime import datetime
 from typing import Literal, TypedDict
@@ -12,6 +14,7 @@ from mcp.types import CallToolResult, ResourceLink, TextContent, ToolAnnotations
 
 from teams_exporter.app_logging import configure_app_logging
 from teams_exporter.teams_service import TeamsService
+from teams_exporter.token_provider import TokenProvider
 
 
 logger = logging.getLogger(__name__)
@@ -434,9 +437,12 @@ def _parse_datetime(value: str | None, name: str) -> datetime | None:
     return result
 
 
-def create_mcp_server(service: TeamsService | None = None) -> FastMCP:
+def create_mcp_server(
+    service: TeamsService | None = None,
+    unsecure_tokens: bool = False,
+) -> FastMCP:
     """Build the standard MCP tool server around the reusable Teams service."""
-    teams = service or TeamsService()
+    teams = service or TeamsService(unsecure_tokens=unsecure_tokens)
     server = FastMCP(
         "teams-chat-reader",
         instructions=SERVER_INSTRUCTIONS,
@@ -806,11 +812,21 @@ def create_mcp_server(service: TeamsService | None = None) -> FastMCP:
     return server
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="python -m teams_exporter.mcp_server")
+    parser.add_argument(
+        "--unsecure",
+        action="store_true",
+        help="use the plaintext development MSAL cache instead of encrypted storage",
+    )
+    args = parser.parse_args(argv)
     configure_app_logging("mcp", stdout=False)
+    if args.unsecure:
+        debug_path = TokenProvider(unsecure=True).cache_path
+        print(TokenProvider.unsecure_warning(debug_path), file=sys.stderr)
     logger.info("Starting MCP server transport=stdio")
     try:
-        create_mcp_server().run(transport="stdio")
+        create_mcp_server(unsecure_tokens=args.unsecure).run(transport="stdio")
     except Exception as exc:
         logger.error("MCP server stopped error_type=%s", type(exc).__name__)
         raise SystemExit(1) from None
