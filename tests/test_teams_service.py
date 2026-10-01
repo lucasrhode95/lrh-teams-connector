@@ -99,7 +99,21 @@ class ServiceConnector(TeamsConnector):
         pages = self.pages.get(conversation_id, [([], None)])
         index = 0 if continuation_url is None else int(continuation_url.rsplit(":", 1)[1])
         page, next_url = pages[index]
-        return page, next_url, len(page), 0
+        missing_timestamps = 0
+        selected = []
+        for item in page:
+            timestamp = TeamsConnector.message_datetime(item)
+            if (since is not None or until is not None) and timestamp is None:
+                missing_timestamps += 1
+                continue
+            if since is not None and timestamp < since:
+                continue
+            if until is not None and timestamp > until:
+                continue
+            selected.append(item)
+        selected.sort(key=TeamsConnector._message_order_key, reverse=True)
+        selected = sorted(selected[:page_size], key=TeamsConnector._message_order_key)
+        return selected, next_url, len(page), missing_timestamps
 
     def iter_message_pages(
         self,
@@ -657,6 +671,42 @@ class TeamsServiceTests(unittest.TestCase):
         self.assertIn("second newest", resource["content"])
         self.assertIn("third newest", resource["content"])
         self.assertNotIn("older excluded", resource["content"])
+
+    def test_mcp_date_range_and_limit_count_only_qualifying_messages(self):
+        chat = self.connector.chats[0]
+        self.connector.pages[chat.id] = [
+            ([
+                message("outside-until", 5, "newer than upper bound"),
+                message("at-until", 4, "message at upper bound"),
+            ], "page:1"),
+            ([
+                message("next-in-range", 3, "next latest in range"),
+                message("also-in-range", 2, "older in range but beyond limit"),
+            ], "page:2"),
+            ([message("outside-since", 1, "older than lower bound")], None),
+        ]
+        since = datetime(2026, 9, 28, 10, 0, 2, tzinfo=timezone.utc)
+        until = datetime(2026, 9, 28, 10, 0, 4, tzinfo=timezone.utc)
+
+        result = self.service.export_chat(
+            chat.id,
+            since=since,
+            until=until,
+            message_limit=2,
+        )
+
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(self.connector.message_page_sizes, [2, 1])
+        self.assertEqual(len(self.connector.page_calls), 2)
+        self.assertEqual(result["coverage"]["remote_pages_fetched_total"], 2)
+        self.assertEqual(result["coverage"]["remote_items_scanned_total"], 4)
+        self.assertEqual(result["coverage"]["remote_messages_retrieved_total"], 2)
+        self.assertTrue(result["coverage"]["message_limit_reached"])
+        resource = self.service.read_export(result["export_id"])
+        self.assertIn("message at upper bound", resource["content"])
+        self.assertIn("next latest in range", resource["content"])
+        self.assertNotIn("newer than upper bound", resource["content"])
+        self.assertNotIn("older than lower bound", resource["content"])
 
     def test_unbounded_mcp_export_does_not_duplicate_every_id_for_the_job(self):
         chat = self.connector.chats[0]
