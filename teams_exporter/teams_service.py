@@ -248,12 +248,44 @@ class TeamsService:
                 sync_token,
                 deleted_ids=deleted_ids,
             )
+            self._refresh_self_chat_activity()
             self._chats_cache = [
                 self._chat_from_record(record)
                 for record in self.index.chat_catalog()
             ]
             self._chats_cache_until = time.monotonic() + 60
         return self._chats_cache
+
+    def _refresh_self_chat_activity(self) -> None:
+        """Refresh notes-to-self activity, which CSA catalog deltas omit."""
+        self_row = next(
+            (
+                record
+                for record in self.index.chat_catalog()
+                if record["conversation_id"] == self.connector.SELF_CHAT_ID
+            ),
+            None,
+        )
+        if self_row is None:
+            return
+
+        messages = self.connector.get_messages(
+            self.connector.SELF_CHAT_ID,
+            limit=1,
+        )
+        if not messages:
+            return
+
+        latest = messages[-1]
+        last_message_at = self.connector.message_datetime(latest)
+        if last_message_at is None:
+            return
+
+        self_chat = self._chat_from_record(self_row)
+        self_chat.last_message_at = last_message_at
+        preview = self.formatter.format_message(latest).strip()
+        self_chat.last_message_preview = preview[:240] if preview else None
+        self.index.upsert_chats([self_chat])
 
     def list_cached_chats(
         self,

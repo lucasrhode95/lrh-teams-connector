@@ -563,7 +563,7 @@ class TeamsSearchIndex:
             body = formatter.format_message(message)
             author = self._message_author(message, body)
             author_id = TeamsConnector._message_author_id(message)
-            timestamp = self._timestamp(TeamsConnector._message_datetime(message))
+            timestamp = self._timestamp(TeamsConnector.message_datetime(message))
             message_id = message.get("id")
             if message_id is None:
                 fingerprint = json.dumps(

@@ -589,7 +589,7 @@ class TeamsConnector:
         return ChatSummary(
             id=chat_id,
             display_name=str(title),
-            last_message_at=self._message_datetime(last_message),
+            last_message_at=self.message_datetime(last_message),
             last_message_preview=preview,
             unread=unread,
             chat_type=chat_type,
@@ -714,7 +714,7 @@ class TeamsConnector:
                 ChatSummary(
                     id=chat_id,
                     display_name=str(title),
-                    last_message_at=self._message_datetime(last_message),
+                    last_message_at=self.message_datetime(last_message),
                     last_message_preview=preview,
                     unread=unread,
                     chat_type=chat_type,
@@ -1003,8 +1003,8 @@ class TeamsConnector:
             ),
             conversation_id,
         )
-        last_message_at = self._message_datetime(last_message) or (
-            self._message_datetime(
+        last_message_at = self.message_datetime(last_message) or (
+            self.message_datetime(
                 {"originalArrivalTime": properties.get("lastimreceivedtime")}
             )
         )
@@ -1388,7 +1388,7 @@ class TeamsConnector:
                         seen_message_ids.add(message_id)
                         new_ids_on_page += 1
 
-                    timestamp = self._message_datetime(message)
+                    timestamp = self.message_datetime(message)
                     if (since_utc is not None or until_utc is not None) and timestamp is None:
                         missing_timestamp_messages_excluded += 1
                         continue
@@ -1526,7 +1526,7 @@ class TeamsConnector:
         selected: list[dict[str, Any]] = []
         missing_timestamp_count = 0
         for message in page:
-            timestamp = self._message_datetime(message)
+            timestamp = self.message_datetime(message)
             if (since_utc is not None or until_utc is not None) and timestamp is None:
                 missing_timestamp_count += 1
                 continue
@@ -1660,7 +1660,7 @@ class TeamsConnector:
             ),
             None,
         )
-        sent_at = self._message_datetime(response_message)
+        sent_at = self.message_datetime(response_message)
         logger.info("Teams message send accepted response_has_message_id=%s", message_id is not None)
         return {
             "message_id": message_id,
@@ -2041,7 +2041,8 @@ class TeamsConnector:
         return None
 
     @classmethod
-    def _message_datetime(cls, message: dict[str, Any]) -> datetime | None:
+    def message_datetime(cls, message: dict[str, Any]) -> datetime | None:
+        """Convert the timestamp fields used by Teams messages to UTC."""
         for key in (
             "OriginalArrivalTime",
             "originalArrivalTime",
@@ -2086,7 +2087,7 @@ class TeamsConnector:
         except (TypeError, ValueError):
             sequence = 0
             has_sequence = 0
-        timestamp = cls._message_datetime(message) or datetime.min.replace(
+        timestamp = cls.message_datetime(message) or datetime.min.replace(
             tzinfo=timezone.utc
         )
         return (

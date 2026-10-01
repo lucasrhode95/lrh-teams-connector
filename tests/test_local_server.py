@@ -68,9 +68,9 @@ class ExportConnector:
         self.calls.append((conversation_id, limit, since, until))
         messages = self.chats[conversation_id]
         if since is not None:
-            messages = [m for m in messages if TeamsConnector._message_datetime(m) >= since]
+            messages = [m for m in messages if TeamsConnector.message_datetime(m) >= since]
         if until is not None:
-            messages = [m for m in messages if TeamsConnector._message_datetime(m) <= until]
+            messages = [m for m in messages if TeamsConnector.message_datetime(m) <= until]
         if limit is not None:
             messages = messages[-limit:]
         pages = []
@@ -187,18 +187,18 @@ class ExportService:
             messages = [
                 message
                 for message in messages
-                if TeamsConnector._message_datetime(message) >= since
+                if TeamsConnector.message_datetime(message) >= since
             ]
         if until is not None:
             messages = [
                 message
                 for message in messages
-                if TeamsConnector._message_datetime(message) <= until
+                if TeamsConnector.message_datetime(message) <= until
             ]
         return sorted(
             messages,
             key=lambda message: (
-                TeamsConnector._message_datetime(message),
+                TeamsConnector.message_datetime(message),
                 message["id"],
             ),
         )
@@ -235,7 +235,7 @@ class ExportService:
         cutoff = None
         if limit is not None and messages:
             first = messages[0]
-            timestamp = TeamsConnector._message_datetime(first).isoformat().replace(
+            timestamp = TeamsConnector.message_datetime(first).isoformat().replace(
                 "+00:00", "Z"
             )
             cutoff = (timestamp, first["id"])
@@ -250,7 +250,7 @@ class ExportService:
                 message
                 for message in messages
                 if (
-                    TeamsConnector._message_datetime(message)
+                    TeamsConnector.message_datetime(message)
                     .isoformat()
                     .replace("+00:00", "Z"),
                     message["id"],

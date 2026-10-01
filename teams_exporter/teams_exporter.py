@@ -151,7 +151,7 @@ class TeamsExporter:
                             self._raise_if_cancelled(cancel_event)
                             if written:
                                 output.write("\n")
-                            timestamp = TeamsConnector._message_datetime(message)
+                            timestamp = TeamsConnector.message_datetime(message)
                             timestamp_text = (
                                 timestamp.isoformat().replace("+00:00", "Z")
                                 if timestamp
