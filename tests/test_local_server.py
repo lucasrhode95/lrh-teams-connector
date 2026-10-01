@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import logging
 import threading
 import time as time_module
 import unittest
@@ -403,9 +404,50 @@ class LocalTeamsServerTests(unittest.TestCase):
         image_status, image_headers, image_body = self.request("GET", result["chats"][0]["avatar_url"])
         self.assertEqual(image_status, 200)
         self.assertEqual(image_headers["Content-Type"], "image/png")
-        self.assertEqual(image_headers["Cache-Control"], "no-store")
+        self.assertEqual(
+            image_headers["Cache-Control"],
+            "private, max-age=3600, must-revalidate",
+        )
+        self.assertRegex(image_headers["ETag"], r'^"[0-9a-f]{64}"$')
         self.assertEqual(image_body, b"sanitized-test-image")
         self.assertEqual(self.service.picture_calls, ["https://images.example.test/alpha.png"])
+
+        image_status, conditional_headers, conditional_body = self.request(
+            "GET",
+            result["chats"][0]["avatar_url"],
+            extra_headers={"If-None-Match": image_headers["ETag"]},
+        )
+        self.assertEqual(image_status, 304)
+        self.assertEqual(conditional_body, b"")
+        self.assertEqual(conditional_headers["ETag"], image_headers["ETag"])
+        self.assertEqual(
+            conditional_headers["Cache-Control"],
+            "private, max-age=3600, must-revalidate",
+        )
+        self.assertEqual(len(self.service.picture_calls), 2)
+
+    def test_static_and_profile_picture_request_logs_are_debug_level(self):
+        with self.assertLogs("teams_exporter.local_server", level="DEBUG") as captured:
+            status, _, _ = self.request("GET", "/static/app.css")
+        self.assertEqual(status, 200)
+        static_request_logs = [
+            record for record in captured.records
+            if record.getMessage().startswith("HTTP request ")
+        ]
+        self.assertEqual(len(static_request_logs), 1)
+        self.assertEqual(static_request_logs[0].levelno, logging.DEBUG)
+
+        _, _, body = self.request("GET", "/api/chats")
+        picture_path = json.loads(body)["chats"][0]["avatar_url"]
+        with self.assertLogs("teams_exporter.local_server", level="DEBUG") as captured:
+            status, _, _ = self.request("GET", picture_path)
+        self.assertEqual(status, 200)
+        picture_request_logs = [
+            record for record in captured.records
+            if record.getMessage().startswith("HTTP request ")
+        ]
+        self.assertEqual(len(picture_request_logs), 1)
+        self.assertEqual(picture_request_logs[0].levelno, logging.DEBUG)
 
     def test_chat_refresh_endpoint_forwards_refresh_and_exposes_sqlite_catalog(self):
         status, _, body = self.request("GET", "/api/chats?refresh=true")
