@@ -64,6 +64,9 @@ class ServiceConnector(TeamsConnector):
         self._chat_service_url = "https://chat.example.test"
         self._middle_tier_url = "https://middle.example.test"
 
+    def get_cached_account_metadata(self):
+        return {}
+
     def list_chats(self):
         return self.chats
 
@@ -392,6 +395,61 @@ class TeamsServiceTests(unittest.TestCase):
         self.assertIn("older retained local message", content)
         self.assertIn("new Teams message", content)
         self.assertEqual(self.service.index.count_messages_in_range(chat.id, since=None, until=None), 2)
+
+    def test_soft_deleted_message_remains_searchable_and_exported_with_a_clear_tag(self):
+        chat = self.connector.chats[0]
+        original = message("soft-deleted", 1, "retain this searchable project detail")
+        deleted_at = "2026-09-28T10:05:00Z"
+        delete_event = {
+            "id": "soft-deleted",
+            "originalarrivaltime": original["originalarrivaltime"],
+            "messagetype": "MessageDelete",
+            "content": "",
+            "properties": {"deletetime": deleted_at},
+        }
+        self.service.index.upsert_messages(
+            chat.id, [original], formatter=self.service.formatter
+        )
+        self.connector.pages[chat.id] = [([delete_event], None)]
+        since = datetime(2026, 9, 28, 10, 0, 0, tzinfo=timezone.utc)
+        until = datetime(2026, 9, 28, 10, 1, 0, tzinfo=timezone.utc)
+
+        search = self.service.search_messages(
+            "searchable project detail",
+            conversation_ids=[chat.id],
+            since=since,
+            until=until,
+        )
+        self.assertEqual(search["returned_count"], 1)
+        search_item = search["items"][0]
+        self.assertTrue(search_item["is_deleted"])
+        self.assertEqual(search_item["deleted_at"], deleted_at)
+        self.assertTrue(search_item["excerpt"].startswith(f"[Soft deleted at {deleted_at}]"))
+        self.assertIn("searchable project detail", search_item["excerpt"])
+
+        messages = self.service.get_messages(chat.id)
+        message_item = next(item for item in messages["items"] if item["id"] == "soft-deleted")
+        self.assertTrue(message_item["is_deleted"])
+        self.assertEqual(message_item["content"], original["content"])
+        content = self.service.get_message_content(chat.id, "soft-deleted")
+        self.assertTrue(content["is_deleted"])
+        self.assertEqual(content["content"], original["content"])
+
+        destination = Path(self.temp.name) / "soft-deleted.txt"
+        TeamsExporter(
+            self.connector,
+            self.service.formatter,
+            service=self.service,
+        ).export_chat(chat, destination)
+        exported = destination.read_text(encoding="utf-8")
+        self.assertIn(f"[Soft deleted at {deleted_at}]", exported)
+        self.assertIn("retain this searchable project detail", exported)
+
+        mcp_export = self.service.export_chat(chat.id)
+        self.assertEqual(mcp_export["status"], "complete")
+        resource = self.service.read_export(mcp_export["export_id"])
+        self.assertIn(f"[Soft deleted at {deleted_at}]", resource["content"])
+        self.assertIn("retain this searchable project detail", resource["content"])
 
     def test_get_messages_bounds_output_and_continues_truncated_message_content(self):
         long_body = "x" * 8_000

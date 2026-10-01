@@ -451,6 +451,13 @@ class TeamsHtmlParser(HTMLParser):
 class TeamsMessageFormatter:
     """Render one Teams message as readable plain text with useful markers."""
 
+    @staticmethod
+    def soft_deleted_marker(deleted_at: str | None) -> str:
+        """Return a visible label for a message Teams has soft-deleted."""
+        if deleted_at:
+            return f"[Soft deleted at {deleted_at}]"
+        return "[Soft deleted]"
+
     def format_message(self, message: dict[str, Any]) -> str:
         content = self._first_string(message, "content", "body", "text") or ""
         kind = self._first_string(message, "messagetype", "messageType") or ""

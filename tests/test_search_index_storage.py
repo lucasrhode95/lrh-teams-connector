@@ -152,6 +152,27 @@ class SearchIndexStorageTests(unittest.TestCase):
         self.assertEqual(row["deleted_at"], "2026-09-28T11:00:00Z")
         self.assertEqual(row["body"], "kept locally")
 
+        page = index.query_message_page(
+            "19:alpha@thread.v2", since=None, until=None, before=None, limit=10
+        )
+        self.assertEqual([item["message_id"] for item in page], ["m1"])
+        self.assertTrue(page[0]["is_deleted"])
+        self.assertEqual(page[0]["body"], "kept locally")
+
+        matches, has_more = index.search_messages(
+            "kept locally",
+            match_mode="substring",
+            conversation_ids=["19:alpha@thread.v2"],
+            since="2026-09-28T09:00:00Z",
+            until="2026-09-28T12:00:00Z",
+            after=None,
+            limit=10,
+        )
+        self.assertFalse(has_more)
+        self.assertEqual([item["message_id"] for item in matches], ["m1"])
+        self.assertTrue(matches[0]["is_deleted"])
+        self.assertEqual(matches[0]["body"], "kept locally")
+
     def test_chat_delta_and_sync_token_persist_together(self):
         path = self.root / "catalog.sqlite3"
         index = TeamsSearchIndex(path)

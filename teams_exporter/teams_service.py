@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
+import logging
 import os
 import re
 import tempfile
@@ -21,6 +23,56 @@ from teams_exporter.teams_connector import (
 )
 from teams_exporter.teams_message_formatter import TeamsMessageFormatter
 from teams_exporter.teams_search_index import TeamsSearchIndex
+
+
+logger = logging.getLogger(__name__)
+
+
+def _logged_service_operation(function):
+    """Log operation timing and safe result counts without recording arguments."""
+    @functools.wraps(function)
+    def wrapped(*args, **kwargs):
+        operation = function.__name__
+        started = time.perf_counter()
+        logger.info("Teams service operation started name=%s", operation)
+        try:
+            result = function(*args, **kwargs)
+        except Exception as exc:
+            logger.warning(
+                "Teams service operation failed name=%s error_type=%s duration_ms=%.1f",
+                operation,
+                type(exc).__name__,
+                (time.perf_counter() - started) * 1000,
+            )
+            raise
+
+        details = []
+        if isinstance(result, dict):
+            for key in ("items", "chats", "messages"):
+                value = result.get(key)
+                if isinstance(value, list):
+                    details.append(f"{key}_count={len(value)}")
+            for key in (
+                "returned_count", "archive_messages_in_range", "pages_fetched",
+                "messages_retrieved", "total_matches_in_index", "message_count",
+            ):
+                value = result.get(key)
+                if isinstance(value, int) and not isinstance(value, bool):
+                    details.append(f"{key}={value}")
+            status = result.get("status")
+            if isinstance(status, str) and status in {
+                "complete", "preparing", "accepted", "cancelled", "failed"
+            }:
+                details.append(f"status={status}")
+        logger.info(
+            "Teams service operation completed name=%s duration_ms=%.1f%s",
+            operation,
+            (time.perf_counter() - started) * 1000,
+            f" {' '.join(details)}" if details else "",
+        )
+        return result
+
+    return wrapped
 
 
 MAX_LIST_PAGE_SIZE = 100
@@ -138,11 +190,13 @@ class TeamsService:
             active_session = active_session()
         return active_session is not False
 
+    @_logged_service_operation
     def check_authentication(self) -> dict[str, Any]:
         """Confirm the saved Teams session without loading the chat catalog."""
         self._ensure_session()
         return {"authenticated": True}
 
+    @_logged_service_operation
     def get_profile_picture(self, url: str) -> tuple[bytes, str]:
         """Fetch one picture through the authenticated connector without caching it."""
         self._ensure_session()
@@ -272,6 +326,7 @@ class TeamsService:
             for key, default in defaults.items()
         }
 
+    @_logged_service_operation
     def list_chats(
         self,
         *,
@@ -304,6 +359,7 @@ class TeamsService:
             },
         }
 
+    @_logged_service_operation
     def send_message(
         self,
         conversation_id: str,
@@ -375,6 +431,7 @@ class TeamsService:
             "delivery_status": "accepted",
         }
 
+    @_logged_service_operation
     def search_chats(
         self,
         participant_query: str,
@@ -437,6 +494,7 @@ class TeamsService:
             },
         }
 
+    @_logged_service_operation
     def get_messages(
         self,
         conversation_id: str,
@@ -633,6 +691,7 @@ class TeamsService:
                 high = middle - 1
         return value[:low]
 
+    @_logged_service_operation
     def fetch_chat_to_archive(
         self,
         conversation_id: str,
@@ -746,9 +805,9 @@ class TeamsService:
                     "id": row["message_id"],
                     "OriginalArrivalTime": row["sent_at"],
                     "imdisplayname": row["author"] or "Unknown sender",
-                    "__formatted_body": (
-                        "[Message deleted]" if row["is_deleted"] else row["body"]
-                    ),
+                    "__formatted_body": row["body"],
+                    "__is_deleted": bool(row["is_deleted"]),
+                    "__deleted_at": row["deleted_at"],
                 }
                 for row in rows
             ]
@@ -772,7 +831,7 @@ class TeamsService:
         row = self.index.get_message(conversation_id, message_id)
         if row is None:
             raise ValueError("Message is not present in the local archive. Fetch its conversation first.")
-        content = "[Message deleted]" if row["is_deleted"] else str(row["body"] or "")
+        content = str(row["body"] or "")
         end = min(len(content), offset + max_chars)
         next_offset = end if end < len(content) else None
         return {
@@ -788,6 +847,7 @@ class TeamsService:
             "deleted_at": row["deleted_at"],
         }
 
+    @_logged_service_operation
     def export_chat(
         self,
         conversation_id: str | None = None,
@@ -931,6 +991,7 @@ class TeamsService:
             },
         }
 
+    @_logged_service_operation
     def read_export(
         self,
         export_id: str,
@@ -1051,8 +1112,14 @@ class TeamsService:
                     if not rows:
                         break
                     for row in rows:
-                        output.write(f"[{row['sent_at']}] {row['author']}\n")
-                        body = "[Message deleted]" if row["is_deleted"] else row["body"]
+                        marker = (
+                            " "
+                            + self.formatter.soft_deleted_marker(row["deleted_at"])
+                            if row["is_deleted"]
+                            else ""
+                        )
+                        output.write(f"[{row['sent_at']}] {row['author']}{marker}\n")
+                        body = row["body"]
                         output.write(body if body else "[No text content]")
                         output.write("\n\n")
                     last = rows[-1]
@@ -1076,6 +1143,7 @@ class TeamsService:
             return None
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
 
+    @_logged_service_operation
     def search_messages(
         self,
         query: str,
@@ -1322,6 +1390,7 @@ class TeamsService:
             },
         }
 
+    @_logged_service_operation
     def sync_search_index(
         self,
         *,
@@ -1500,6 +1569,7 @@ class TeamsService:
             },
         }
 
+    @_logged_service_operation
     def get_search_index_status(
         self,
         *,
@@ -1589,7 +1659,7 @@ class TeamsService:
         account_identifier = TeamsConnector._profile_identifier(account_user_id)
         is_deleted = bool(row.get("is_deleted"))
         stored_body = str(row.get("body") or "")
-        body = "[Message deleted]" if is_deleted else stored_body
+        body = stored_body
         return {
             "id": row["message_id"],
             "conversation_id": row["conversation_id"],
@@ -1633,8 +1703,14 @@ class TeamsService:
                 else None
             ),
             "timestamp": row["sent_at"],
-            "excerpt": self._excerpt(row["body"], query),
+            "excerpt": (
+                f"{self.formatter.soft_deleted_marker(row.get('deleted_at'))} "
+                if row.get("is_deleted")
+                else ""
+            ) + self._excerpt(row["body"], query),
             "message_type": row["message_type"],
+            "is_deleted": bool(row.get("is_deleted")),
+            "deleted_at": row.get("deleted_at"),
         }
 
     def _current_account_user_id(self) -> str | None:

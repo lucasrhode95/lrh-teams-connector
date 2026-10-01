@@ -237,6 +237,7 @@ class TeamsSearchIndex:
                         conversation_id TEXT NOT NULL,
                         since TEXT NOT NULL,
                         until TEXT NOT NULL,
+                        message_limit INTEGER,
                         next_url TEXT,
                         complete INTEGER NOT NULL DEFAULT 0,
                         pages INTEGER NOT NULL DEFAULT 0,
@@ -1105,7 +1106,7 @@ class TeamsSearchIndex:
     ) -> tuple[list[dict[str, Any]], bool]:
         """Search normalized SQL text and return one stable keyset page."""
         normalized = self._normalize_search_text(query)
-        predicates = ["m.is_deleted = 0", "m.sent_at IS NOT NULL"]
+        predicates = ["m.sent_at IS NOT NULL"]
         parameters: list[Any] = []
         placeholders = ",".join("?" for _ in conversation_ids)
         predicates.append(f"m.conversation_id IN ({placeholders})")

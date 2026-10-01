@@ -1,15 +1,71 @@
 from __future__ import annotations
 
 import logging
+import functools
 import json
-import sys
+import time
 from datetime import datetime
 from typing import Literal, TypedDict
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult, ResourceLink, TextContent, ToolAnnotations
 
+from teams_exporter.app_logging import configure_app_logging
 from teams_exporter.teams_service import TeamsService
+
+
+logger = logging.getLogger(__name__)
+
+
+def _result_log_summary(result: object) -> str:
+    """Summarize only response shape and counts; never log response content."""
+    if isinstance(result, str):
+        return f"response_chars={len(result)}"
+    if not isinstance(result, dict):
+        return f"result_type={type(result).__name__}"
+    fields = []
+    for key in ("items", "chats", "messages"):
+        value = result.get(key)
+        if isinstance(value, list):
+            fields.append(f"{key}_count={len(value)}")
+    for key in ("returned_count", "total_matches_in_index", "message_count", "byte_size"):
+        value = result.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            fields.append(f"{key}={value}")
+    status = result.get("status")
+    if isinstance(status, str) and status in {
+        "complete", "preparing", "accepted", "cancelled", "failed"
+    }:
+        fields.append(f"status={status}")
+    return " ".join(fields) or f"result_fields={len(result)}"
+
+
+def _logged_operation(function):
+    """Add privacy-safe timing and outcome logs around one MCP operation."""
+    @functools.wraps(function)
+    def wrapped(*args, **kwargs):
+        operation = function.__name__
+        started = time.perf_counter()
+        logger.info("MCP operation started name=%s", operation)
+        try:
+            result = function(*args, **kwargs)
+        except Exception as exc:
+            logger.warning(
+                "MCP operation failed name=%s error_type=%s duration_ms=%.1f",
+                operation,
+                type(exc).__name__,
+                (time.perf_counter() - started) * 1000,
+            )
+            raise
+        logger.info(
+            "MCP operation completed name=%s duration_ms=%.1f %s",
+            operation,
+            (time.perf_counter() - started) * 1000,
+            _result_log_summary(result),
+        )
+        return result
+
+    return wrapped
 
 
 SERVER_INSTRUCTIONS = (
@@ -223,6 +279,8 @@ class SearchMessageRecord(TypedDict):
     timestamp: str | None
     excerpt: str
     message_type: str | None
+    is_deleted: bool
+    deleted_at: str | None
 
 
 class SearchMessagesResult(TypedDict):
@@ -393,7 +451,9 @@ def create_mcp_server(service: TeamsService | None = None) -> FastMCP:
         ),
         mime_type="application/json",
     )
+    @_logged_operation
     def teams_export_part(export_id: str, offset_bytes: int) -> str:
+        """Return a bounded part of an existing export resource."""
         part = teams.read_export(export_id, offset_bytes=offset_bytes)
         next_uri = (
             None
@@ -407,6 +467,7 @@ def create_mcp_server(service: TeamsService | None = None) -> FastMCP:
         )
 
     @server.tool(annotations=READ_ONLY)
+    @_logged_operation
     def list_chats(
         page_size: int = 50,
         page_token: str | None = None,
@@ -430,6 +491,7 @@ def create_mcp_server(service: TeamsService | None = None) -> FastMCP:
         )
 
     @server.tool(annotations=READ_ONLY)
+    @_logged_operation
     def search_chats(
         participant_query: str,
         page_size: int = 25,
@@ -453,6 +515,7 @@ def create_mcp_server(service: TeamsService | None = None) -> FastMCP:
         )
 
     @server.tool(annotations=READ_ONLY)
+    @_logged_operation
     def get_messages(
         conversation_id: str,
         page_size: int = 25,
@@ -489,6 +552,7 @@ def create_mcp_server(service: TeamsService | None = None) -> FastMCP:
         )
 
     @server.tool(annotations=READ_ONLY)
+    @_logged_operation
     def get_message_content(
         conversation_id: str,
         message_id: str,
@@ -514,6 +578,7 @@ def create_mcp_server(service: TeamsService | None = None) -> FastMCP:
         )
 
     @server.tool(annotations=READ_ONLY)
+    @_logged_operation
     def search_messages(
         query: str,
         since: str,
@@ -562,6 +627,7 @@ def create_mcp_server(service: TeamsService | None = None) -> FastMCP:
         )
 
     @server.tool(annotations=READ_ONLY)
+    @_logged_operation
     def export_chat(
         conversation_id: str | None = None,
         since: str | None = None,
@@ -618,6 +684,7 @@ def create_mcp_server(service: TeamsService | None = None) -> FastMCP:
         return CallToolResult(content=content, structuredContent=result)
 
     @server.tool(annotations=READ_ONLY)
+    @_logged_operation
     def read_export(
         export_id: str,
         offset_bytes: int = 0,
@@ -640,6 +707,7 @@ def create_mcp_server(service: TeamsService | None = None) -> FastMCP:
         )
 
     @server.tool(annotations=READ_ONLY)
+    @_logged_operation
     def sync_search_index(
         conversation_id: str | None = None,
         max_chats_to_sync: int = 25,
@@ -673,6 +741,7 @@ def create_mcp_server(service: TeamsService | None = None) -> FastMCP:
         )
 
     @server.tool(annotations=READ_ONLY)
+    @_logged_operation
     def get_search_index_status(
         page_size: int = 50,
         page_token: str | None = None,
@@ -701,6 +770,7 @@ def create_mcp_server(service: TeamsService | None = None) -> FastMCP:
         )
 
     @server.tool(annotations=SEND_MESSAGE)
+    @_logged_operation
     def send_message(
         conversation_id: str,
         expected_chat_name: str,
@@ -737,8 +807,14 @@ def create_mcp_server(service: TeamsService | None = None) -> FastMCP:
 
 
 def main() -> None:
-    logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
-    create_mcp_server().run(transport="stdio")
+    configure_app_logging("mcp", stdout=False)
+    logger.info("Starting MCP server transport=stdio")
+    try:
+        create_mcp_server().run(transport="stdio")
+    except Exception as exc:
+        logger.error("MCP server stopped error_type=%s", type(exc).__name__)
+        raise SystemExit(1) from None
+    logger.info("MCP server stopped")
 
 
 if __name__ == "__main__":
