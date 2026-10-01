@@ -369,6 +369,14 @@ class TeamsConnectorTests(unittest.TestCase):
                 "lastMessage": {"originalArrivalTime": "2026-09-30T08:00:00Z"},
             },
             {
+                "id": "19:meeting_example@thread.v2",
+                "title": "Meeting example",
+                "chatType": "meeting",
+                "threadType": "meeting",
+                "isOneOnOne": False,
+                "lastMessage": {"originalArrivalTime": "2026-09-30T07:30:00Z"},
+            },
+            {
                 "id": "19:person@thread.v2",
                 "title": "Person",
                 "chatType": "chat",
@@ -406,10 +414,11 @@ class TeamsConnectorTests(unittest.TestCase):
             "19:group-a@thread.v2": "group",
             "19:group-b@thread.v2": "group",
             "19:group-c@thread.v2": "group",
+            "19:meeting_example@thread.v2": "meeting",
             "19:person@thread.v2": "oneOnOne",
             "19:contradictory@thread.v2": "group",
             "19:unknown-many@thread.v2": "group",
-            "19:unknown-incomplete@thread.v2": "chat",
+            "19:unknown-incomplete@thread.v2": None,
         }
 
         startup = StubConnector([{
@@ -431,6 +440,43 @@ class TeamsConnectorTests(unittest.TestCase):
         self.assertEqual(
             {chat.id: chat.chat_type for chat in update_chats if chat.id in expected},
             expected,
+        )
+
+    def test_chat_service_types_are_normalized_to_the_canonical_catalog_values(self):
+        client = StubConnector()
+        rows = {
+            "oneOnOne": {
+                "threadType": "chat",
+                "productThreadType": "OneToOneChat",
+            },
+            "group": {"threadType": "chat", "productThreadType": "Chat"},
+            "meeting": {"threadType": "meeting", "productThreadType": "Meeting"},
+            "self": {
+                "threadType": "streamofnotes",
+                "productThreadType": "StreamOfNotes",
+            },
+            "ambiguous": {"threadType": "chat"},
+        }
+
+        normalized = {
+            kind: client._summarize_chat_service_conversation(
+                {"id": f"19:{kind}@thread.v2", "threadProperties": properties}
+            ).chat_type
+            for kind, properties in rows.items()
+        }
+        normalized["self"] = client._summarize_chat_service_conversation(
+            {"id": "48:notes", "threadProperties": rows["self"]}
+        ).chat_type
+
+        self.assertEqual(
+            normalized,
+            {
+                "oneOnOne": "oneOnOne",
+                "group": "group",
+                "meeting": "meeting",
+                "self": "chat",
+                "ambiguous": None,
+            },
         )
 
     def test_empty_chat_filter_uses_explicit_csa_flag_and_can_include_all_rows(self):
