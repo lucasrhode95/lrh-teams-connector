@@ -251,8 +251,11 @@ class TeamsHtmlParser(HTMLParser):
         self.ignored_depth = 0
         self.suppress_leading_mention_at = False
         self.mention_tags: list[str] = []
-        self.mention_ids: list[str] = []
-        self.last_mention_id: str | None = None
+        self.mention_content_starts: list[int] = []
+        self.mention_join_snapshots: list[
+            tuple[list[str], int] | None
+        ] = []
+        self.last_mention_content_start: int | None = None
         self.last_mention_close_index: int | None = None
 
     def handle_starttag(
@@ -261,13 +264,13 @@ class TeamsHtmlParser(HTMLParser):
         attributes = {name.lower(): value or "" for name, value in attrs}
         item_type = attributes.get("itemtype", "").lower()
         if item_type.rstrip("/").endswith("/mention"):
-            mention_id = attributes.get("itemid", "").strip()
-            joins_previous = self._join_previous_mention(mention_id)
+            join_snapshot = self._join_previous_mention()
             self.mention_tags.append(tag)
-            self.mention_ids.append(mention_id)
+            self.mention_join_snapshots.append(join_snapshot)
             self.suppress_leading_mention_at = True
-            if not joins_previous:
+            if join_snapshot is None:
                 self.parts.append("@(")
+            self.mention_content_starts.append(len(self.parts))
         if "amsimage" in item_type:
             image_url = (
                 attributes.get("src")
@@ -336,10 +339,22 @@ class TeamsHtmlParser(HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         if self.mention_tags and tag == self.mention_tags[-1]:
             self.mention_tags.pop()
-            mention_id = self.mention_ids.pop()
+            content_start = self.mention_content_starts.pop()
+            join_snapshot = self.mention_join_snapshots.pop()
             self.suppress_leading_mention_at = False
-            self.parts.append(")")
-            self.last_mention_id = mention_id or None
+            if join_snapshot is not None:
+                snapshot, previous_content_start = join_snapshot
+                second_content = self.parts[content_start:]
+                second_name = self._plain_mention_text(second_content)
+                if not second_name or "," in second_name:
+                    self.parts = snapshot + ["@(", *second_content, ")"]
+                    self.last_mention_content_start = len(snapshot) + 1
+                else:
+                    self.parts.append(")")
+                    self.last_mention_content_start = previous_content_start
+            else:
+                self.parts.append(")")
+                self.last_mention_content_start = content_start
             self.last_mention_close_index = len(self.parts) - 1
         if tag in {"script", "style"} and self.ignored_depth:
             self.ignored_depth -= 1
@@ -380,7 +395,7 @@ class TeamsHtmlParser(HTMLParser):
         if self.ignored_depth:
             return
         if not self.mention_tags and data.strip():
-            self.last_mention_id = None
+            self.last_mention_content_start = None
             self.last_mention_close_index = None
         if self.suppress_leading_mention_at and data.strip():
             leading_whitespace = len(data) - len(data.lstrip())
@@ -389,23 +404,35 @@ class TeamsHtmlParser(HTMLParser):
             self.suppress_leading_mention_at = False
         self.parts.append(data)
 
-    def _join_previous_mention(self, mention_id: str) -> bool:
+    def _join_previous_mention(self) -> tuple[list[str], int] | None:
         close_index = self.last_mention_close_index
-        if (
-            self.mention_tags
-            or not mention_id
-            or mention_id != self.last_mention_id
-            or close_index is None
-            or not self.parts[close_index].endswith(")")
-        ):
-            return False
+        content_start = self.last_mention_content_start
+        if self.mention_tags or close_index is None or content_start is None:
+            return None
+        if not self.parts[close_index].endswith(")"):
+            return None
+
+        first_name = self._plain_mention_text(
+            self.parts[content_start:close_index]
+        )
+        if not first_name.endswith(","):
+            return None
 
         separator = "".join(self.parts[close_index + 1 :])
-        if any(character not in " \t\xa0" for character in separator):
-            return False
+        if any(character not in " \t\r\n\xa0" for character in separator):
+            return None
 
-        self.parts[close_index] = self.parts[close_index][:-1]
-        return True
+        snapshot = list(self.parts)
+        del self.parts[close_index:]
+        self.parts.append(" ")
+        self.last_mention_close_index = None
+        return snapshot, content_start
+
+    @staticmethod
+    def _plain_mention_text(parts: list[str]) -> str:
+        text = "".join(parts).replace("\xa0", " ")
+        text = re.sub(r"[*_`]+", "", text)
+        return text.strip()
 
     def _newline(self, count: int) -> None:
         current = "".join(self.parts)
