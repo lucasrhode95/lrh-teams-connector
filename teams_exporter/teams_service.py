@@ -951,7 +951,11 @@ class TeamsService:
 
         pages_this_call = 0
         retries_this_call = 0
-        remote_messages_retrieved = self.index.count_export_job_messages(export_id)
+        remote_messages_retrieved = (
+            self.index.count_export_job_messages(export_id)
+            if job["message_limit"] is not None
+            else None
+        )
         if not job["complete"]:
             since_value = self._parse_stored_bound(job["since"])
             until_value = self._parse_stored_bound(job["until"])
@@ -988,9 +992,10 @@ class TeamsService:
                     formatter=self.formatter,
                 )
                 pages_this_call += 1
-                remote_messages_retrieved = self.index.count_export_job_messages(
-                    export_id
-                )
+                if job["message_limit"] is not None:
+                    remote_messages_retrieved = (
+                        self.index.count_export_job_messages(export_id)
+                    )
                 if job["complete"]:
                     break
 

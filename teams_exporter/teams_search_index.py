@@ -981,18 +981,20 @@ class TeamsSearchIndex:
                 oldest=chat_state["oldest_message_at"] if chat_state else None,
                 newest=chat_state["newest_message_at"] if chat_state else None,
             )
-            connection.executemany(
-                "INSERT OR IGNORE INTO export_job_messages(export_id, message_id) "
-                "VALUES (?, ?)",
-                ((export_id, message_id) for message_id in message_ids),
-            )
-            retrieved_count = int(
-                connection.execute(
-                    "SELECT COUNT(*) FROM export_job_messages WHERE export_id = ?",
-                    (export_id,),
-                ).fetchone()[0]
-            )
             message_limit = job["message_limit"]
+            retrieved_count = 0
+            if message_limit is not None:
+                connection.executemany(
+                    "INSERT OR IGNORE INTO export_job_messages(export_id, message_id) "
+                    "VALUES (?, ?)",
+                    ((export_id, message_id) for message_id in message_ids),
+                )
+                retrieved_count = int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM export_job_messages WHERE export_id = ?",
+                        (export_id,),
+                    ).fetchone()[0]
+                )
             limit_reached = (
                 message_limit is not None and retrieved_count >= int(message_limit)
             )

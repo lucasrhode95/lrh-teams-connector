@@ -304,7 +304,7 @@ class ExportCoverage(TypedDict):
     complete: bool
     remote_pages_fetched_total: int
     remote_items_scanned_total: int
-    remote_messages_retrieved_total: int
+    remote_messages_retrieved_total: int | None
     message_limit_reached: bool
     missing_timestamp_items_excluded_total: int
     retry_count_this_call: int
