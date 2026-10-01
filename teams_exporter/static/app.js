@@ -157,14 +157,37 @@ const chats = [];
     image.src = source;
   }
 
-  function chatFallbackAvatar(chat) {
-    const type = String(chat.chat_type || '').toLocaleLowerCase();
+  function chatPresentationKind(chat) {
+    if (chat.is_self_chat === true) return 'self';
+    const type = String(chat.chat_type || '').toLocaleLowerCase().replace(/[^a-z0-9]/g, '');
+    if (type === 'meeting' || type === 'call' || type === 'meetingchat') return 'meeting';
+    if (type === 'group' || type === 'groupchat' || type === 'team') return 'group';
+    if (type === 'onetoone' || type === 'onetoonechat' || type === 'oneonone') return 'one-to-one';
+    if (type === 'channel' || type === 'standardchannel' || type === 'sharedchannel') return 'channel';
+
     const id = String(chat.id || '').toLocaleLowerCase();
-    if (type.includes('meeting') || type.includes('call') || id.startsWith('19:meeting_') || id.startsWith('19:call_')) {
+    if (id.startsWith('19:meeting_') || id.startsWith('19:call_')) return 'meeting';
+    return 'unknown';
+  }
+
+  function chatFallbackAvatar(chat) {
+    const kind = chatPresentationKind(chat);
+    if (kind === 'meeting') {
       return '/assets/chat-call.svg';
     }
-    if (type.includes('group') || type.includes('channel') || type.includes('team')) return '/assets/chat-group.svg';
+    if (kind === 'group' || kind === 'channel') return '/assets/chat-group.svg';
     return fallbackPersonAvatar;
+  }
+
+  function chatTypeLabel(chat) {
+    const labels = {
+      self: 'Notes to self',
+      meeting: 'Meeting',
+      group: 'Group',
+      'one-to-one': 'One-to-one',
+      channel: 'Channel',
+    };
+    return labels[chatPresentationKind(chat)] || 'Conversation';
   }
 
   function updateControls() {
@@ -212,7 +235,7 @@ const chats = [];
       const metadata = document.createElement('span');
       metadata.className = 'chat-meta';
       const dateText = chat.last_message_at ? new Date(chat.last_message_at).toLocaleString() : 'No recent activity shown';
-      metadata.textContent = (chat.chat_type || 'Conversation') + ' · ' + dateText;
+      metadata.textContent = chatTypeLabel(chat) + ' · ' + dateText;
       text.append(name, metadata);
       row.append(checkbox, avatar, text);
       list.appendChild(row);
