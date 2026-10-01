@@ -304,6 +304,8 @@ class ExportCoverage(TypedDict):
     complete: bool
     remote_pages_fetched_total: int
     remote_items_scanned_total: int
+    remote_messages_retrieved_total: int
+    message_limit_reached: bool
     missing_timestamp_items_excluded_total: int
     retry_count_this_call: int
     archive_included: bool
@@ -658,7 +660,8 @@ def create_mcp_server(
             conversation_id: Stable chat ID for a new export; omit when resuming by export_id.
             since: Optional inclusive UTC or timezone-aware ISO-8601 lower bound.
             until: Optional inclusive UTC or timezone-aware ISO-8601 upper bound.
-            message_limit: Optional maximum number of latest messages in the merged archive.
+            message_limit: Optional maximum number of latest messages in the
+                merged archive; also bounds remote retrieval to that count.
             export_id: ID returned by a previous incomplete export_chat call.
             max_pages_to_fetch: Maximum remote pages per call (1–100).
         """
