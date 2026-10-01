@@ -459,14 +459,14 @@ class TeamsConnector:
             if isinstance(row, dict) and self._optional_bool(row.get("isDeleted")) is True:
                 deleted_ids.append(self._csa_update_conversation_id(row, "chat"))
                 continue
-            summary = self._summarize_csa_update_row(row, entity_type="chat")
+            summary = self._summarize_csa_row(row, entity_type="chat")
             if summary is not None:
                 normalized.append(summary)
         for row in raw_channels:
             if isinstance(row, dict) and self._optional_bool(row.get("isDeleted")) is True:
                 deleted_ids.append(self._csa_update_conversation_id(row, "channel"))
                 continue
-            summary = self._summarize_csa_update_row(row, entity_type="channel")
+            summary = self._summarize_csa_row(row, entity_type="channel")
             if summary is not None:
                 normalized.append(summary)
 
@@ -541,13 +541,13 @@ class TeamsConnector:
             raise RuntimeError("Unexpected Teams chat update response: a deleted row has no conversation ID.")
         return conversation_id
 
-    def _summarize_csa_update_row(
+    def _summarize_csa_row(
         self,
         row: Any,
         entity_type: str,
     ) -> ChatSummary | None:
         if not isinstance(row, dict):
-            raise RuntimeError("Unexpected Teams chat update response: a row is not an object.")
+            raise RuntimeError("Unexpected Teams catalog response: a row is not an object.")
         if self._optional_bool(row.get("isDeleted")) is True:
             return None
         channel = self._mapping(row.get("channel"))
@@ -564,14 +564,17 @@ class TeamsConnector:
         else:
             chat_id = row.get("id")
         if not isinstance(chat_id, str) or not chat_id:
-            raise RuntimeError("Unexpected Teams chat update response: a row has no conversation ID.")
+            missing_id = "chat row has no ID" if entity_type == "chat" else "channel row has no ID"
+            raise RuntimeError(f"Unexpected Teams catalog response: {missing_id}.")
 
         last_message = self._mapping(row.get("lastMessage"))
+        thread_properties = self._mapping(row.get("threadProperties"))
         title = (
             row.get("title")
             or row.get("displayName")
             or row.get("topic")
             or row.get("name")
+            or thread_properties.get("topic")
             or channel.get("title")
             or channel.get("displayName")
             or channel.get("name")
@@ -611,26 +614,50 @@ class TeamsConnector:
         )
 
     def _csa_chat_type(self, row: dict[str, Any], entity_type: str = "chat") -> str | None:
-        """Normalize CSA's generic chat type using one-to-one and roster data."""
+        """Normalize explicit CSA semantics before generic flags and roster size."""
         if entity_type == "channel":
+            return "channel"
+
+        thread_properties = self._mapping(row.get("threadProperties"))
+        type_values = (
+            row.get("chatType"),
+            row.get("threadType"),
+            thread_properties.get("threadType"),
+        )
+        normalized_types = {
+            normalized
+            for value in type_values
+            if (normalized := self._normalize_chat_type_value(value))
+        }
+        if "meeting" in normalized_types:
+            return "meeting"
+        if "channel" in normalized_types:
             return "channel"
 
         one_to_one = self._optional_bool(row.get("isOneOnOne"))
         member_count = self._complete_csa_member_count(row)
-        if one_to_one is False or (member_count is not None and member_count > 2):
+        if member_count is not None and member_count > 2:
             return "group"
-        if one_to_one is True:
+        if "oneOnOne" in normalized_types or one_to_one is True:
             return "oneOnOne"
+        if "group" in normalized_types or one_to_one is False:
+            return "group"
+        return None
 
-        raw_chat_type = row.get("chatType")
-        if not isinstance(raw_chat_type, str) or not raw_chat_type.strip():
+    @staticmethod
+    def _normalize_chat_type_value(value: Any) -> str | None:
+        if not isinstance(value, str) or not value.strip():
             return None
-        normalized = raw_chat_type.casefold().replace("_", "").replace("-", "")
+        normalized = re.sub(r"[^a-z0-9]", "", value.casefold())
+        if normalized in {"meeting", "meetingchat", "call"}:
+            return "meeting"
         if normalized in {"group", "groupchat", "groupconversation"}:
             return "group"
         if normalized in {"onetoone", "onetoonechat", "oneonone"}:
             return "oneOnOne"
-        return raw_chat_type
+        if normalized in {"channel", "standardchannel", "sharedchannel"}:
+            return "channel"
+        return None
 
     def _complete_csa_member_count(self, row: dict[str, Any]) -> int | None:
         """Count a roster only when it is versioned, identified, and includes self."""
@@ -708,38 +735,9 @@ class TeamsConnector:
         for chat in chats:
             if not isinstance(chat, dict):
                 raise RuntimeError("Unexpected CSA response: a chat row is not an object.")
-            chat_id = chat.get("id")
-            if not isinstance(chat_id, str) or not chat_id:
-                raise RuntimeError("Unexpected CSA response: a chat row has no ID.")
-            last_message = self._mapping(chat.get("lastMessage"))
-            title = (
-                chat.get("title")
-                or chat.get("displayName")
-                or chat.get("topic")
-                or chat_id
-            )
-            content = last_message.get("content")
-            preview = content.strip()[:240] if isinstance(content, str) else None
-            is_read = self._optional_bool(chat.get("isRead"))
-            unread = None if is_read is None else not is_read
-            if unread is None:
-                unread = self._optional_bool(chat.get("isUnread"))
-            chat_type = self._csa_chat_type(chat)
-            normalized.append(
-                ChatSummary(
-                    id=chat_id,
-                    display_name=str(title),
-                    last_message_at=self.message_datetime(last_message),
-                    last_message_preview=preview,
-                    unread=unread,
-                    chat_type=chat_type,
-                    avatar_url=self._avatar_url_from_rows(chat),
-                    is_self_chat=chat_id == self.SELF_CHAT_ID,
-                    is_empty_conversation=self._optional_bool(
-                        chat.get("isEmptyConversation")
-                    ),
-                )
-            )
+            summary = self._summarize_csa_row(chat, entity_type="chat")
+            if summary is not None:
+                normalized.append(summary)
         self._resolve_untitled_one_to_one_names(
             chats,
             normalized,
@@ -1033,9 +1031,12 @@ class TeamsConnector:
         )
         content = last_message.get("content")
         preview = content.strip()[:240] if isinstance(content, str) else None
-        chat_type = (
-            thread_properties.get("threadType")
-            or thread_properties.get("productThreadType")
+        product_type = thread_properties.get("productThreadType")
+        thread_type = thread_properties.get("threadType")
+        chat_type = self._normalize_chat_service_type(
+            product_type,
+            thread_type,
+            conversation_id,
         )
         is_empty_conversation = self._optional_bool(
             conversation.get("isEmptyConversation")
@@ -1049,13 +1050,36 @@ class TeamsConnector:
             display_name=str(title),
             last_message_at=last_message_at,
             last_message_preview=preview,
-            chat_type=chat_type if isinstance(chat_type, str) else None,
+            chat_type=chat_type,
             avatar_url=self._avatar_url_from_rows(
                 conversation, properties, thread_properties
             ),
             is_self_chat=conversation_id == self.SELF_CHAT_ID,
             is_empty_conversation=is_empty_conversation,
         )
+
+    @classmethod
+    def _normalize_chat_service_type(
+        cls,
+        product_type: Any,
+        thread_type: Any,
+        conversation_id: str,
+    ) -> str | None:
+        """Map Chat Service product/thread types onto the catalog taxonomy."""
+        product_normalized = (
+            re.sub(r"[^a-z0-9]", "", product_type.casefold())
+            if isinstance(product_type, str)
+            else ""
+        )
+        if conversation_id == cls.SELF_CHAT_ID and product_normalized == "streamofnotes":
+            return "chat"
+        if product_normalized == "chat":
+            return "group"
+        for value in (product_type, thread_type):
+            normalized = cls._normalize_chat_type_value(value)
+            if normalized:
+                return normalized
+        return None
 
     def _add_one_to_one_profile_picture_uris(
         self,
