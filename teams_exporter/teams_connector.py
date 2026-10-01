@@ -529,18 +529,17 @@ class TeamsConnector:
             raise RuntimeError("Unexpected Teams chat update response: a deleted row has no conversation ID.")
         return conversation_id
 
-    @classmethod
     def _summarize_csa_update_row(
-        cls,
+        self,
         row: Any,
         entity_type: str,
     ) -> ChatSummary | None:
         if not isinstance(row, dict):
             raise RuntimeError("Unexpected Teams chat update response: a row is not an object.")
-        if cls._optional_bool(row.get("isDeleted")) is True:
+        if self._optional_bool(row.get("isDeleted")) is True:
             return None
-        channel = cls._mapping(row.get("channel"))
-        team = cls._mapping(row.get("team"))
+        channel = self._mapping(row.get("channel"))
+        team = self._mapping(row.get("team"))
         if entity_type == "channel":
             chat_id = next(
                 (
@@ -555,7 +554,7 @@ class TeamsConnector:
         if not isinstance(chat_id, str) or not chat_id:
             raise RuntimeError("Unexpected Teams chat update response: a row has no conversation ID.")
 
-        last_message = cls._mapping(row.get("lastMessage"))
+        last_message = self._mapping(row.get("lastMessage"))
         title = (
             row.get("title")
             or row.get("displayName")
@@ -573,38 +572,84 @@ class TeamsConnector:
 
         content = last_message.get("content")
         preview = content.strip()[:240] if isinstance(content, str) else None
-        is_read = cls._optional_bool(row.get("isRead"))
+        is_read = self._optional_bool(row.get("isRead"))
         unread = None if is_read is None else not is_read
         if unread is None:
-            unread = cls._optional_bool(row.get("isUnread"))
-        raw_chat_type = row.get("chatType")
-        if entity_type == "channel":
-            chat_type = "channel"
-        elif isinstance(raw_chat_type, str) and raw_chat_type:
-            chat_type = raw_chat_type
-        elif row.get("isOneOnOne") is True:
-            chat_type = "oneOnOne"
-        else:
-            chat_type = "chat"
+            unread = self._optional_bool(row.get("isUnread"))
+        chat_type = self._csa_chat_type(row, entity_type)
 
-        avatar_url = cls._avatar_url_from_rows(
+        avatar_url = self._avatar_url_from_rows(
             row,
             channel,
             team,
-            cls._mapping(row.get("threadProperties")),
-            cls._mapping(row.get("image")),
-            cls._mapping(row.get("avatar")),
+            self._mapping(row.get("threadProperties")),
+            self._mapping(row.get("image")),
+            self._mapping(row.get("avatar")),
         )
         return ChatSummary(
             id=chat_id,
             display_name=str(title),
-            last_message_at=cls._message_datetime(last_message),
+            last_message_at=self._message_datetime(last_message),
             last_message_preview=preview,
             unread=unread,
             chat_type=chat_type,
             avatar_url=avatar_url,
-            is_self_chat=chat_id == cls.SELF_CHAT_ID,
+            is_self_chat=chat_id == self.SELF_CHAT_ID,
         )
+
+    def _csa_chat_type(self, row: dict[str, Any], entity_type: str = "chat") -> str | None:
+        """Normalize CSA's generic chat type using one-to-one and roster data."""
+        if entity_type == "channel":
+            return "channel"
+
+        one_to_one = self._optional_bool(row.get("isOneOnOne"))
+        member_count = self._complete_csa_member_count(row)
+        if one_to_one is False or (member_count is not None and member_count > 2):
+            return "group"
+        if one_to_one is True:
+            return "oneOnOne"
+
+        raw_chat_type = row.get("chatType")
+        if not isinstance(raw_chat_type, str) or not raw_chat_type.strip():
+            return None
+        normalized = raw_chat_type.casefold().replace("_", "").replace("-", "")
+        if normalized in {"group", "groupchat", "groupconversation"}:
+            return "group"
+        if normalized in {"onetoone", "onetoonechat", "oneonone"}:
+            return "oneOnOne"
+        return raw_chat_type
+
+    def _complete_csa_member_count(self, row: dict[str, Any]) -> int | None:
+        """Count a roster only when it is versioned, identified, and includes self."""
+        roster_version = row.get("rosterVersion")
+        if not (
+            (isinstance(roster_version, int) and not isinstance(roster_version, bool))
+            or (isinstance(roster_version, str) and roster_version.strip())
+        ):
+            return None
+        members = row.get("members")
+        own_id = self._profile_identifier(self._spaces_claims.get("oid"))
+        if not isinstance(members, list) or not members or not own_id:
+            return None
+
+        participant_ids: set[str] = set()
+        for member in members:
+            if not isinstance(member, dict):
+                return None
+            member_id = next(
+                (
+                    identifier
+                    for key in ("id", "mri", "objectId", "userId", "userMri")
+                    if (identifier := self._profile_identifier(member.get(key)))
+                ),
+                None,
+            )
+            if not member_id:
+                return None
+            participant_ids.add(member_id)
+        if own_id not in participant_ids:
+            return None
+        return len(participant_ids)
 
     @staticmethod
     def _sync_token_expired(payload: dict[str, Any]) -> bool:
@@ -664,12 +709,7 @@ class TeamsConnector:
             unread = None if is_read is None else not is_read
             if unread is None:
                 unread = self._optional_bool(chat.get("isUnread"))
-            chat_type = chat.get("chatType")
-            if not isinstance(chat_type, str) or not chat_type:
-                if chat.get("isOneOnOne") is True:
-                    chat_type = "oneOnOne"
-                else:
-                    chat_type = None
+            chat_type = self._csa_chat_type(chat)
             normalized.append(
                 ChatSummary(
                     id=chat_id,

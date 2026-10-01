@@ -346,6 +346,7 @@ class TeamsConnectorTests(unittest.TestCase):
                 "title": "Group A",
                 "chatType": "chat",
                 "isOneOnOne": False,
+                "rosterVersion": 1,
                 "members": roster(9),
                 "lastMessage": {"originalArrivalTime": "2026-09-30T10:00:00Z"},
             },
@@ -354,6 +355,7 @@ class TeamsConnectorTests(unittest.TestCase):
                 "title": "Group B",
                 "chatType": "chat",
                 "isOneOnOne": False,
+                "rosterVersion": 1,
                 "members": roster(4),
                 "lastMessage": {"originalArrivalTime": "2026-09-30T09:00:00Z"},
             },
@@ -362,6 +364,7 @@ class TeamsConnectorTests(unittest.TestCase):
                 "title": "Group C",
                 "chatType": "chat",
                 "isOneOnOne": False,
+                "rosterVersion": 1,
                 "members": roster(5),
                 "lastMessage": {"originalArrivalTime": "2026-09-30T08:00:00Z"},
             },
@@ -370,6 +373,7 @@ class TeamsConnectorTests(unittest.TestCase):
                 "title": "Person",
                 "chatType": "chat",
                 "isOneOnOne": True,
+                "rosterVersion": 1,
                 "members": roster(2),
                 "lastMessage": {"originalArrivalTime": "2026-09-30T07:00:00Z"},
             },
@@ -378,8 +382,24 @@ class TeamsConnectorTests(unittest.TestCase):
                 "title": "Contradictory roster",
                 "chatType": "chat",
                 "isOneOnOne": True,
+                "rosterVersion": 1,
                 "members": roster(3),
                 "lastMessage": {"originalArrivalTime": "2026-09-30T06:00:00Z"},
+            },
+            {
+                "id": "19:unknown-many@thread.v2",
+                "title": "Unknown flag with complete roster",
+                "chatType": "chat",
+                "rosterVersion": 1,
+                "members": roster(4),
+                "lastMessage": {"originalArrivalTime": "2026-09-30T05:00:00Z"},
+            },
+            {
+                "id": "19:unknown-incomplete@thread.v2",
+                "title": "Unknown flag with incomplete roster metadata",
+                "chatType": "chat",
+                "members": roster(4),
+                "lastMessage": {"originalArrivalTime": "2026-09-30T04:00:00Z"},
             },
         ]
         expected = {
@@ -388,6 +408,8 @@ class TeamsConnectorTests(unittest.TestCase):
             "19:group-c@thread.v2": "group",
             "19:person@thread.v2": "oneOnOne",
             "19:contradictory@thread.v2": "group",
+            "19:unknown-many@thread.v2": "group",
+            "19:unknown-incomplete@thread.v2": "chat",
         }
 
         startup = StubConnector([{
