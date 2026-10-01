@@ -2136,12 +2136,137 @@ followed. Untitled fallback one-to-one chats can be named through a read-only
 thread-members lookup when the roster provides one resolvable peer; this lookup
 is bounded, and the catalog coverage reports unresolved fallback names.
 
+---
+
+# Live catalog diagnostic — 2026-10-01
+
+This section records a later, read-only diagnostic of the current account's
+CSA startup/bootstrap/delta responses, Chat Service conversation rows and
+rosters, Middle Tier profile lookups, and the notes-to-self message history.
+The evidence came from one account and one Teams build; the row counts and
+field combinations below are observations, not protocol guarantees. Private
+message bodies, credentials, and sync cursors are intentionally omitted.
+
+## Observed raw API behavior
+
+### Conversation classification fields
+
+| Conversation kind | CSA fields observed | Chat Service fields observed |
+|---|---|---|
+| One-to-one | `chatType="chat"`, `isOneOnOne=true` | `threadType="chat"`, `productThreadType="OneToOneChat"` |
+| Group | `chatType="chat"`, `isOneOnOne=false` | `threadType="chat"`, `productThreadType="Chat"` |
+| Meeting | `chatType="meeting"`, `threadType="meeting"`, `isOneOnOne=false` | `threadType="meeting"`, `productThreadType="Meeting"` |
+| Notes to self | Not present in CSA startup, bootstrap, or the inspected delta | ID `48:notes`, `threadType="streamofnotes"`, `productThreadType="StreamOfNotes"` |
+| Channel | Present in the CSA `channels` collection | Chat Service uses product types such as `TeamsStandardChannel` and `TeamsSharedChannel` |
+
+Ordinary group rows can also contain a `meetingInformation` object populated
+with placeholder values, including null subjects and year-one timestamps.
+That object's presence did not indicate a meeting; the explicit type fields
+did.
+
+### Identifiers seen in the captured responses
+
+The following patterns occurred in this data. They are observed conventions,
+not a complete or formally documented type system:
+
+- `19:meeting_...@thread.v2` — an observed meeting conversation ID.
+- `19:...@thread.v2` — observed thread-based chat and group IDs.
+- `19:<id>_<id>@unq.gbl.spaces` — an observed unique one-to-one-style ID.
+- `8:orgid:<GUID>` — an observed organizational-user MRI.
+- `28:<id>` — an observed app/bot participant MRI.
+- `48:notes` — the observed notes-to-self stream ID.
+
+An ID prefix can help as a defensive hint when type metadata is absent, but
+these samples do not establish that every conversation can be classified by
+its identifier alone.
+
+### App conversation naming
+
+An untitled one-to-one row had a complete two-member roster consisting of the
+signed-in user and an app participant with an MRI beginning `28:`. Its latest
+message sender matched that app participant. The message also contained
+`lastMessage.properties.fromAppMetadata.name` and
+`lastMessage.properties.fromAppMetadata.id`. The app metadata ID is a separate
+identifier from the `28:` MRI in this sample; they should not be assumed to be
+the same identifier.
+
+### Untitled group names
+
+Some untitled group rows had no usable title/topic/display-name field in either
+CSA or Chat Service. Their Teams UI labels appear to be synthesized from the
+roster and resolved profile names; the generated label was not present in the
+raw conversation row. A complete roster included the signed-in user, while
+some member records lacked names and needed profile resolution.
+
+### Notes-to-self activity and catalog counts
+
+- `48:notes` was absent from the inspected CSA startup, bootstrap, and delta
+  responses, but present in Chat Service as `StreamOfNotes`.
+- A direct Chat Service history request for `48:notes` returned its latest
+  message and timestamp. At diagnostic time, the local catalog's stored
+  self-chat timestamp matched that latest message timestamp.
+- In this snapshot, CSA startup/bootstrap each contained 944 chat rows and 7
+  channel rows. The inspected delta contained 5 chat rows and no channel rows.
+  The paginated Chat Service catalog contained 961 unique conversation rows.
+
+These counts are account/build/time specific. They do not promise that every
+tenant exposes the same catalog scope or that every delta contains all changed
+conversation types.
+
+## Inference and hypothesis
+
+- `productThreadType` carries more specific Chat Service distinctions than the
+  generic `threadType="chat"`; in the observed rows it separates one-to-one
+  chats (`OneToOneChat`) from groups (`Chat`).
+- The Teams UI appears to compose missing group labels from roster/profile
+  data rather than receiving a server-generated conversation title.
+- The self-chat's absence from CSA explains why CSA-only activity updates
+  cannot reliably refresh its ordering. A one-message Chat Service history
+  read supplies the missing activity timestamp.
+- App metadata is a safe naming hint only when it is tied to the sole `28:`
+  peer and that same peer sent the latest message. The metadata name alone is
+  not evidence that the conversation itself is an app chat.
+
+These are inferences from the captured payloads, not claims about undocumented
+Microsoft guarantees.
+
+## Implementation decisions
+
+- Normalize both CSA and Chat Service rows to the stable catalog values
+  `meeting`, `group`, `oneOnOne`, `channel`, or `chat` for notes-to-self;
+  leave ambiguous types unknown. An explicit meeting type wins over the
+  generic `isOneOnOne` flag, and a complete roster larger than two prevents an
+  impossible one-to-one classification. `meetingInformation` alone is never
+  used to classify a meeting.
+- Use one CSA row normalizer for startup and updates so equivalent raw rows
+  produce the same summary.
+- Use `fromAppMetadata.name` only for an untitled, complete two-member
+  one-to-one whose non-self member is a `28:` identity and whose latest sender
+  matches that member. Do not send `28:` identifiers to the organizational-user
+  profile lookup route.
+- Generate a missing group label only from a complete roster. Exclude the
+  signed-in user's name from the visible list, resolve other names from the
+  roster/top-level users/batched profiles, sort case-insensitively, and join
+  full names with ` | `. Add names until the next full name would exceed 87
+  characters; if no name fits, truncate the first at 80 characters with an
+  ellipsis. `+N` counts every roster participant not shown, including the
+  signed-in user and unresolved/app participants. If no participant name can
+  be resolved, retain the safe ID fallback.
+- Keep self-chat enrichment in `TeamsService`, which combines CSA deltas with
+  the persistent local catalog. The connector normalizes raw transport rows;
+  the service owns merged-catalog activity and ordering. The service's
+  one-message lookup refreshes `48:notes` after catalog updates without
+  changing Teams state.
+- Derive the UI's type label and fallback icon from the same canonical
+  conversation presentation kind. The ID prefix is only a fallback when the
+  normalized type is absent.
+
 # Source notes
 
 Primary sources used for these notes:
 
 1. A production Teams Web JavaScript build and HTML entry document collected on **2026-09-28**, inspected for route templates, resource names, headers, and client behavior.
-2. Read-only live requests made with an explicitly authenticated Teams session on **2026-09-29** and **2026-09-30**, including CSA startup and delta, Regional Chat Service catalog pagination and message history, and Middle Tier profile lookup.
+2. Read-only live requests made with an explicitly authenticated Teams session on **2026-09-29**, **2026-09-30**, and **2026-10-01**, including CSA startup and delta, Regional Chat Service catalog pagination, rosters and message history, and Middle Tier profile lookup.
 3. The independent reverse-engineered project [Maxim-Mazurok/teams-api](https://github.com/Maxim-Mazurok/teams-api), used as corroborating implementation evidence.
 4. Teams Web IndexedDB architecture notes from [gediz/teams-web-chat-exporter](https://github.com/gediz/teams-web-chat-exporter).
 5. Public references including AADInternals, purple-teams, Microsoft Learn/Q&A, Microsoft Tech Community, and SkPy discussions.

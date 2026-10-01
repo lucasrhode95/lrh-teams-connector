@@ -408,6 +408,47 @@ class TeamsServiceTests(unittest.TestCase):
         self.assertEqual(channel["avatar_url"], "https://images.example.test/channel.png")
         self.assertEqual(cached["coverage"]["source"], "local SQLite cache")
 
+    def test_fresh_bootstrap_persists_canonical_types_and_resolved_names(self):
+        self.connector.chats = [
+            ChatSummary(
+                "19:meeting@thread.v2",
+                "Meeting fixture",
+                last_message_at=datetime(2026, 9, 28, 10, 0, 5, tzinfo=timezone.utc),
+                chat_type="meeting",
+            ),
+            ChatSummary(
+                "19:group@thread.v2",
+                "Grant, Fiona | Parker, Juniper +1",
+                last_message_at=datetime(2026, 9, 28, 10, 0, 4, tzinfo=timezone.utc),
+                chat_type="group",
+            ),
+            ChatSummary(
+                "19:human@thread.v2",
+                "Fiona Grant",
+                last_message_at=datetime(2026, 9, 28, 10, 0, 3, tzinfo=timezone.utc),
+                chat_type="oneOnOne",
+            ),
+        ]
+
+        result = self.service.list_chats(page_size=10, refresh=True)
+        reopened = TeamsSearchIndex(self.service.index.path)
+        catalog = {
+            record["conversation_id"]: record
+            for record in reopened.chat_catalog()
+        }
+
+        self.assertEqual(
+            [item["id"] for item in result["items"]],
+            ["19:meeting@thread.v2", "19:group@thread.v2", "19:human@thread.v2"],
+        )
+        self.assertEqual(catalog["19:meeting@thread.v2"]["chat_type"], "meeting")
+        self.assertEqual(catalog["19:group@thread.v2"]["chat_type"], "group")
+        self.assertEqual(
+            catalog["19:group@thread.v2"]["display_name"],
+            "Grant, Fiona | Parker, Juniper +1",
+        )
+        self.assertEqual(catalog["19:human@thread.v2"]["chat_type"], "oneOnOne")
+
     def test_refreshes_self_chat_activity_when_csa_delta_omits_self_chat(self):
         self_chat = ChatSummary(
             "48:notes",
@@ -450,6 +491,7 @@ class TeamsServiceTests(unittest.TestCase):
             ([message("self-2", 5, "another harmless fixture")], None),
         ]
         self.connector.next_sync_token = "sanitized-sync-2"
+        self.assertNotIn("48:notes", {chat.id for chat in self.connector.chats})
 
         second = self.service.list_chats(page_size=10, refresh=True)
 
