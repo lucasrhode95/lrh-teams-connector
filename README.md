@@ -22,7 +22,7 @@ Run `python -m teams_exporter serve`, then open `http://127.0.0.1:8765`. The pag
 
 This is the direct, user-operated export path: it does not require AI, an MCP client, or another application. It still needs network access to Teams and a valid application sign-in; “offline” here means independent of an AI tool, not disconnected from Teams. The server listens only on the local machine. The page is read-only and does not mark chats or messages as read. UI times use the browser's timezone; exported message timestamps use UTC.
 
-The local page uses Python's threaded standard-library HTTP server, which serves HTTP/1.1. It does not provide HTTP/2 or HTTP/3, and this loopback UI does not replace the server stack to add either protocol.
+The local page uses Python's threaded standard-library HTTP server. It does not provide HTTP/2 or HTTP/3, and this loopback UI does not replace the server stack to add either protocol.
 
 ## Application logs
 
