@@ -437,10 +437,13 @@ class TeamsConnectorTests(unittest.TestCase):
             "metadata": {"syncToken": "sanitized-next-token", "isPartialData": False, "hasMoreChats": False},
         }])
         update_chats = updates.get_chat_updates()["chats"]
+        updates_by_id = {chat.id: chat for chat in update_chats}
         self.assertEqual(
             {chat.id: chat.chat_type for chat in update_chats if chat.id in expected},
             expected,
         )
+        for conversation_id in expected:
+            self.assertEqual(startup_chats[conversation_id], updates_by_id[conversation_id])
 
     def test_chat_service_types_are_normalized_to_the_canonical_catalog_values(self):
         client = StubConnector()
