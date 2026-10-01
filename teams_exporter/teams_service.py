@@ -738,11 +738,18 @@ class TeamsService:
         conversation_id: str,
         since: datetime | None = None,
         until: datetime | None = None,
+        message_limit: int | None = None,
         cancel_event=None,
         progress_callback=None,
     ) -> dict[str, Any]:
-        """Fetch a requested remote range, upsert every page, and report coverage."""
+        """Fetch a requested remote range, upsert pages, and report coverage.
+
+        A message limit bounds this export-oriented fetch. Full-history archive
+        and search synchronization use their dedicated synchronization path.
+        """
         self._validate_query(conversation_id, "conversation_id")
+        if message_limit is not None:
+            self._validate_unbounded_positive_int("message_limit", message_limit)
         since_utc = self._normalize_bound("since", since)
         until_utc = self._normalize_bound("until", until)
         if since_utc and until_utc and since_utc > until_utc:
@@ -758,7 +765,7 @@ class TeamsService:
 
         for page in self.connector.iter_message_pages(
             conversation_id,
-            limit=None,
+            limit=message_limit,
             since=since_utc,
             until=until_utc,
             cancel_event=cancel_event,
@@ -780,6 +787,7 @@ class TeamsService:
         )
         return {
             "conversation_id": conversation_id,
+            "requested_message_limit": message_limit,
             "requested_since": since_key,
             "requested_until": until_key,
             "archive_messages_in_range": archive_count,
@@ -943,6 +951,7 @@ class TeamsService:
 
         pages_this_call = 0
         retries_this_call = 0
+        remote_messages_retrieved = self.index.count_export_job_messages(export_id)
         if not job["complete"]:
             since_value = self._parse_stored_bound(job["since"])
             until_value = self._parse_stored_bound(job["until"])
@@ -951,7 +960,18 @@ class TeamsService:
                 messages, next_url, raw_scanned, missing_timestamps = (
                     self.connector.get_messages_page(
                         str(job["conversation_id"]),
-                        page_size=TeamsConnector.MESSAGE_PAGE_SIZE,
+                        page_size=(
+                            TeamsConnector.MESSAGE_PAGE_SIZE
+                            if job["message_limit"] is None
+                            else min(
+                                TeamsConnector.MESSAGE_PAGE_SIZE,
+                                max(
+                                    1,
+                                    int(job["message_limit"])
+                                    - remote_messages_retrieved,
+                                ),
+                            )
+                        ),
                         since=since_value,
                         until=until_value,
                         continuation_url=request_url,
@@ -968,6 +988,9 @@ class TeamsService:
                     formatter=self.formatter,
                 )
                 pages_this_call += 1
+                remote_messages_retrieved = self.index.count_export_job_messages(
+                    export_id
+                )
                 if job["complete"]:
                     break
 
@@ -988,6 +1011,11 @@ class TeamsService:
                     "complete": True,
                     "remote_pages_fetched_total": int(job["pages"]),
                     "remote_items_scanned_total": int(job["scanned"]),
+                    "remote_messages_retrieved_total": remote_messages_retrieved,
+                    "message_limit_reached": (
+                        job["message_limit"] is not None
+                        and remote_messages_retrieved >= int(job["message_limit"])
+                    ),
                     "missing_timestamp_items_excluded_total": int(
                         job["missing_timestamps"]
                     ),
@@ -1012,6 +1040,8 @@ class TeamsService:
                 "complete": False,
                 "remote_pages_fetched_total": int(job["pages"]),
                 "remote_items_scanned_total": int(job["scanned"]),
+                "remote_messages_retrieved_total": remote_messages_retrieved,
+                "message_limit_reached": False,
                 "missing_timestamp_items_excluded_total": int(
                     job["missing_timestamps"]
                 ),

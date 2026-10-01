@@ -252,6 +252,13 @@ class TeamsSearchIndex:
                         FOREIGN KEY (conversation_id) REFERENCES chats(conversation_id)
                             ON DELETE CASCADE
                     );
+                    CREATE TABLE IF NOT EXISTS export_job_messages (
+                        export_id TEXT NOT NULL,
+                        message_id TEXT NOT NULL,
+                        PRIMARY KEY (export_id, message_id),
+                        FOREIGN KEY (export_id) REFERENCES export_jobs(export_id)
+                            ON DELETE CASCADE
+                    );
                     CREATE TABLE IF NOT EXISTS index_metadata (
                         key TEXT PRIMARY KEY,
                         value TEXT NOT NULL
@@ -494,7 +501,7 @@ class TeamsSearchIndex:
                 history_complete = next_url is None
             oldest = prior["oldest_message_at"] if prior else None
             newest = prior["newest_message_at"] if prior else None
-            stored, oldest, newest = self._upsert_message_rows(
+            stored, oldest, newest, _message_ids = self._upsert_message_rows(
                 connection,
                 conversation_id,
                 messages,
@@ -557,7 +564,7 @@ class TeamsSearchIndex:
                 "WHERE conversation_id = ?",
                 (conversation_id,),
             ).fetchone()
-            stored, oldest, newest = self._upsert_message_rows(
+            stored, oldest, newest, _message_ids = self._upsert_message_rows(
                 connection,
                 conversation_id,
                 messages,
@@ -589,13 +596,14 @@ class TeamsSearchIndex:
         now: str,
         oldest: str | None,
         newest: str | None,
-    ) -> tuple[int, str | None, str | None]:
+    ) -> tuple[int, str | None, str | None, list[str]]:
         connection.execute(
             """INSERT OR IGNORE INTO chats(conversation_id, display_name, catalogued_at)
                VALUES (?, ?, ?)""",
             (conversation_id, conversation_id, now),
         )
         inserted = 0
+        message_ids = []
         for message in messages:
             body = formatter.format_message(message)
             author = self._message_author(message, body)
@@ -613,6 +621,7 @@ class TeamsSearchIndex:
                 ).hexdigest()
             else:
                 message_id = str(message_id)
+            message_ids.append(message_id)
 
             message_type = message.get("messagetype") or message.get("messageType")
             if not isinstance(message_type, str):
@@ -728,7 +737,7 @@ class TeamsSearchIndex:
             if timestamp:
                 oldest = timestamp if oldest is None else min(oldest, timestamp)
                 newest = timestamp if newest is None else max(newest, timestamp)
-        return inserted, oldest, newest
+        return inserted, oldest, newest, message_ids
 
     @staticmethod
     def _message_properties(message: dict[str, Any]) -> dict[str, Any]:
@@ -928,6 +937,14 @@ class TeamsSearchIndex:
             ).fetchone()
         return dict(row) if row else None
 
+    def count_export_job_messages(self, export_id: str) -> int:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) FROM export_job_messages WHERE export_id = ?",
+                (export_id,),
+            ).fetchone()
+        return int(row[0])
+
     def save_export_job_page(
         self,
         export_id: str,
@@ -950,14 +967,12 @@ class TeamsSearchIndex:
                 raise RuntimeError("Teams repeated an export continuation link.")
             if requested_url:
                 seen_urls.append(requested_url)
-            if next_url and next_url in seen_urls:
-                raise RuntimeError("Teams repeated an export continuation link.")
             chat_state = connection.execute(
                 "SELECT oldest_message_at, newest_message_at FROM chat_index_state "
                 "WHERE conversation_id = ?",
                 (job["conversation_id"],),
             ).fetchone()
-            _, oldest, newest = self._upsert_message_rows(
+            _, oldest, newest, message_ids = self._upsert_message_rows(
                 connection,
                 str(job["conversation_id"]),
                 messages,
@@ -966,6 +981,24 @@ class TeamsSearchIndex:
                 oldest=chat_state["oldest_message_at"] if chat_state else None,
                 newest=chat_state["newest_message_at"] if chat_state else None,
             )
+            connection.executemany(
+                "INSERT OR IGNORE INTO export_job_messages(export_id, message_id) "
+                "VALUES (?, ?)",
+                ((export_id, message_id) for message_id in message_ids),
+            )
+            retrieved_count = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM export_job_messages WHERE export_id = ?",
+                    (export_id,),
+                ).fetchone()[0]
+            )
+            message_limit = job["message_limit"]
+            limit_reached = (
+                message_limit is not None and retrieved_count >= int(message_limit)
+            )
+            effective_next_url = None if limit_reached else next_url
+            if effective_next_url and effective_next_url in seen_urls:
+                raise RuntimeError("Teams repeated an export continuation link.")
             connection.execute(
                 """INSERT INTO chat_index_state(
                        conversation_id, oldest_message_at, newest_message_at,
@@ -984,8 +1017,8 @@ class TeamsSearchIndex:
                        seen_urls_json = ?, updated_at = ?
                    WHERE export_id = ?""",
                 (
-                    next_url,
-                    int(next_url is None),
+                    effective_next_url,
+                    int(effective_next_url is None),
                     raw_scanned,
                     missing_timestamp_count,
                     json.dumps(seen_urls, separators=(",", ":")),

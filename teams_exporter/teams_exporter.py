@@ -72,6 +72,7 @@ class TeamsExporter:
                     chat.id,
                     since=since,
                     until=until,
+                    message_limit=limit,
                     cancel_event=cancel_event,
                     progress_callback=report_fetch,
                 )
