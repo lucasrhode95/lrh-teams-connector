@@ -897,6 +897,60 @@ class TeamsConnectorTests(unittest.TestCase):
         self.assertTrue(client.last_message_read_coverage["limit_reached"])
         self.assertFalse(client.last_message_read_coverage["complete"])
 
+    def test_date_range_and_limit_fetch_only_until_enough_qualifying_messages(self):
+        continuation = "https://chat.example.test/v1/older?cursor=bounded-range"
+        client = StubConnector([
+            {
+                "messages": [
+                    {
+                        "id": "outside-until",
+                        "sequenceId": 4,
+                        "originalarrivaltime": "2026-09-28T10:03:00Z",
+                        "content": "newer than requested range",
+                    },
+                    {
+                        "id": "at-until",
+                        "sequenceId": 3,
+                        "originalarrivaltime": "2026-09-28T10:02:00Z",
+                        "content": "inclusive upper bound",
+                    },
+                ],
+                "_metadata": {"backwardLink": continuation},
+            },
+            {
+                "messages": [
+                    {
+                        "id": "at-since",
+                        "sequenceId": 2,
+                        "originalarrivaltime": "2026-09-28T10:01:00Z",
+                        "content": "second latest qualifying message",
+                    },
+                    {
+                        "id": "older-than-since",
+                        "sequenceId": 1,
+                        "originalarrivaltime": "2026-09-28T09:59:00Z",
+                        "content": "outside lower bound",
+                    },
+                ],
+                "_metadata": {
+                    "backwardLink": "https://chat.example.test/v1/older?cursor=older"
+                },
+            },
+        ])
+
+        messages = client.get_messages(
+            "19:fixture@thread.v2",
+            limit=2,
+            since=datetime(2026, 9, 28, 10, 0, tzinfo=timezone.utc),
+            until=datetime(2026, 9, 28, 10, 2, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual([item["id"] for item in messages], ["at-since", "at-until"])
+        self.assertEqual(len(client.requests), 2)
+        self.assertEqual(client.last_message_read_coverage["pages_fetched"], 2)
+        self.assertEqual(client.last_message_read_coverage["messages_retrieved"], 2)
+        self.assertTrue(client.last_message_read_coverage["limit_reached"])
+
     def test_read_requests_retry_transient_http_failures_and_count_retries(self):
         client = TeamsConnector()
         unavailable = urllib.error.HTTPError(

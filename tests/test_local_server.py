@@ -230,13 +230,14 @@ class ExportService:
         conversation_id,
         since=None,
         until=None,
+        message_limit=None,
         cancel_event=None,
         progress_callback=None,
     ):
         archived = self.archive.setdefault(conversation_id, {})
         for page in self.connector.iter_message_pages(
             conversation_id,
-            limit=None,
+            limit=message_limit,
             since=since,
             until=until,
             cancel_event=cancel_event,
@@ -586,7 +587,7 @@ class LocalTeamsServerTests(unittest.TestCase):
         self.assertNotIn("Alpha earlier", text)
         self.assertNotIn("Before the date", text)
         chat_id, limit, since, until = self.service.connector.calls[-1]
-        self.assertEqual((chat_id, limit, until), ("19:alpha@thread.v2", None, None))
+        self.assertEqual((chat_id, limit, until), ("19:alpha@thread.v2", 1, None))
         self.assertEqual(since.date().isoformat(), "2026-09-28")
         self.assertIsNotNone(since.utcoffset())
 

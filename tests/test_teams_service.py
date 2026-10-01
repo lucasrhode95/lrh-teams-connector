@@ -46,6 +46,7 @@ class ServiceConnector(TeamsConnector):
         self.message_page_calls = []
         self.members = {}
         self.page_calls = []
+        self.message_page_sizes = []
         self.retry_counts = []
         self.login_calls = 0
         self.interactive_login_values = []
@@ -91,6 +92,7 @@ class ServiceConnector(TeamsConnector):
         continuation_url=None,
     ):
         self.page_calls.append((conversation_id, page_size, since, until, continuation_url))
+        self.message_page_sizes.append(page_size)
         self.last_request_retry_count = (
             self.retry_counts.pop(0) if self.retry_counts else 0
         )
@@ -112,30 +114,50 @@ class ServiceConnector(TeamsConnector):
         pages = self.pages.get(conversation_id, [([], None)])
         messages_read = 0
         retries = 0
+        limit_reached = False
         self.last_message_read_coverage = {
             "complete": False,
             "pages_fetched": 0,
             "messages_retrieved": 0,
             "missing_timestamp_messages_excluded": 0,
             "retry_count": 0,
+            "limit_reached": False,
         }
         for page_index, (page, next_url) in enumerate(pages):
             if cancel_event is not None and cancel_event.is_set():
                 return
             self.page_calls.append((conversation_id, 100, since, until, None if page_index == 0 else f"page:{page_index}"))
-            messages_read += len(page)
+            selected = []
+            for item in sorted(
+                page,
+                key=TeamsConnector._message_order_key,
+                reverse=True,
+            ):
+                timestamp = TeamsConnector.message_datetime(item)
+                if since is not None and (timestamp is None or timestamp < since):
+                    continue
+                if until is not None and (timestamp is None or timestamp > until):
+                    continue
+                selected.append(item)
+                if limit is not None and messages_read + len(selected) >= limit:
+                    limit_reached = True
+                    break
+            selected.reverse()
+            messages_read += len(selected)
             retries += self.retry_counts.pop(0) if self.retry_counts else 0
             self.last_message_read_coverage = {
-                "complete": next_url is None,
+                "complete": next_url is None and not limit_reached,
                 "pages_fetched": page_index + 1,
                 "messages_retrieved": messages_read,
                 "missing_timestamp_messages_excluded": 0,
                 "retry_count": retries,
+                "limit_reached": limit_reached,
             }
             if progress_callback is not None:
                 progress_callback(page_index + 1, messages_read, retries)
-            yield page
-            if next_url is None:
+            if selected:
+                yield selected
+            if next_url is None or limit_reached:
                 break
 
     def get_conversation_members(self, conversation_id):
@@ -567,6 +589,74 @@ class TeamsServiceTests(unittest.TestCase):
         self.assertIn("older retained local message", content)
         self.assertIn("new Teams message", content)
         self.assertEqual(self.service.index.count_messages_in_range(chat.id, since=None, until=None), 2)
+
+    def test_local_ui_export_passes_limit_to_remote_retrieval_and_progress(self):
+        chat = self.connector.chats[0]
+        self.connector.pages[chat.id] = [
+            ([
+                message("outside-until", 4, "newer than upper bound"),
+                message("upper-bound", 3, "message at upper bound"),
+                message("lower-bound", 2, "message at lower bound"),
+                message("outside-since", 1, "older than lower bound"),
+            ], None)
+        ]
+        destination = Path(self.temp.name) / "bounded-conversation.txt"
+        progress = []
+        since = datetime(2026, 9, 28, 10, 0, 2, tzinfo=timezone.utc)
+        until = datetime(2026, 9, 28, 10, 0, 3, tzinfo=timezone.utc)
+
+        TeamsExporter(
+            self.connector,
+            self.service.formatter,
+            service=self.service,
+        ).export_chat(
+            chat,
+            destination,
+            limit=2,
+            since=since,
+            until=until,
+            progress_callback=progress.append,
+        )
+
+        content = destination.read_text(encoding="utf-8")
+        self.assertIn("message at upper bound", content)
+        self.assertIn("message at lower bound", content)
+        self.assertNotIn("newer than upper bound", content)
+        self.assertNotIn("older than lower bound", content)
+        self.assertEqual(self.connector.message_page_calls[-1][1:], (2, since, until))
+        self.assertEqual(
+            self.service.index.count_messages_in_range(chat.id, since=None, until=None),
+            2,
+        )
+        self.assertEqual(progress[-1]["pages_fetched"], 1)
+        self.assertEqual(progress[-1]["messages_retrieved"], 2)
+
+    def test_mcp_export_stops_after_limit_of_distinct_remote_messages(self):
+        chat = self.connector.chats[0]
+        self.connector.pages[chat.id] = [
+            ([message("m3", 3, "newest"), message("m2", 2, "second newest")], "page:1"),
+            ([message("m2", 2, "second newest duplicate")], "page:2"),
+            ([message("m1", 1, "third newest")], "page:3"),
+            ([message("m0", 0, "older excluded")], None),
+        ]
+
+        first = self.service.export_chat(
+            chat.id, message_limit=3, max_pages_to_fetch=2
+        )
+        self.assertEqual(first["status"], "preparing")
+        result = self.service.export_chat(export_id=first["export_id"])
+
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(self.connector.message_page_sizes, [3, 1, 1])
+        self.assertEqual(result["coverage"]["remote_pages_fetched_total"], 3)
+        self.assertEqual(result["coverage"]["remote_items_scanned_total"], 4)
+        self.assertEqual(result["coverage"]["remote_messages_retrieved_total"], 3)
+        self.assertTrue(result["coverage"]["message_limit_reached"])
+        resource = self.service.read_export(result["export_id"])
+        self.assertIn("newest", resource["content"])
+        self.assertIn("second newest", resource["content"])
+        self.assertIn("third newest", resource["content"])
+        self.assertNotIn("older excluded", resource["content"])
 
     def test_soft_deleted_message_remains_searchable_and_exported_with_a_clear_tag(self):
         chat = self.connector.chats[0]
