@@ -26,6 +26,7 @@ const chats = [];
   let choosingEnd = false;
   let rangeStartDraft = null;
   let activeDownloadId = null;
+  let chatRefreshInProgress = false;
 
   function dateKey(date) {
     return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
@@ -162,7 +163,7 @@ const chats = [];
     if (type.includes('meeting') || type.includes('call') || id.startsWith('19:meeting_') || id.startsWith('19:call_')) {
       return '/assets/chat-call.svg';
     }
-    if (type.includes('group')) return '/assets/chat-group.svg';
+    if (type.includes('group') || type.includes('channel') || type.includes('team')) return '/assets/chat-group.svg';
     return fallbackPersonAvatar;
   }
 
@@ -172,7 +173,7 @@ const chats = [];
     cancelButton.hidden = downloadButton.dataset.busy !== 'true';
     cancelButton.disabled = !activeDownloadId;
     combineInput.disabled = selected.size < 2 || downloadButton.dataset.busy === 'true';
-    if (combineInput.disabled) combineInput.checked = false;
+    if (selected.size < 2) combineInput.checked = false;
   }
 
   function renderChats() {
@@ -227,33 +228,88 @@ const chats = [];
     setStatus(body.error ? body.error.message : 'The request failed (' + response.status + ').', true);
   }
 
+  function applyChatCatalog(body) {
+    chats.splice(0, chats.length, ...body.chats);
+    databaseNotice.textContent = body.database_notice || '';
+    databaseNotice.hidden = !body.database_notice;
+    document.getElementById('account-name').textContent = body.account?.name || '';
+    document.getElementById('account-email').textContent = body.account?.email || '';
+    setAvatar(document.getElementById('account-picture'), body.account?.picture_url, fallbackPersonAvatar);
+    accountInfo.hidden = !body.account;
+    const known = new Set(chats.map(function (chat) { return chat.id; }));
+    Array.from(selected).forEach(function (id) { if (!known.has(id)) selected.delete(id); });
+    renderChats();
+    updateControls();
+  }
+
   async function loadChats() {
+    if (chatRefreshInProgress) return;
+    chatRefreshInProgress = true;
     authHelp.hidden = true;
-    setStatus('Loading conversations…', false);
-    document.getElementById('refresh').disabled = true;
-    try {
-      const response = await fetch('/api/chats', { cache: 'no-store' });
-      const body = await response.json();
-      if (!response.ok) {
-        showApiError(response, body);
-        return;
+    const refreshButton = document.getElementById('refresh');
+    refreshButton.disabled = true;
+    refreshButton.title = 'Checking Teams for conversation updates…';
+    list.setAttribute('aria-busy', 'true');
+    setStatus(chats.length ? 'Checking Teams for conversation updates…' : 'Loading conversations…', false);
+
+    let refreshSucceeded = false;
+    let cacheShown = chats.length > 0;
+    let refreshError = null;
+
+    // Start the Teams delta request immediately; the saved catalog loads in parallel.
+    const refreshPromise = (async function () {
+      try {
+        const response = await fetch('/api/chats?refresh=true', { cache: 'no-store' });
+        const body = await response.json();
+        if (!response.ok) {
+          refreshError = { response: response, body: body };
+          return;
+        }
+        applyChatCatalog(body);
+        refreshSucceeded = true;
+      } catch (_) {
+        refreshError = null;
       }
-      chats.splice(0, chats.length, ...body.chats);
-      databaseNotice.textContent = body.database_notice || '';
-      databaseNotice.hidden = !body.database_notice;
-      document.getElementById('account-name').textContent = body.account?.name || '';
-      document.getElementById('account-email').textContent = body.account?.email || '';
-      setAvatar(document.getElementById('account-picture'), body.account?.picture_url, fallbackPersonAvatar);
-      accountInfo.hidden = !body.account;
-      const known = new Set(chats.map(function (chat) { return chat.id; }));
-      Array.from(selected).forEach(function (id) { if (!known.has(id)) selected.delete(id); });
-      renderChats();
-      updateControls();
-      setStatus(chats.length + ' conversations loaded.', false);
-    } catch (_) {
-      setStatus('Could not reach the local server. Reload this page and try again.', true);
+    })();
+
+    const cachePromise = cacheShown ? Promise.resolve() : (async function () {
+      try {
+        const response = await fetch('/api/cached-chats', { cache: 'no-store' });
+        if (!response.ok) return;
+        const body = await response.json();
+        if (!refreshSucceeded && Array.isArray(body.chats) && body.chats.length) {
+          applyChatCatalog(body);
+          cacheShown = true;
+          setStatus('Showing saved conversations while checking Teams for updates…', false);
+        }
+      } catch (_) {
+        // The live refresh remains the source of truth for this page load.
+      }
+    })();
+
+    try {
+      await Promise.all([refreshPromise, cachePromise]);
+      if (refreshSucceeded) {
+        setStatus(chats.length + ' conversations loaded.', false);
+      } else if (refreshError) {
+        showApiError(refreshError.response, refreshError.body);
+        if (cacheShown && chats.length) {
+          setStatus('Showing saved conversations. ' + (refreshError.body.error?.message || 'Teams could not be refreshed.'), true);
+        } else {
+          list.replaceChildren();
+          setStatus(refreshError.body.error?.message || 'Teams conversations could not be loaded.', true);
+        }
+      } else if (cacheShown && chats.length) {
+        setStatus('Showing saved conversations. Could not reach the local server to refresh Teams.', true);
+      } else {
+        list.replaceChildren();
+        setStatus('Could not reach the local server. Reload this page and try again.', true);
+      }
     } finally {
-      document.getElementById('refresh').disabled = false;
+      chatRefreshInProgress = false;
+      refreshButton.disabled = false;
+      refreshButton.title = 'Refresh conversations from Teams';
+      list.removeAttribute('aria-busy');
     }
   }
 
@@ -319,6 +375,7 @@ const chats = [];
     }
     messageLimitInput.setCustomValidity('');
     authHelp.hidden = true;
+    const concatenate = selected.size > 1 && combineInput.checked;
     downloadButton.dataset.busy = 'true';
     downloadButton.textContent = 'Preparing…';
     updateControls();
@@ -334,7 +391,7 @@ const chats = [];
           from_utc_offset_minutes: fromDateInput.value ? browserUtcOffsetMinutes(fromDateInput.value, false) : null,
           to_utc_offset_minutes: toDateInput.value ? browserUtcOffsetMinutes(toDateInput.value, true) : null,
           message_limit: parsedLimit.value,
-          concatenate: combineInput.checked
+          concatenate: concatenate
         })
       });
       const startBody = await startResponse.json();

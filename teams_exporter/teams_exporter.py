@@ -158,7 +158,17 @@ class TeamsExporter:
                                 if timestamp
                                 else "unknown time"
                             )
-                            output.write(f"[{timestamp_text}] {self._author(message)}\n")
+                            marker = (
+                                " "
+                                + self.formatter.soft_deleted_marker(
+                                    message.get("__deleted_at")
+                                )
+                                if message.get("__is_deleted")
+                                else ""
+                            )
+                            output.write(
+                                f"[{timestamp_text}] {self._author(message)}{marker}\n"
+                            )
                             body = message.get("__formatted_body")
                             if isinstance(body, str):
                                 body = self.formatter.sanitize_preformatted_body(body)

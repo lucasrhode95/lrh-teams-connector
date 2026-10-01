@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import http.client
 import json
+import logging
 import os
 import re
 import tempfile
@@ -19,6 +20,9 @@ from typing import Any, Callable, Iterator
 from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsplit
 
 import msal
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -119,6 +123,12 @@ class _TransientTeamsRequestError(RuntimeError):
         self.retry_after = retry_after
 
 
+class _TeamsHttpError(RuntimeError):
+    def __init__(self, message: str, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 class _MiddleTierRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Follow picture redirects only when they stay on the token's host."""
 
@@ -155,10 +165,11 @@ class TeamsConnector:
         "https://teams.microsoft.com/api/csa/api/v1/teams/users/me"
         "?isPrefetch=false&enableMembershipSummary=true"
     )
+    CSA_UPDATES_URL = "https://teams.microsoft.com/api/csa/api/v1/teams/users/me/updates"
     SELF_CHAT_ID = "48:notes"
     CHAT_CATALOG_SCOPE = (
-        "CSA chat and meeting entries plus the known notes-to-self chat; "
-        "team/channel entities and Teams service streams are excluded."
+        "CSA chat, meeting, and channel entries plus the known notes-to-self chat; "
+        "Teams service streams are excluded."
     )
     CHAT_SERVICE_CHAT_TYPES = {"chat", "onetoonechat", "meeting"}
     CHAT_SERVICE_NON_CHAT_TYPES = {
@@ -237,6 +248,7 @@ class TeamsConnector:
         MCP callers must use ``interactive=False`` so an expired or missing
         session returns a clear error instead of waiting on a terminal prompt.
         """
+        logger.debug("Teams authentication check started interactive=%s", interactive)
         with _TokenCacheLock(self._cache_lock_path):
             self._migrate_repository_cache_if_needed()
             cache = self._load_token_cache()
@@ -276,6 +288,11 @@ class TeamsConnector:
         self._middle_tier_url = region_gtms.get("middleTier")
         if not self._chat_service_url:
             raise RuntimeError("Teams AuthZ did not return regionGtms.chatService.")
+        logger.info(
+            "Teams authentication accepted token_sources=spaces:%s,csa:%s",
+            spaces_source,
+            csa_source,
+        )
 
     def get_user_metadata(self) -> dict[str, Any]:
         """Return non-secret account fields from the Teams access token."""
@@ -383,6 +400,7 @@ class TeamsConnector:
                         raise RuntimeError("Teams profile picture exceeded the image size limit.")
                     return content, content_type
             except urllib.error.HTTPError as exc:
+                location = self._safe_location(url)
                 if exc.code in {401, 403}:
                     exc.close()
                     self._clear_session()
@@ -468,9 +486,224 @@ class TeamsConnector:
             and self._middle_tier_url
         )
 
+    def get_chat_updates(self, sync_token: str | None = None) -> dict[str, Any]:
+        """Fetch a CSA bootstrap or delta and normalize chat and channel rows.
+
+        A rejected/expired continuation is recovered by requesting a fresh
+        snapshot from the same updates route without the sync-token header.
+        The caller persists the returned token atomically with the rows.
+        """
+        self._require_logged_in()
+        if sync_token is not None and (not isinstance(sync_token, str) or not sync_token):
+            raise ValueError("sync_token must be a non-empty string or None.")
+
+        used_sync_token = sync_token is not None
+        try:
+            payload = self._request_csa(
+                self.CSA_UPDATES_URL,
+                sync_token=sync_token,
+            )
+            if used_sync_token and self._sync_token_expired(payload):
+                payload = self._request_csa(self.CSA_UPDATES_URL)
+                used_sync_token = False
+        except _TeamsHttpError as exc:
+            if not used_sync_token or exc.status_code not in {400, 410}:
+                raise
+            payload = self._request_csa(self.CSA_UPDATES_URL)
+            used_sync_token = False
+
+        metadata = self._mapping(payload.get("metadata"))
+        sync_token_value = metadata.get("syncToken") or metadata.get("forwardSyncToken")
+        if not isinstance(sync_token_value, str) or not sync_token_value.strip():
+            raise RuntimeError("Teams chat updates did not include a sync token.")
+
+        raw_chats = payload.get("chats", [])
+        raw_channels = payload.get("channels", [])
+        if not isinstance(raw_chats, list) or not isinstance(raw_channels, list):
+            raise RuntimeError("Unexpected Teams chat update response: chat or channel rows are invalid.")
+
+        normalized: list[ChatSummary] = []
+        deleted_ids: list[str] = []
+        for row in raw_chats:
+            if isinstance(row, dict) and self._optional_bool(row.get("isDeleted")) is True:
+                deleted_ids.append(self._csa_update_conversation_id(row, "chat"))
+                continue
+            summary = self._summarize_csa_update_row(row, entity_type="chat")
+            if summary is not None:
+                normalized.append(summary)
+        for row in raw_channels:
+            if isinstance(row, dict) and self._optional_bool(row.get("isDeleted")) is True:
+                deleted_ids.append(self._csa_update_conversation_id(row, "channel"))
+                continue
+            summary = self._summarize_csa_update_row(row, entity_type="channel")
+            if summary is not None:
+                normalized.append(summary)
+
+        if not used_sync_token:
+            # A bootstrap snapshot is expected to be complete. If CSA explicitly
+            # says otherwise, preserve the established paginated catalog fallback.
+            is_partial = metadata.get("isPartialData") is True or metadata.get("hasMoreChats") is True
+            if is_partial:
+                known_ids = {chat.id for chat in normalized}
+                for chat in self.list_chats():
+                    if chat.id not in known_ids:
+                        normalized.append(chat)
+                        known_ids.add(chat.id)
+            self._ensure_self_chat(normalized)
+
+        self._resolve_untitled_one_to_one_names(
+            raw_chats,
+            normalized,
+            payload.get("users"),
+        )
+        self._add_one_to_one_profile_picture_uris(raw_chats, normalized)
+
+        oldest = datetime.min.replace(tzinfo=timezone.utc)
+        ordered = sorted(
+            normalized,
+            key=lambda chat: chat.last_message_at or oldest,
+            reverse=True,
+        )
+        self.catalog_coverage = ChatCatalogCoverage(
+            catalog_complete=(
+                metadata.get("isPartialData") is False
+                and metadata.get("hasMoreChats") is False
+            ),
+            catalog_source="CSA updates" + (" bootstrap" if not used_sync_token else " delta"),
+            catalog_scope=self.CHAT_CATALOG_SCOPE,
+            csa_reported_partial=(
+                True
+                if metadata.get("isPartialData") is True or metadata.get("hasMoreChats") is True
+                else False
+                if metadata.get("isPartialData") is False and metadata.get("hasMoreChats") is False
+                else None
+            ),
+        )
+        return {
+            "chats": ordered,
+            "sync_token": sync_token_value.strip(),
+            "is_bootstrap": not used_sync_token,
+            "deleted_ids": deleted_ids,
+        }
+
+    @staticmethod
+    def _csa_update_conversation_id(row: dict[str, Any], entity_type: str) -> str:
+        keys = (
+            ("conversationId", "threadId", "id", "chatId")
+            if entity_type == "channel"
+            else ("id",)
+        )
+        conversation_id = next(
+            (
+                value
+                for key in keys
+                if isinstance((value := row.get(key)), str) and value
+            ),
+            None,
+        )
+        if not isinstance(conversation_id, str):
+            raise RuntimeError("Unexpected Teams chat update response: a deleted row has no conversation ID.")
+        return conversation_id
+
+    @classmethod
+    def _summarize_csa_update_row(
+        cls,
+        row: Any,
+        *,
+        entity_type: str,
+    ) -> ChatSummary | None:
+        if not isinstance(row, dict):
+            raise RuntimeError("Unexpected Teams chat update response: a row is not an object.")
+        if cls._optional_bool(row.get("isDeleted")) is True:
+            return None
+        channel = cls._mapping(row.get("channel"))
+        team = cls._mapping(row.get("team"))
+        if entity_type == "channel":
+            chat_id = next(
+                (
+                    value
+                    for key in ("conversationId", "threadId", "id", "chatId")
+                    if isinstance((value := row.get(key)), str) and value
+                ),
+                None,
+            )
+        else:
+            chat_id = row.get("id")
+        if not isinstance(chat_id, str) or not chat_id:
+            raise RuntimeError("Unexpected Teams chat update response: a row has no conversation ID.")
+
+        last_message = cls._mapping(row.get("lastMessage"))
+        title = (
+            row.get("title")
+            or row.get("displayName")
+            or row.get("topic")
+            or row.get("name")
+            or channel.get("title")
+            or channel.get("displayName")
+            or channel.get("name")
+            or chat_id
+        )
+        team_title = row.get("teamName") or team.get("title") or team.get("displayName") or team.get("name")
+        if entity_type == "channel" and isinstance(team_title, str) and team_title.strip():
+            if str(title).casefold() != team_title.strip().casefold():
+                title = f"{team_title.strip()} · {title}"
+
+        content = last_message.get("content")
+        preview = content.strip()[:240] if isinstance(content, str) else None
+        is_read = cls._optional_bool(row.get("isRead"))
+        unread = None if is_read is None else not is_read
+        if unread is None:
+            unread = cls._optional_bool(row.get("isUnread"))
+        raw_chat_type = row.get("chatType")
+        if entity_type == "channel":
+            chat_type = "channel"
+        elif isinstance(raw_chat_type, str) and raw_chat_type:
+            chat_type = raw_chat_type
+        elif row.get("isOneOnOne") is True:
+            chat_type = "oneOnOne"
+        else:
+            chat_type = "chat"
+
+        avatar_url = cls._avatar_url_from_rows(
+            row,
+            channel,
+            team,
+            cls._mapping(row.get("threadProperties")),
+            cls._mapping(row.get("image")),
+            cls._mapping(row.get("avatar")),
+        )
+        return ChatSummary(
+            id=chat_id,
+            display_name=str(title),
+            last_message_at=cls._message_datetime(last_message),
+            last_message_preview=preview,
+            unread=unread,
+            chat_type=chat_type,
+            avatar_url=avatar_url,
+            is_self_chat=chat_id == cls.SELF_CHAT_ID,
+        )
+
+    @staticmethod
+    def _sync_token_expired(payload: dict[str, Any]) -> bool:
+        error = TeamsConnector._mapping(payload.get("error"))
+        values = (
+            error.get("code"),
+            error.get("type"),
+            error.get("message"),
+            payload.get("errorCode"),
+            payload.get("code"),
+            payload.get("type"),
+        )
+        return any(
+            isinstance(value, str)
+            and "synctokenexpired" in re.sub(r"[^a-z]", "", value.casefold())
+            for value in values
+        )
+
     def list_chats(self) -> list[ChatSummary]:
         """Return a normalized chat catalog in Teams-visible activity order."""
         self._require_logged_in()
+        logger.info("Teams chat catalog fetch started")
         payload = self._request_csa(self.CSA_STARTUP_URL)
         metadata = self._mapping(payload.get("metadata"))
         is_partial = metadata.get("isPartialData") is True or metadata.get(
@@ -578,10 +811,7 @@ class TeamsConnector:
         oldest = datetime.min.replace(tzinfo=timezone.utc)
         ordered = sorted(
             normalized,
-            key=lambda chat: (
-                chat.is_self_chat,
-                chat.last_message_at or oldest,
-            ),
+            key=lambda chat: chat.last_message_at or oldest,
             reverse=True,
         )
 
@@ -615,6 +845,14 @@ class TeamsConnector:
             unclassified_service_rows_excluded=unclassified_rows_excluded,
             fallback_name_lookups_attempted=fallback_name_lookups_attempted,
             fallback_chats_without_resolved_name=fallback_chats_without_name,
+        )
+        logger.info(
+            "Teams chat catalog fetch completed chats=%d csa_partial=%s fallback_added=%d excluded_non_chat=%d excluded_unclassified=%d",
+            len(ordered),
+            csa_reported_partial,
+            fallback_chats_added,
+            non_chat_rows_excluded,
+            unclassified_rows_excluded,
         )
         return ordered
 
@@ -1204,6 +1442,13 @@ class TeamsConnector:
                         break
 
                 pages_fetched += 1
+                logger.debug(
+                    "Teams message page fetched page=%d scanned=%d retrieved_total=%d retries_total=%d",
+                    pages_fetched,
+                    len(page),
+                    messages_retrieved,
+                    retry_count,
+                )
                 metadata = self._mapping(payload.get("_metadata"))
                 backward_link = metadata.get("backwardLink")
                 if backward_link is not None and not isinstance(backward_link, str):
@@ -1247,6 +1492,15 @@ class TeamsConnector:
                     "retry_count": retry_count,
                     "limit_reached": limit_reached,
                 }
+            )
+            logger.info(
+                "Teams history read finished pages=%d scanned=%d retrieved=%d duplicates=%d retries=%d complete=%s",
+                pages_fetched,
+                raw_items_scanned,
+                messages_retrieved,
+                duplicate_messages_skipped,
+                retry_count,
+                history_complete,
             )
 
     @staticmethod
@@ -1295,6 +1549,13 @@ class TeamsConnector:
             url = continuation_url
         self._validate_message_page_url(url, conversation_id)
 
+        logger.debug(
+            "Teams bounded message page request started page_size=%d has_since=%s has_until=%s continuation=%s",
+            page_size,
+            since_utc is not None,
+            until_utc is not None,
+            continuation_url is not None,
+        )
         payload = self._request_chat_service(url)
         page = payload.get("messages")
         if not isinstance(page, list) or any(
@@ -1321,6 +1582,13 @@ class TeamsConnector:
             raise RuntimeError("Unexpected Teams message continuation link.")
         if next_url:
             self._validate_message_page_url(next_url, conversation_id)
+        logger.debug(
+            "Teams bounded message page received scanned=%d selected=%d missing_timestamps=%d has_continuation=%s",
+            len(page),
+            len(selected),
+            missing_timestamp_count,
+            bool(next_url),
+        )
         return (
             sorted(selected, key=self._message_order_key),
             next_url or None,
@@ -1412,6 +1680,7 @@ class TeamsConnector:
             "imdisplayname": sender_name,
             "properties": {"importance": "", "subject": None},
         }
+        logger.info("Teams message send started characters=%d", len(normalized_text))
         response = self._request_chat_service(
             self._messages_url(conversation_id.strip()),
             method="POST",
@@ -1432,6 +1701,7 @@ class TeamsConnector:
             None,
         )
         sent_at = self._message_datetime(response_message)
+        logger.info("Teams message send accepted response_has_message_id=%s", message_id is not None)
         return {
             "message_id": message_id,
             "client_message_id": client_message_id,
@@ -1521,20 +1791,25 @@ class TeamsConnector:
         url: str,
         method: str = "GET",
         body: Any | None = None,
+        *,
+        sync_token: str | None = None,
     ) -> dict[str, Any]:
         self._require_logged_in()
         host = urlsplit(url)
         if host.scheme != "https" or host.netloc.lower() != "teams.microsoft.com":
             raise RuntimeError("Refusing a CSA request outside teams.microsoft.com.")
+        headers = {
+            "Authorization": f"Bearer {self._csa_access_token}",
+            "x-skypetoken": str(self._skype_token),
+            "Accept": "application/json",
+        }
+        if sync_token is not None:
+            headers["x-ms-synctoken"] = sync_token
         return self._http_json(
             url,
             method=method,
             body=body,
-            headers={
-                "Authorization": f"Bearer {self._csa_access_token}",
-                "x-skypetoken": str(self._skype_token),
-                "Accept": "application/json",
-            },
+            headers=headers,
         )
 
     def _request_teams_authz(self) -> dict[str, Any]:
@@ -1577,6 +1852,9 @@ class TeamsConnector:
 
         for attempt in range(1, max_attempts + 1):
             self._raise_if_cancelled(cancel_event)
+            attempt_started = time.perf_counter()
+            failure_kind = "request"
+            failure_status: int | None = None
             request = urllib.request.Request(
                 url, data=data, method=method, headers=request_headers
             )
@@ -1584,12 +1862,31 @@ class TeamsConnector:
                 with urllib.request.urlopen(
                     request, timeout=self.REQUEST_TIMEOUT_SECONDS
                 ) as response:
+                    candidate_status = getattr(response, "status", 200)
+                    response_status = (
+                        candidate_status
+                        if isinstance(candidate_status, int)
+                        and not isinstance(candidate_status, bool)
+                        else 200
+                    )
                     response_text = response.read().decode("utf-8")
                 self._raise_if_cancelled(cancel_event)
+                logger.debug(
+                    "Teams request completed method=%s status=%d attempt=%d duration_ms=%.1f",
+                    method.upper(),
+                    response_status,
+                    attempt,
+                    (time.perf_counter() - attempt_started) * 1000,
+                )
                 break
             except urllib.error.HTTPError as exc:
                 location = self._safe_location(url)
                 if exc.code in {401, 403}:
+                    logger.warning(
+                        "Teams request rejected stored credentials method=%s status=%d",
+                        method.upper(),
+                        exc.code,
+                    )
                     exc.close()
                     self._clear_session()
                     raise AuthenticationRequiredError(
@@ -1597,6 +1894,8 @@ class TeamsConnector:
                         "Run `python -m teams_exporter auth` and retry."
                     ) from None
                 if read_request and exc.code in self.RETRYABLE_HTTP_STATUSES:
+                    failure_kind = "http"
+                    failure_status = exc.code
                     retry_after = exc.headers.get("Retry-After") if exc.headers else None
                     transient_error = _TransientTeamsRequestError(
                         f"Teams request failed with HTTP {exc.code} for {location}.",
@@ -1604,22 +1903,26 @@ class TeamsConnector:
                     )
                     exc.close()
                 else:
-                    error = RuntimeError(
-                        f"Teams request failed with HTTP {exc.code} for {location}."
+                    error = _TeamsHttpError(
+                        f"Teams request failed with HTTP {exc.code} for {location}.",
+                        exc.code,
                     )
                     exc.close()
                     raise error from exc
             except urllib.error.URLError as exc:
+                failure_kind = "network"
                 location = self._safe_location(url)
                 transient_error = _TransientTeamsRequestError(
                     f"Teams request failed for {location}: {self._safe_exception_detail(exc.reason)}"
                 )
             except (http.client.IncompleteRead, TimeoutError, OSError) as exc:
+                failure_kind = "network"
                 location = self._safe_location(url)
                 transient_error = _TransientTeamsRequestError(
                     f"Teams request failed for {location}: {self._safe_exception_detail(exc)}"
                 )
             except Exception as exc:
+                failure_kind = "request"
                 location = self._safe_location(url)
                 if not read_request:
                     raise RuntimeError(
@@ -1633,6 +1936,13 @@ class TeamsConnector:
             if transient_error is None:
                 raise RuntimeError("Teams request failed without an error detail.")
             if attempt >= max_attempts:
+                logger.error(
+                    "Teams request exhausted retries method=%s failure=%s status=%s attempts=%d",
+                    method.upper(),
+                    failure_kind,
+                    failure_status if failure_status is not None else "none",
+                    attempt,
+                )
                 raise RuntimeError(
                     f"{transient_error} Read request exhausted its {max_attempts}-attempt limit."
                 ) from transient_error
@@ -1641,6 +1951,15 @@ class TeamsConnector:
             delay = self._read_retry_delay(
                 self.last_request_retry_count,
                 transient_error.retry_after,
+            )
+            logger.warning(
+                "Teams request retry method=%s failure=%s status=%s attempt=%d/%d delay_ms=%.0f",
+                method.upper(),
+                failure_kind,
+                failure_status if failure_status is not None else "none",
+                attempt,
+                max_attempts,
+                delay * 1000,
             )
             if cancel_event is not None:
                 if cancel_event.wait(delay):

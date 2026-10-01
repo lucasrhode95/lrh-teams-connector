@@ -77,6 +77,9 @@ class MCPContractTests(unittest.TestCase):
                         self.assertIn("since", search_tool.inputSchema["required"])
                         self.assertIn("until", search_tool.inputSchema["required"])
                         self.assertIn("max_matches", search_tool.inputSchema["properties"])
+                        search_schema = str(search_tool.outputSchema)
+                        self.assertIn("is_deleted", search_schema)
+                        self.assertIn("deleted_at", search_schema)
                         templates = await session.list_resource_templates()
                         self.assertEqual(len(templates.resourceTemplates), 1)
                         self.assertIn(

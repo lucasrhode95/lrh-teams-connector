@@ -304,20 +304,21 @@ class TeamsConnectorTests(unittest.TestCase):
         chats = client.list_chats()
 
         self.assertEqual([chat.id for chat in chats], [
-            "48:notes",
             "19:zeta@thread.v2",
             "19:beta@thread.v2",
             "19:alpha@thread.v2",
             "19:untitled@thread.v2",
+            "48:notes",
         ])
-        self.assertTrue(chats[0].is_self_chat)
-        self.assertEqual(chats[0].display_name, "Notes to self")
-        self.assertEqual(chats[1].display_name, "Zeta discussion")
-        self.assertTrue(chats[1].unread)
-        self.assertEqual(chats[1].chat_type, "group")
-        self.assertEqual(chats[1].last_message_preview, "Newest chat item")
-        self.assertEqual(chats[3].unread, False)
-        self.assertEqual(chats[4].display_name, "Resolved One-to-one Person")
+        self.assertEqual(chats[-1].id, "48:notes")
+        self.assertTrue(chats[-1].is_self_chat)
+        self.assertEqual(chats[-1].display_name, "Notes to self")
+        self.assertEqual(chats[0].display_name, "Zeta discussion")
+        self.assertTrue(chats[0].unread)
+        self.assertEqual(chats[0].chat_type, "group")
+        self.assertEqual(chats[0].last_message_preview, "Newest chat item")
+        self.assertEqual(chats[2].unread, False)
+        self.assertEqual(chats[3].display_name, "Resolved One-to-one Person")
         self.assertEqual(client.requests[1][1], "POST")
         self.assertEqual(
             client.requests[1][3]["Authorization"], "Bearer spaces-test-token"
@@ -330,6 +331,66 @@ class TeamsConnectorTests(unittest.TestCase):
         self.assertEqual(headers["Authorization"], "Bearer csa-test-token")
         self.assertEqual(headers["x-skypetoken"], "skype-test-token")
         self.assertNotIn("Authentication", headers)
+
+    def test_csa_updates_send_sync_token_and_include_channel_rows(self):
+        client = StubConnector([{
+            "chats": [{
+                "id": "19:alpha@thread.v2",
+                "title": "Alpha",
+                "chatType": "group",
+                "lastMessage": {"content": "chat update", "originalArrivalTime": "2026-09-28T12:00:00Z"},
+            }],
+            "channels": [{
+                "conversationId": "19:channel@thread.tacv2",
+                "title": "General",
+                "teamName": "Analytics",
+                "lastMessage": {"content": "channel update", "originalArrivalTime": "2026-09-28T13:00:00Z"},
+                "avatarUrl": "https://middle.example.test/beta/users/self-guid/profilepicturev2/8:orgid:team-guid",
+            }, {
+                "id": "19:deleted@thread.tacv2",
+                "displayName": "Deleted channel",
+                "isDeleted": True,
+            }],
+            "metadata": {
+                "syncToken": "sanitized-next-sync-token",
+                "isPartialData": False,
+                "hasMoreChats": False,
+            },
+        }])
+
+        result = client.get_chat_updates("sanitized-previous-sync-token")
+
+        self.assertEqual(client.requests[0][0], TeamsConnector.CSA_UPDATES_URL)
+        self.assertEqual(
+            client.requests[0][3]["x-ms-synctoken"],
+            "sanitized-previous-sync-token",
+        )
+        self.assertEqual(result["sync_token"], "sanitized-next-sync-token")
+        self.assertEqual(result["deleted_ids"], ["19:deleted@thread.tacv2"])
+        channel = next(chat for chat in result["chats"] if chat.chat_type == "channel")
+        self.assertEqual(channel.id, "19:channel@thread.tacv2")
+        self.assertEqual(channel.display_name, "Analytics · General")
+        self.assertIn("profilepicturev2", channel.avatar_url)
+        self.assertEqual(result["chats"][0].id, channel.id)
+        self.assertNotIn("19:deleted@thread.tacv2", {chat.id for chat in result["chats"]})
+
+    def test_expired_csa_sync_token_restarts_from_a_fresh_snapshot(self):
+        client = StubConnector([
+            {"error": {"code": "SyncTokenExpired"}},
+            {
+                "chats": [],
+                "channels": [],
+                "metadata": {"syncToken": "sanitized-recovered-token", "isPartialData": False, "hasMoreChats": False},
+            },
+        ])
+
+        result = client.get_chat_updates("sanitized-expired-token")
+
+        self.assertEqual(len(client.requests), 2)
+        self.assertEqual(client.requests[0][3]["x-ms-synctoken"], "sanitized-expired-token")
+        self.assertNotIn("x-ms-synctoken", client.requests[1][3])
+        self.assertTrue(result["is_bootstrap"])
+        self.assertEqual(result["sync_token"], "sanitized-recovered-token")
 
     def test_partial_csa_catalog_follows_chat_service_pages_and_preserves_csa_rows(self):
         next_page = "https://chat.example.test/v1/users/ME/conversations?cursor=next"

@@ -50,6 +50,8 @@ class ServiceConnector(TeamsConnector):
         self.auth_required = False
         self.sent_messages = []
         self.profile_picture_calls = []
+        self.sync_calls = []
+        self.next_sync_token = "sanitized-sync-1"
 
     def login(self, *, interactive=True):
         self.login_calls += 1
@@ -62,8 +64,19 @@ class ServiceConnector(TeamsConnector):
         self._chat_service_url = "https://chat.example.test"
         self._middle_tier_url = "https://middle.example.test"
 
+    def get_cached_account_metadata(self):
+        return {}
+
     def list_chats(self):
         return self.chats
+
+    def get_chat_updates(self, sync_token=None):
+        self.sync_calls.append(sync_token)
+        return {
+            "chats": list(self.chats),
+            "sync_token": self.next_sync_token,
+            "is_bootstrap": sync_token is None,
+        }
 
     def get_messages_page(
         self,
@@ -209,6 +222,44 @@ class TeamsServiceTests(unittest.TestCase):
         self.assertEqual(first["coverage"]["unclassified_service_rows_excluded"], 1)
         self.assertEqual(self.service.index.counts()["catalog_chats"], 2)
 
+    def test_refresh_merges_csa_delta_persists_cursor_and_reads_cache_without_network(self):
+        self.service.list_chats(page_size=10)
+        self.assertEqual(self.connector.sync_calls, [None])
+        self.assertEqual(self.service.index.get_chat_sync_token(), "sanitized-sync-1")
+
+        self.connector.chats = [
+            ChatSummary(
+                "19:alpha@thread.v2",
+                "Alpha renamed",
+                chat_type="group",
+            ),
+            ChatSummary(
+                "19:channel@thread.tacv2",
+                "Analytics · General",
+                chat_type="channel",
+                avatar_url="https://images.example.test/channel.png",
+            ),
+        ]
+        self.connector.next_sync_token = "sanitized-sync-2"
+        refreshed = self.service.list_chats(page_size=10, refresh=True)
+
+        self.assertEqual(self.connector.sync_calls, [None, "sanitized-sync-1"])
+        self.assertEqual(self.service.index.get_chat_sync_token(), "sanitized-sync-2")
+        self.assertEqual(
+            {item["id"] for item in refreshed["items"]},
+            {"19:alpha@thread.v2", "19:beta@thread.v2", "19:channel@thread.tacv2"},
+        )
+        self.assertEqual(
+            next(item["name"] for item in refreshed["items"] if item["id"].startswith("19:alpha")),
+            "Alpha renamed",
+        )
+
+        cached = self.service.list_cached_chats(page_size=10, include_avatar_uris=True)
+        self.assertEqual(self.connector.sync_calls, [None, "sanitized-sync-1"])
+        channel = next(item for item in cached["items"] if item["chat_type"] == "channel")
+        self.assertEqual(channel["avatar_url"], "https://images.example.test/channel.png")
+        self.assertEqual(cached["coverage"]["source"], "local SQLite cache")
+
     def test_avatar_uris_are_opt_in_for_local_ui_and_omitted_by_default(self):
         default_result = self.service.list_chats(page_size=1)
         ui_result = self.service.list_chats(page_size=1, include_avatar_uris=True)
@@ -344,6 +395,61 @@ class TeamsServiceTests(unittest.TestCase):
         self.assertIn("older retained local message", content)
         self.assertIn("new Teams message", content)
         self.assertEqual(self.service.index.count_messages_in_range(chat.id, since=None, until=None), 2)
+
+    def test_soft_deleted_message_remains_searchable_and_exported_with_a_clear_tag(self):
+        chat = self.connector.chats[0]
+        original = message("soft-deleted", 1, "retain this searchable project detail")
+        deleted_at = "2026-09-28T10:05:00Z"
+        delete_event = {
+            "id": "soft-deleted",
+            "originalarrivaltime": original["originalarrivaltime"],
+            "messagetype": "MessageDelete",
+            "content": "",
+            "properties": {"deletetime": deleted_at},
+        }
+        self.service.index.upsert_messages(
+            chat.id, [original], formatter=self.service.formatter
+        )
+        self.connector.pages[chat.id] = [([delete_event], None)]
+        since = datetime(2026, 9, 28, 10, 0, 0, tzinfo=timezone.utc)
+        until = datetime(2026, 9, 28, 10, 1, 0, tzinfo=timezone.utc)
+
+        search = self.service.search_messages(
+            "searchable project detail",
+            conversation_ids=[chat.id],
+            since=since,
+            until=until,
+        )
+        self.assertEqual(search["returned_count"], 1)
+        search_item = search["items"][0]
+        self.assertTrue(search_item["is_deleted"])
+        self.assertEqual(search_item["deleted_at"], deleted_at)
+        self.assertTrue(search_item["excerpt"].startswith(f"[Soft deleted at {deleted_at}]"))
+        self.assertIn("searchable project detail", search_item["excerpt"])
+
+        messages = self.service.get_messages(chat.id)
+        message_item = next(item for item in messages["items"] if item["id"] == "soft-deleted")
+        self.assertTrue(message_item["is_deleted"])
+        self.assertEqual(message_item["content"], original["content"])
+        content = self.service.get_message_content(chat.id, "soft-deleted")
+        self.assertTrue(content["is_deleted"])
+        self.assertEqual(content["content"], original["content"])
+
+        destination = Path(self.temp.name) / "soft-deleted.txt"
+        TeamsExporter(
+            self.connector,
+            self.service.formatter,
+            service=self.service,
+        ).export_chat(chat, destination)
+        exported = destination.read_text(encoding="utf-8")
+        self.assertIn(f"[Soft deleted at {deleted_at}]", exported)
+        self.assertIn("retain this searchable project detail", exported)
+
+        mcp_export = self.service.export_chat(chat.id)
+        self.assertEqual(mcp_export["status"], "complete")
+        resource = self.service.read_export(mcp_export["export_id"])
+        self.assertIn(f"[Soft deleted at {deleted_at}]", resource["content"])
+        self.assertIn("retain this searchable project detail", resource["content"])
 
     def test_get_messages_bounds_output_and_continues_truncated_message_content(self):
         long_body = "x" * 8_000

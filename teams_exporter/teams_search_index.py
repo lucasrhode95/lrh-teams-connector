@@ -177,6 +177,8 @@ class TeamsSearchIndex:
                         last_message_at TEXT,
                         last_message_preview TEXT,
                         unread INTEGER,
+                        avatar_url TEXT,
+                        is_deleted INTEGER NOT NULL DEFAULT 0,
                         catalogued_at TEXT NOT NULL
                     );
                     CREATE TABLE IF NOT EXISTS messages (
@@ -235,6 +237,7 @@ class TeamsSearchIndex:
                         conversation_id TEXT NOT NULL,
                         since TEXT NOT NULL,
                         until TEXT NOT NULL,
+                        message_limit INTEGER,
                         next_url TEXT,
                         complete INTEGER NOT NULL DEFAULT 0,
                         pages INTEGER NOT NULL DEFAULT 0,
@@ -257,6 +260,16 @@ class TeamsSearchIndex:
                         VALUES ('generation', '0');
                     """
                 )
+                chat_columns = {
+                    row["name"]
+                    for row in connection.execute("PRAGMA table_info(chats)")
+                }
+                if "avatar_url" not in chat_columns:
+                    connection.execute("ALTER TABLE chats ADD COLUMN avatar_url TEXT")
+                if "is_deleted" not in chat_columns:
+                    connection.execute(
+                        "ALTER TABLE chats ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0"
+                    )
                 connection.execute("DROP TABLE IF EXISTS message_fts")
                 message_columns = {
                     row["name"]
@@ -322,29 +335,92 @@ class TeamsSearchIndex:
     def upsert_chats(self, chats: list[ChatSummary]) -> None:
         now = self._now()
         with self._connect() as connection:
-            for chat in chats:
-                connection.execute(
-                    """INSERT INTO chats (
-                        conversation_id, display_name, chat_type, last_message_at,
-                        last_message_preview, unread, catalogued_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(conversation_id) DO UPDATE SET
-                        display_name = excluded.display_name,
-                        chat_type = excluded.chat_type,
-                        last_message_at = excluded.last_message_at,
-                        last_message_preview = excluded.last_message_preview,
-                        unread = excluded.unread,
-                        catalogued_at = excluded.catalogued_at""",
-                    (
-                        chat.id,
-                        chat.display_name,
-                        chat.chat_type,
-                        self._timestamp(chat.last_message_at),
-                        chat.last_message_preview,
-                        None if chat.unread is None else int(chat.unread),
-                        now,
-                    ),
-                )
+            self._upsert_chats(connection, chats, now)
+
+    def upsert_chat_updates(
+        self,
+        chats: list[ChatSummary],
+        sync_token: str,
+        *,
+        deleted_ids: list[str] | None = None,
+    ) -> None:
+        """Atomically merge a CSA delta and persist its continuation token."""
+        if not isinstance(sync_token, str) or not sync_token.strip():
+            raise ValueError("The Teams chat update response has no sync token.")
+        now = self._now()
+        deleted_ids = deleted_ids or []
+        if any(not isinstance(value, str) or not value for value in deleted_ids):
+            raise ValueError("deleted_ids must contain non-empty conversation IDs.")
+        with self._connect() as connection:
+            self._upsert_chats(connection, chats, now)
+            connection.executemany(
+                "UPDATE chats SET is_deleted = 1, catalogued_at = ? WHERE conversation_id = ?",
+                ((now, conversation_id) for conversation_id in deleted_ids),
+            )
+            connection.execute(
+                """INSERT INTO index_metadata(key, value) VALUES ('csa_sync_token', ?)
+                   ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
+                (sync_token,),
+            )
+
+    def get_chat_sync_token(self) -> str | None:
+        """Return this account database's opaque CSA continuation token."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM index_metadata WHERE key = 'csa_sync_token'"
+            ).fetchone()
+        return str(row["value"]) if row else None
+
+    def chat_catalog(self) -> list[dict[str, Any]]:
+        """Read the durable catalog in descending activity order."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT conversation_id, display_name, chat_type, last_message_at,
+                          last_message_preview, unread, avatar_url
+                   FROM chats
+                   WHERE is_deleted = 0
+                   ORDER BY last_message_at IS NULL, last_message_at DESC, rowid"""
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    @classmethod
+    def _upsert_chats(
+        cls,
+        connection: sqlite3.Connection,
+        chats: list[ChatSummary],
+        now: str,
+    ) -> None:
+        for chat in chats:
+            connection.execute(
+                """INSERT INTO chats (
+                    conversation_id, display_name, chat_type, last_message_at,
+                    last_message_preview, unread, avatar_url, catalogued_at, is_deleted
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+                ON CONFLICT(conversation_id) DO UPDATE SET
+                    display_name = CASE
+                        WHEN excluded.display_name = excluded.conversation_id
+                             AND chats.display_name <> chats.conversation_id
+                        THEN chats.display_name
+                        ELSE excluded.display_name
+                    END,
+                    chat_type = COALESCE(excluded.chat_type, chats.chat_type),
+                    last_message_at = COALESCE(excluded.last_message_at, chats.last_message_at),
+                    last_message_preview = COALESCE(excluded.last_message_preview, chats.last_message_preview),
+                    unread = COALESCE(excluded.unread, chats.unread),
+                    avatar_url = COALESCE(excluded.avatar_url, chats.avatar_url),
+                    is_deleted = 0,
+                    catalogued_at = excluded.catalogued_at""",
+                (
+                    chat.id,
+                    chat.display_name,
+                    chat.chat_type,
+                    cls._timestamp(chat.last_message_at),
+                    chat.last_message_preview,
+                    None if chat.unread is None else int(chat.unread),
+                    chat.avatar_url,
+                    now,
+                ),
+            )
 
     def get_state(self, conversation_id: str) -> dict[str, Any]:
         with self._connect() as connection:
@@ -1030,7 +1106,7 @@ class TeamsSearchIndex:
     ) -> tuple[list[dict[str, Any]], bool]:
         """Search normalized SQL text and return one stable keyset page."""
         normalized = self._normalize_search_text(query)
-        predicates = ["m.is_deleted = 0", "m.sent_at IS NOT NULL"]
+        predicates = ["m.sent_at IS NOT NULL"]
         parameters: list[Any] = []
         placeholders = ",".join("?" for _ in conversation_ids)
         predicates.append(f"m.conversation_id IN ({placeholders})")

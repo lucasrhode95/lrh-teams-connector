@@ -74,6 +74,7 @@
   color: var(--muted);
   text-align: center;
 }
+.loading-state[hidden] { display: none; }
 .auth-card { max-width: 520px; }
 .auth-card .loading-state { min-height: 120px; }
 .auth-error { margin-top: 18px; padding: 12px; border-radius: 7px; background: var(--notice-bg); color: var(--notice-text); }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import shutil
 import tempfile
@@ -18,6 +19,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from teams_exporter.app_logging import configure_app_logging
 from teams_exporter.teams_connector import (
     AuthenticationRequiredError,
     ChatSummary,
@@ -44,6 +46,7 @@ TEMPLATE_ENVIRONMENT = Environment(
     loader=FileSystemLoader(TEMPLATE_DIRECTORY),
     autoescape=select_autoescape(("html",)),
 )
+logger = logging.getLogger(__name__)
 
 
 
@@ -132,10 +135,18 @@ class LocalTeamsHTTPServer(ThreadingHTTPServer):
         return routes
 
     def _run_download(self, job: DownloadJob, request: DownloadRequest) -> None:
+        started = time_module.perf_counter()
         artifact_directory = Path(tempfile.mkdtemp(prefix="teams-export-job-"))
         with self._jobs_lock:
             job.artifact_directory = artifact_directory
             job.status = "running"
+        logger.info(
+            "Export started chats=%d has_date_range=%s has_message_limit=%s concatenate=%s",
+            len(request.chats),
+            request.since is not None or request.until is not None,
+            request.limit is not None,
+            request.concatenate,
+        )
 
         def report_progress(update: dict[str, Any]) -> None:
             with self._jobs_lock:
@@ -169,11 +180,25 @@ class LocalTeamsHTTPServer(ThreadingHTTPServer):
                 job.output_path = output_path
                 job.status = "complete"
                 job.finished_at = time_module.monotonic()
+                progress = dict(job.progress)
+            logger.info(
+                "Export completed chats=%d pages=%d messages=%d duration_ms=%.1f output_type=%s",
+                len(request.chats),
+                progress.get("pages_fetched", 0),
+                progress.get("messages_written", 0),
+                (time_module.perf_counter() - started) * 1000,
+                "text" if content_type.startswith("text/") else "archive",
+            )
         except ExtractionCancelled:
             with self._jobs_lock:
                 job.status = "cancelled"
                 job.finished_at = time_module.monotonic()
             shutil.rmtree(artifact_directory, ignore_errors=True)
+            logger.info(
+                "Export cancelled chats=%d duration_ms=%.1f",
+                len(request.chats),
+                (time_module.perf_counter() - started) * 1000,
+            )
         except AuthenticationRequiredError as exc:
             with self._jobs_lock:
                 job.status = "failed"
@@ -183,12 +208,22 @@ class LocalTeamsHTTPServer(ThreadingHTTPServer):
                 }
                 job.finished_at = time_module.monotonic()
             shutil.rmtree(artifact_directory, ignore_errors=True)
+            logger.warning(
+                "Export failed outcome=authentication_required error_type=%s duration_ms=%.1f",
+                type(exc).__name__,
+                (time_module.perf_counter() - started) * 1000,
+            )
         except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
             with self._jobs_lock:
                 job.status = "failed"
                 job.error = {"code": "invalid_request", "message": str(exc)}
                 job.finished_at = time_module.monotonic()
             shutil.rmtree(artifact_directory, ignore_errors=True)
+            logger.warning(
+                "Export failed outcome=invalid_request error_type=%s duration_ms=%.1f",
+                type(exc).__name__,
+                (time_module.perf_counter() - started) * 1000,
+            )
         except Exception as exc:
             with self._jobs_lock:
                 job.status = "failed"
@@ -198,6 +233,11 @@ class LocalTeamsHTTPServer(ThreadingHTTPServer):
                 }
                 job.finished_at = time_module.monotonic()
             shutil.rmtree(artifact_directory, ignore_errors=True)
+            logger.error(
+                "Export failed outcome=internal_error error_type=%s duration_ms=%.1f",
+                type(exc).__name__,
+                (time_module.perf_counter() - started) * 1000,
+            )
 
     def _build_download(
         self,
@@ -278,6 +318,18 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
     server: LocalTeamsHTTPServer
     server_version = "TeamsExporter"
     sys_version = ""
+
+    def handle_one_request(self) -> None:
+        self._request_started_at = time_module.perf_counter()
+        super().handle_one_request()
+
+    def handle(self) -> None:
+        try:
+            super().handle()
+        except ConnectionError:
+            # Browsers can cancel image or other requests after rendering changes.
+            # A disconnected client is expected and should not dump a traceback.
+            return
 
     def do_GET(self) -> None:
         if not self._request_is_local():
@@ -362,7 +414,11 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         if path == "/api/chats":
-            self._list_chats()
+            refresh_value = parse_qs(parsed_target.query, keep_blank_values=True).get("refresh", [""])[0]
+            self._list_chats(refresh=refresh_value.casefold() in {"1", "true", "yes"})
+            return
+        if path == "/api/cached-chats":
+            self._list_chats(cached=True)
             return
         if path == "/api/download-status":
             request_id = self._query_request_id(parsed_target.query)
@@ -441,6 +497,7 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
         return path in {
             "/chats",
             "/api/chats",
+            "/api/cached-chats",
             "/api/download-status",
             "/api/download-file",
         } or path.startswith("/api/profile-picture/")
@@ -451,12 +508,17 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
             return True
         except AuthenticationRequiredError as exc:
             self._invalidate_service_authentication()
+            logger.warning("HTTP connection check requires authentication")
             if page_request:
                 self._redirect_to_authentication()
             else:
                 self._send_json(401, self._error("authentication_required", str(exc)))
             return False
         except Exception as exc:
+            logger.warning(
+                "HTTP connection check failed error_type=%s",
+                type(exc).__name__,
+            )
             if page_request:
                 self._redirect_to_authentication()
             else:
@@ -540,21 +602,69 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
                 self._error("export_failed", f"Teams export failed: {TeamsService._safe_error(exc)}"),
             )
 
+    def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
+        # Never use BaseHTTPRequestHandler's raw request line: it can contain
+        # query values such as export IDs or other user-specific identifiers.
+        started = getattr(self, "_request_started_at", time_module.perf_counter())
+        method = self.command if re.fullmatch(r"[A-Z]{1,12}", self.command or "") else "OTHER"
+        logger.info(
+            "HTTP request method=%s route=%s status=%s duration_ms=%.1f",
+            method,
+            self._safe_route(),
+            code,
+            (time_module.perf_counter() - started) * 1000,
+        )
+
+    def log_error(self, format: str, *args: Any) -> None:
+        logger.warning(
+            "HTTP request error method=%s route=%s",
+            getattr(self, "command", "unknown"),
+            self._safe_route(),
+        )
+
     def log_message(self, format: str, *args: Any) -> None:
-        # Request bodies and chat names can contain private information; keep the
-        # simple local server quiet rather than writing access logs by default.
+        # Keep the standard handler from emitting a raw path or request line.
         return
 
-    def _list_chats(self) -> None:
+    def _safe_route(self) -> str:
+        path = urlsplit(getattr(self, "path", "")).path
+        known = {
+            "/", "/chats", "/api/auth-status", "/api/chats",
+            "/api/cached-chats", "/api/download-status", "/api/download-file",
+            "/api/download", "/api/cancel",
+        }
+        if path in known:
+            return path
+        if path.startswith("/api/profile-picture/"):
+            return "/api/profile-picture/{key}"
+        if path.startswith("/static/"):
+            return "/static/{asset}"
+        if path.startswith("/assets/"):
+            return "/assets/{asset}"
+        return "/other"
+
+    def _list_chats(self, *, refresh: bool = False, cached: bool = False) -> None:
+        started = time_module.perf_counter()
+        logger.info(
+            "Chat catalog request source=%s refresh=%s",
+            "cache" if cached else "teams",
+            refresh,
+        )
         try:
             chats: list[dict[str, Any]] = []
             page_token = None
             seen_tokens: set[str] = set()
             while True:
-                result = self.server.service.list_chats(
+                list_method = (
+                    self.server.service.list_cached_chats
+                    if cached
+                    else self.server.service.list_chats
+                )
+                result = list_method(
                     page_size=100,
                     page_token=page_token,
                     include_avatar_uris=True,
+                    **({"refresh": True} if refresh and not cached and page_token is None else {}),
                 )
                 chats.extend(result["items"])
                 if len(chats) > MAX_CHAT_CATALOG_SIZE:
@@ -587,11 +697,24 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
                     "count": len(chats),
                     "database_notice": getattr(self.server.service, "database_notice", None),
                     "account": account_payload,
+                    "source": "cache" if cached else "teams",
                 },
             )
+            logger.info(
+                "Chat catalog response source=%s chats=%d duration_ms=%.1f",
+                "cache" if cached else "teams",
+                len(chats),
+                (time_module.perf_counter() - started) * 1000,
+            )
         except AuthenticationRequiredError as exc:
+            logger.warning("Chat catalog unavailable outcome=authentication_required")
             self._send_json(401, self._error("authentication_required", str(exc)))
         except Exception as exc:
+            logger.error(
+                "Chat catalog failed error_type=%s duration_ms=%.1f",
+                type(exc).__name__,
+                (time_module.perf_counter() - started) * 1000,
+            )
             self._send_json(
                 502,
                 self._error("catalog_failed", f"Could not load chats: {TeamsService._safe_error(exc)}"),
@@ -807,11 +930,13 @@ def serve_local_ui(port: int = 8765) -> None:
     """Serve the local export UI on loopback until interrupted."""
     if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
         raise ValueError("port must be between 1 and 65535.")
+    configure_app_logging("http", stdout=True)
     server = LocalTeamsHTTPServer(("127.0.0.1", port))
-    print(f"Teams export UI: http://127.0.0.1:{server.server_port}")
+    logger.info("HTTP server listening address=http://127.0.0.1:%d", server.server_port)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        pass
+        logger.info("HTTP server interrupted by keyboard")
     finally:
         server.server_close()
+        logger.info("HTTP server stopped")
