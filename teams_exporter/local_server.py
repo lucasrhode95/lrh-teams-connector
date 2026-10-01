@@ -416,11 +416,27 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         if path == "/api/chats":
-            refresh_value = parse_qs(parsed_target.query, keep_blank_values=True).get("refresh", [""])[0]
-            self._list_chats(refresh=refresh_value.casefold() in {"1", "true", "yes"})
+            query = parse_qs(parsed_target.query, keep_blank_values=True)
+            refresh_value = query.get("refresh", [""])[0]
+            no_empty_value = query.get("no_empty_chats", ["true"])[0].casefold()
+            if no_empty_value not in {"1", "true", "yes", "0", "false", "no"}:
+                self._send_json(400, self._error("invalid_request", "no_empty_chats must be a boolean."))
+                return
+            self._list_chats(
+                refresh=refresh_value.casefold() in {"1", "true", "yes"},
+                no_empty_chats=no_empty_value in {"1", "true", "yes"},
+            )
             return
         if path == "/api/cached-chats":
-            self._list_chats(cached=True)
+            query = parse_qs(parsed_target.query, keep_blank_values=True)
+            no_empty_value = query.get("no_empty_chats", ["true"])[0].casefold()
+            if no_empty_value not in {"1", "true", "yes", "0", "false", "no"}:
+                self._send_json(400, self._error("invalid_request", "no_empty_chats must be a boolean."))
+                return
+            self._list_chats(
+                cached=True,
+                no_empty_chats=no_empty_value in {"1", "true", "yes"},
+            )
             return
         if path == "/api/download-status":
             request_id = self._query_request_id(parsed_target.query)
@@ -640,7 +656,13 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
             return "/assets/{asset}"
         return "/other"
 
-    def _list_chats(self, *, refresh: bool = False, cached: bool = False) -> None:
+    def _list_chats(
+        self,
+        *,
+        refresh: bool = False,
+        cached: bool = False,
+        no_empty_chats: bool = True,
+    ) -> None:
         started = time_module.perf_counter()
         logger.info(
             "Chat catalog request source=%s refresh=%s",
@@ -661,6 +683,7 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
                     page_size=100,
                     page_token=page_token,
                     include_avatar_uris=True,
+                    no_empty_chats=no_empty_chats,
                     **({"refresh": True} if refresh and not cached and page_token is None else {}),
                 )
                 chats.extend(result["items"])

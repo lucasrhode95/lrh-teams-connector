@@ -34,6 +34,7 @@ class ChatSummary:
     chat_type: str | None = None
     avatar_url: str | None = None
     is_self_chat: bool = False
+    is_empty_conversation: bool | None = None
 
 
 @dataclass(slots=True)
@@ -410,7 +411,11 @@ class TeamsConnector:
             and self._middle_tier_url
         )
 
-    def get_chat_updates(self, sync_token: str | None = None) -> dict[str, Any]:
+    def get_chat_updates(
+        self,
+        sync_token: str | None = None,
+        no_empty_chats: bool = True,
+    ) -> dict[str, Any]:
         """Fetch a CSA bootstrap or delta and normalize chat and channel rows.
 
         A rejected/expired continuation is recovered by requesting a fresh
@@ -420,6 +425,8 @@ class TeamsConnector:
         self._require_logged_in()
         if sync_token is not None and (not isinstance(sync_token, str) or not sync_token):
             raise ValueError("sync_token must be a non-empty string or None.")
+        if not isinstance(no_empty_chats, bool):
+            raise ValueError("no_empty_chats must be a boolean.")
 
         used_sync_token = sync_token is not None
         try:
@@ -469,7 +476,7 @@ class TeamsConnector:
             is_partial = metadata.get("isPartialData") is True or metadata.get("hasMoreChats") is True
             if is_partial:
                 known_ids = {chat.id for chat in normalized}
-                for chat in self.list_chats():
+                for chat in self.list_chats(no_empty_chats=no_empty_chats):
                     if chat.id not in known_ids:
                         normalized.append(chat)
                         known_ids.add(chat.id)
@@ -481,6 +488,11 @@ class TeamsConnector:
             payload.get("users"),
         )
         self._add_one_to_one_profile_picture_uris(raw_chats, normalized)
+        if no_empty_chats:
+            normalized = [
+                chat for chat in normalized
+                if chat.is_empty_conversation is not True
+            ]
 
         oldest = datetime.min.replace(tzinfo=timezone.utc)
         ordered = sorted(
@@ -595,6 +607,7 @@ class TeamsConnector:
             chat_type=chat_type,
             avatar_url=avatar_url,
             is_self_chat=chat_id == self.SELF_CHAT_ID,
+            is_empty_conversation=self._optional_bool(row.get("isEmptyConversation")),
         )
 
     def _csa_chat_type(self, row: dict[str, Any], entity_type: str = "chat") -> str | None:
@@ -668,8 +681,10 @@ class TeamsConnector:
             for value in values
         )
 
-    def list_chats(self) -> list[ChatSummary]:
+    def list_chats(self, no_empty_chats: bool = True) -> list[ChatSummary]:
         """Return a normalized chat catalog in Teams-visible activity order."""
+        if not isinstance(no_empty_chats, bool):
+            raise ValueError("no_empty_chats must be a boolean.")
         self._require_logged_in()
         logger.info("Teams chat catalog fetch started")
         payload = self._request_csa(self.CSA_STARTUP_URL)
@@ -720,6 +735,9 @@ class TeamsConnector:
                     chat_type=chat_type,
                     avatar_url=self._avatar_url_from_rows(chat),
                     is_self_chat=chat_id == self.SELF_CHAT_ID,
+                    is_empty_conversation=self._optional_bool(
+                        chat.get("isEmptyConversation")
+                    ),
                 )
             )
         self._resolve_untitled_one_to_one_names(
@@ -768,6 +786,11 @@ class TeamsConnector:
             summary.display_name == summary.id
             for summary in fallback_summaries
         )
+        if no_empty_chats:
+            normalized = [
+                chat for chat in normalized
+                if chat.is_empty_conversation is not True
+            ]
         # The visible Teams chat rows matched descending last-message time in a live
         # comparison better than the raw CSA array. Stable sorting retains the
         # CSA order when two chats have the same timestamp.
@@ -1014,6 +1037,13 @@ class TeamsConnector:
             thread_properties.get("threadType")
             or thread_properties.get("productThreadType")
         )
+        is_empty_conversation = self._optional_bool(
+            conversation.get("isEmptyConversation")
+        )
+        if is_empty_conversation is None:
+            is_empty_conversation = self._optional_bool(
+                properties.get("isEmptyConversation")
+            )
         return ChatSummary(
             id=conversation_id,
             display_name=str(title),
@@ -1024,6 +1054,7 @@ class TeamsConnector:
                 conversation, properties, thread_properties
             ),
             is_self_chat=conversation_id == self.SELF_CHAT_ID,
+            is_empty_conversation=is_empty_conversation,
         )
 
     def _add_one_to_one_profile_picture_uris(

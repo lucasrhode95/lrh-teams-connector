@@ -24,6 +24,7 @@ class TeamsSearchIndex:
     """Local SQLite chat catalog, retained message archive, and search coverage."""
 
     OWNER_METADATA_KEY = "account_fingerprint"
+    EMPTY_STATE_BOOTSTRAP_KEY = "csa_empty_state_bootstrapped"
 
     def __init__(
         self,
@@ -176,6 +177,7 @@ class TeamsSearchIndex:
                         last_message_preview TEXT,
                         unread INTEGER,
                         avatar_url TEXT,
+                        is_empty_conversation INTEGER,
                         is_deleted INTEGER NOT NULL DEFAULT 0,
                         catalogued_at TEXT NOT NULL
                     );
@@ -258,6 +260,14 @@ class TeamsSearchIndex:
                         VALUES ('generation', '0');
                     """
                 )
+                chat_columns = {
+                    row["name"]
+                    for row in connection.execute("PRAGMA table_info(chats)")
+                }
+                if "is_empty_conversation" not in chat_columns:
+                    connection.execute(
+                        "ALTER TABLE chats ADD COLUMN is_empty_conversation INTEGER"
+                    )
                 if self.owner_fingerprint is not None:
                     connection.execute(
                         "INSERT OR IGNORE INTO index_metadata(key, value) VALUES (?, ?)",
@@ -305,10 +315,13 @@ class TeamsSearchIndex:
         chats: list[ChatSummary],
         sync_token: str,
         deleted_ids: list[str] | None = None,
+        catalog_bootstrap: bool = False,
     ) -> None:
         """Atomically merge a CSA delta and persist its continuation token."""
         if not isinstance(sync_token, str) or not sync_token.strip():
             raise ValueError("The Teams chat update response has no sync token.")
+        if not isinstance(catalog_bootstrap, bool):
+            raise ValueError("catalog_bootstrap must be a boolean.")
         now = self._now()
         deleted_ids = deleted_ids or []
         if any(not isinstance(value, str) or not value for value in deleted_ids):
@@ -324,6 +337,21 @@ class TeamsSearchIndex:
                    ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
                 (sync_token,),
             )
+            if catalog_bootstrap:
+                connection.execute(
+                    """INSERT INTO index_metadata(key, value) VALUES (?, '1')
+                       ON CONFLICT(key) DO UPDATE SET value = '1'""",
+                    (self.EMPTY_STATE_BOOTSTRAP_KEY,),
+                )
+
+    def has_csa_empty_state_bootstrap(self) -> bool:
+        """Whether a full catalog response has populated empty-chat metadata."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM index_metadata WHERE key = ?",
+                (self.EMPTY_STATE_BOOTSTRAP_KEY,),
+            ).fetchone()
+        return bool(row and row["value"] == "1")
 
     def get_chat_sync_token(self) -> str | None:
         """Return this account database's opaque CSA continuation token."""
@@ -338,7 +366,8 @@ class TeamsSearchIndex:
         with self._connect() as connection:
             rows = connection.execute(
                 """SELECT conversation_id, display_name, chat_type, last_message_at,
-                          last_message_preview, unread, avatar_url
+                          last_message_preview, unread, avatar_url,
+                          is_empty_conversation
                    FROM chats
                    WHERE is_deleted = 0
                    ORDER BY last_message_at IS NULL, last_message_at DESC, rowid"""
@@ -356,8 +385,9 @@ class TeamsSearchIndex:
             connection.execute(
                 """INSERT INTO chats (
                     conversation_id, display_name, chat_type, last_message_at,
-                    last_message_preview, unread, avatar_url, catalogued_at, is_deleted
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+                    last_message_preview, unread, avatar_url,
+                    is_empty_conversation, catalogued_at, is_deleted
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                 ON CONFLICT(conversation_id) DO UPDATE SET
                     display_name = CASE
                         WHEN excluded.display_name = excluded.conversation_id
@@ -370,6 +400,10 @@ class TeamsSearchIndex:
                     last_message_preview = COALESCE(excluded.last_message_preview, chats.last_message_preview),
                     unread = COALESCE(excluded.unread, chats.unread),
                     avatar_url = COALESCE(excluded.avatar_url, chats.avatar_url),
+                    is_empty_conversation = COALESCE(
+                        excluded.is_empty_conversation,
+                        chats.is_empty_conversation
+                    ),
                     is_deleted = 0,
                     catalogued_at = excluded.catalogued_at""",
                 (
@@ -380,6 +414,9 @@ class TeamsSearchIndex:
                     chat.last_message_preview,
                     None if chat.unread is None else int(chat.unread),
                     chat.avatar_url,
+                    None
+                    if chat.is_empty_conversation is None
+                    else int(chat.is_empty_conversation),
                     now,
                 ),
             )

@@ -116,6 +116,7 @@ class ChatRecord(TypedDict):
     last_message_at: str | None
     last_message_preview: str | None
     unread: bool | None
+    is_empty_conversation: bool | None
 
 
 class CatalogCoverage(TypedDict):
@@ -131,6 +132,7 @@ class CatalogCoverage(TypedDict):
     fallback_chats_without_resolved_name: int
     total_chats: int
     returned_this_page: int
+    empty_chats_excluded: int
 
 
 class ListChatsResult(TypedDict):
@@ -478,6 +480,7 @@ def create_mcp_server(
         page_size: int = 50,
         page_token: str | None = None,
         refresh: bool = False,
+        no_empty_chats: bool = True,
     ) -> ListChatsResult:
         """List Teams chats by most recent activity, using bounded pages.
 
@@ -489,11 +492,13 @@ def create_mcp_server(
             page_size: Number of chats to return (1–100).
             page_token: Token returned by the preceding page, if any.
             refresh: Reload the chat catalog instead of using the short-lived cache.
+            no_empty_chats: Exclude conversations the catalog marks as empty before paging.
         """
         return teams.list_chats(
             page_size=page_size,
             page_token=page_token,
             refresh=refresh,
+            no_empty_chats=no_empty_chats,
         )
 
     @server.tool(annotations=READ_ONLY)

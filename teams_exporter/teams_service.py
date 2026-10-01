@@ -235,7 +235,13 @@ class TeamsService:
 
     def _get_chats(self, *, refresh: bool = False) -> list[ChatSummary]:
         if refresh or self._chats_cache is None or time.monotonic() >= self._chats_cache_until:
-            update = self.connector.get_chat_updates(self.index.get_chat_sync_token())
+            sync_token = self.index.get_chat_sync_token()
+            if not self.index.has_csa_empty_state_bootstrap():
+                sync_token = None
+            update = self.connector.get_chat_updates(
+                sync_token,
+                no_empty_chats=False,
+            )
             chats = update.get("chats")
             sync_token = update.get("sync_token")
             if not isinstance(chats, list):
@@ -247,6 +253,7 @@ class TeamsService:
                 chats,
                 sync_token,
                 deleted_ids=deleted_ids,
+                catalog_bootstrap=update.get("is_bootstrap") is True,
             )
             self._refresh_self_chat_activity()
             self._chats_cache = [
@@ -269,11 +276,24 @@ class TeamsService:
         if self_row is None:
             return
 
-        messages = self.connector.get_messages(
-            self.connector.SELF_CHAT_ID,
-            limit=1,
-        )
+        try:
+            messages = self.connector.get_messages(
+                self.connector.SELF_CHAT_ID,
+                limit=1,
+            )
+        except AuthenticationRequiredError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Self-chat activity refresh failed error_type=%s",
+                type(exc).__name__,
+            )
+            return
+
+        self_chat = self._chat_from_record(self_row)
         if not messages:
+            self_chat.is_empty_conversation = True
+            self.index.upsert_chats([self_chat])
             return
 
         latest = messages[-1]
@@ -281,8 +301,8 @@ class TeamsService:
         if last_message_at is None:
             return
 
-        self_chat = self._chat_from_record(self_row)
         self_chat.last_message_at = last_message_at
+        self_chat.is_empty_conversation = False
         preview = self.formatter.format_message(latest).strip()
         self_chat.last_message_preview = preview[:240] if preview else None
         self.index.upsert_chats([self_chat])
@@ -292,13 +312,21 @@ class TeamsService:
         page_size: int = MAX_LIST_PAGE_SIZE,
         page_token: str | None = None,
         include_avatar_uris: bool = False,
+        no_empty_chats: bool = True,
     ) -> dict[str, Any]:
         """Read the durable SQLite catalog without calling Teams."""
         self._validate_int("page_size", page_size, 1, MAX_LIST_PAGE_SIZE)
         if not isinstance(include_avatar_uris, bool):
             raise ValueError("include_avatar_uris must be a boolean.")
+        if not isinstance(no_empty_chats, bool):
+            raise ValueError("no_empty_chats must be a boolean.")
         self._ensure_session()
-        chats = [self._chat_from_record(record) for record in self.index.chat_catalog()]
+        all_chats = [self._chat_from_record(record) for record in self.index.chat_catalog()]
+        chats = (
+            [chat for chat in all_chats if chat.is_empty_conversation is not True]
+            if no_empty_chats
+            else all_chats
+        )
         offset = self._decode_offset(page_token)
         page = chats[offset : offset + page_size]
         next_offset = offset + len(page)
@@ -314,6 +342,7 @@ class TeamsService:
                 **self._catalog_coverage_record(),
                 "total_chats": len(chats),
                 "returned_this_page": len(page),
+                "empty_chats_excluded": len(all_chats) - len(chats),
                 "source": "local SQLite cache",
             },
         }
@@ -343,13 +372,21 @@ class TeamsService:
         page_token: str | None = None,
         refresh: bool = False,
         include_avatar_uris: bool = False,
+        no_empty_chats: bool = True,
     ) -> dict[str, Any]:
         """List the activity-ordered live chat catalog in bounded pages."""
         self._validate_int("page_size", page_size, 1, MAX_LIST_PAGE_SIZE)
         if not isinstance(include_avatar_uris, bool):
             raise ValueError("include_avatar_uris must be a boolean.")
+        if not isinstance(no_empty_chats, bool):
+            raise ValueError("no_empty_chats must be a boolean.")
         self._ensure_session()
-        chats = self._get_chats(refresh=refresh)
+        all_chats = self._get_chats(refresh=refresh)
+        chats = (
+            [chat for chat in all_chats if chat.is_empty_conversation is not True]
+            if no_empty_chats
+            else all_chats
+        )
         offset = self._decode_offset(page_token)
         page = chats[offset : offset + page_size]
         next_offset = offset + len(page)
@@ -365,6 +402,7 @@ class TeamsService:
                 **self._catalog_coverage_record(),
                 "total_chats": len(chats),
                 "returned_this_page": len(page),
+                "empty_chats_excluded": len(all_chats) - len(chats),
             },
         }
 
@@ -1726,6 +1764,7 @@ class TeamsService:
             "last_message_at": TeamsService._timestamp(chat.last_message_at),
             "last_message_preview": chat.last_message_preview,
             "unread": chat.unread,
+            "is_empty_conversation": chat.is_empty_conversation,
         }
 
     @staticmethod
@@ -1740,6 +1779,11 @@ class TeamsService:
         unread = record.get("unread")
         if isinstance(unread, int) and not isinstance(unread, bool):
             unread = bool(unread)
+        is_empty_conversation = record.get("is_empty_conversation")
+        if isinstance(is_empty_conversation, int) and not isinstance(
+            is_empty_conversation, bool
+        ):
+            is_empty_conversation = bool(is_empty_conversation)
         return ChatSummary(
             id=str(record["conversation_id"]),
             display_name=str(record["display_name"]),
@@ -1749,6 +1793,11 @@ class TeamsService:
             chat_type=record.get("chat_type"),
             avatar_url=record.get("avatar_url"),
             is_self_chat=str(record["conversation_id"]) == TeamsConnector.SELF_CHAT_ID,
+            is_empty_conversation=(
+                is_empty_conversation
+                if isinstance(is_empty_conversation, bool)
+                else None
+            ),
         )
 
     @staticmethod
