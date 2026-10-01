@@ -433,6 +433,58 @@ class TeamsConnectorTests(unittest.TestCase):
             expected,
         )
 
+    def test_empty_chat_filter_uses_explicit_csa_flag_and_can_include_all_rows(self):
+        rows = [
+            {"id": "19:empty", "title": "Empty", "isEmptyConversation": True},
+            {
+                "id": "19:message-without-preview",
+                "title": "Has non-text content",
+                "isEmptyConversation": False,
+                "lastMessage": {"content": ""},
+            },
+            {"id": "19:unknown", "title": "Unknown empty state"},
+        ]
+        metadata = {"isPartialData": False, "hasMoreChats": False}
+        default = StubConnector([{"chats": rows, "metadata": metadata}])
+        complete = StubConnector([{"chats": rows, "metadata": metadata}])
+
+        visible = default.list_chats()
+        all_chats = complete.list_chats(no_empty_chats=False)
+
+        self.assertEqual(
+            {chat.id for chat in visible},
+            {"19:message-without-preview", "19:unknown", "48:notes"},
+        )
+        self.assertEqual(len(all_chats), 4)
+        self.assertTrue(
+            next(chat for chat in all_chats if chat.id == "19:empty").is_empty_conversation
+        )
+
+    def test_csa_update_empty_filter_can_be_disabled(self):
+        response = {
+            "chats": [
+                {"id": "19:empty", "title": "Empty", "isEmptyConversation": True},
+                {"id": "19:active", "title": "Active", "isEmptyConversation": False},
+            ],
+            "channels": [],
+            "metadata": {
+                "syncToken": "sanitized-next-sync-token",
+                "isPartialData": False,
+                "hasMoreChats": False,
+            },
+        }
+        default = StubConnector([response])
+        complete = StubConnector([response])
+
+        self.assertEqual(
+            {chat.id for chat in default.get_chat_updates()["chats"]},
+            {"19:active", "48:notes"},
+        )
+        self.assertEqual(
+            {chat.id for chat in complete.get_chat_updates(no_empty_chats=False)["chats"]},
+            {"19:empty", "19:active", "48:notes"},
+        )
+
     def test_csa_updates_send_sync_token_and_include_channel_rows(self):
         client = StubConnector([{
             "chats": [{

@@ -53,6 +53,7 @@ class ServiceConnector(TeamsConnector):
         self.sent_messages = []
         self.profile_picture_calls = []
         self.sync_calls = []
+        self.update_empty_filters = []
         self.next_sync_token = "sanitized-sync-1"
 
     def login(self, *, interactive=True):
@@ -72,8 +73,9 @@ class ServiceConnector(TeamsConnector):
     def list_chats(self):
         return self.chats
 
-    def get_chat_updates(self, sync_token=None):
+    def get_chat_updates(self, sync_token=None, no_empty_chats=True):
         self.sync_calls.append(sync_token)
+        self.update_empty_filters.append(no_empty_chats)
         return {
             "chats": list(self.chats),
             "sync_token": self.next_sync_token,
@@ -229,6 +231,108 @@ class TeamsServiceTests(unittest.TestCase):
         self.assertEqual(first["coverage"]["fallback_chats_added"], 1)
         self.assertEqual(first["coverage"]["unclassified_service_rows_excluded"], 1)
         self.assertEqual(self.service.index.counts()["catalog_chats"], 2)
+
+    def test_empty_chats_are_filtered_before_pagination_and_can_be_recovered(self):
+        self.connector.chats = [
+            ChatSummary(
+                "19:empty-newest@thread.v2",
+                "Empty newest",
+                last_message_at=datetime(2026, 9, 28, 10, 0, 6, tzinfo=timezone.utc),
+                is_empty_conversation=True,
+            ),
+            ChatSummary(
+                "19:visible-newest@thread.v2",
+                "Visible newest",
+                last_message_at=datetime(2026, 9, 28, 10, 0, 5, tzinfo=timezone.utc),
+                is_empty_conversation=False,
+            ),
+            ChatSummary(
+                "19:empty-middle@thread.v2",
+                "Empty middle",
+                last_message_at=datetime(2026, 9, 28, 10, 0, 4, tzinfo=timezone.utc),
+                is_empty_conversation=True,
+            ),
+            ChatSummary(
+                "19:visible-older@thread.v2",
+                "Visible older",
+                last_message_at=datetime(2026, 9, 28, 10, 0, 3, tzinfo=timezone.utc),
+                is_empty_conversation=False,
+            ),
+            ChatSummary(
+                "19:unknown@thread.v2",
+                "Unknown empty state",
+                last_message_at=datetime(2026, 9, 28, 10, 0, 2, tzinfo=timezone.utc),
+            ),
+        ]
+
+        first = self.service.list_chats(page_size=1)
+        second = self.service.list_chats(
+            page_size=1,
+            page_token=first["next_page_token"],
+        )
+        third = self.service.list_chats(
+            page_size=1,
+            page_token=second["next_page_token"],
+        )
+
+        self.assertEqual(first["items"][0]["id"], "19:visible-newest@thread.v2")
+        self.assertEqual(second["items"][0]["id"], "19:visible-older@thread.v2")
+        self.assertEqual(first["coverage"]["total_chats"], 3)
+        self.assertEqual(first["coverage"]["empty_chats_excluded"], 2)
+        self.assertEqual(third["items"][0]["id"], "19:unknown@thread.v2")
+        self.assertIsNone(third["next_page_token"])
+
+        complete = self.service.list_chats(
+            page_size=10,
+            no_empty_chats=False,
+            refresh=True,
+        )
+        self.assertEqual(complete["coverage"]["total_chats"], 5)
+        self.assertEqual(complete["coverage"]["empty_chats_excluded"], 0)
+        self.assertEqual(
+            {item["id"] for item in complete["items"]},
+            {chat.id for chat in self.connector.chats},
+        )
+        cached_all = self.service.list_cached_chats(page_size=10, no_empty_chats=False)
+        self.assertEqual(cached_all["coverage"]["total_chats"], 5)
+
+    def test_unclassified_cached_catalog_bootstraps_once_to_populate_empty_metadata(self):
+        self.service.index.upsert_chat_updates(
+            [ChatSummary("19:old@thread.v2", "Old catalog row")],
+            "sanitized-existing-sync-token",
+        )
+        self.connector.chats = [
+            ChatSummary(
+                "19:old@thread.v2",
+                "Old catalog row",
+                is_empty_conversation=False,
+            ),
+            ChatSummary(
+                "19:empty@thread.v2",
+                "Empty",
+                is_empty_conversation=True,
+            ),
+            ChatSummary(
+                "19:active@thread.v2",
+                "Active",
+                is_empty_conversation=False,
+            ),
+        ]
+
+        result = self.service.list_chats(page_size=10, refresh=True)
+
+        self.assertEqual(self.connector.sync_calls, [None])
+        self.assertTrue(self.service.index.has_csa_empty_state_bootstrap())
+        self.assertEqual(
+            {item["id"] for item in result["items"]},
+            {"19:old@thread.v2", "19:active@thread.v2"},
+        )
+        reopened = TeamsSearchIndex(self.service.index.path)
+        self.assertTrue(reopened.has_csa_empty_state_bootstrap())
+        self.assertIs(
+            reopened.chat_catalog()[0]["is_empty_conversation"],
+            0,
+        )
 
     def test_refresh_merges_csa_delta_persists_cursor_and_reads_cache_without_network(self):
         self.service.list_chats(page_size=10)

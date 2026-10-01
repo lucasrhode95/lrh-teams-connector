@@ -57,6 +57,15 @@ class MCPContractTests(unittest.TestCase):
                         catalog_schema = str(tools_by_name["list_chats"].outputSchema)
                         self.assertIn("catalog_scope", catalog_schema)
                         self.assertIn("unclassified_service_rows_excluded", catalog_schema)
+                        self.assertIn("empty_chats_excluded", catalog_schema)
+                        self.assertIn(
+                            "is_empty_conversation",
+                            str(tools_by_name["list_chats"].outputSchema),
+                        )
+                        self.assertIn(
+                            "no_empty_chats",
+                            tools_by_name["list_chats"].inputSchema["properties"],
+                        )
                         self.assertIn(
                             "retry_count_this_call",
                             str(tools_by_name["get_messages"].outputSchema),

@@ -133,14 +133,27 @@ class ExportService:
     def has_recent_connection(self):
         return self.connection_recent
 
-    def list_chats(self, *, page_size=50, page_token=None, include_avatar_uris=False, refresh=False):
+    def list_chats(
+        self,
+        *,
+        page_size=50,
+        page_token=None,
+        include_avatar_uris=False,
+        refresh=False,
+        no_empty_chats=True,
+    ):
         if self.auth_required:
             raise AuthenticationRequiredError("not signed in")
         self.list_calls.append((page_size, page_token, include_avatar_uris))
         if refresh:
             self.refresh_calls.append(True)
+        chats = [
+            chat
+            for chat in self.chats
+            if not no_empty_chats or chat.is_empty_conversation is not True
+        ]
         offset = int(page_token.split(":")[1]) if page_token else 0
-        selected = self.chats[offset : offset + page_size]
+        selected = chats[offset : offset + page_size]
         next_offset = offset + len(selected)
         return {
             "items": [
@@ -149,19 +162,28 @@ class ExportService:
                     "name": chat.display_name,
                     "chat_type": chat.chat_type,
                     "last_message_at": None,
+                    "is_empty_conversation": chat.is_empty_conversation,
                     **({"avatar_url": chat.avatar_url} if include_avatar_uris else {}),
                 }
                 for chat in selected
             ],
-            "next_page_token": f"offset:{next_offset}" if next_offset < len(self.chats) else None,
+            "next_page_token": f"offset:{next_offset}" if next_offset < len(chats) else None,
         }
 
-    def list_cached_chats(self, *, page_size=50, page_token=None, include_avatar_uris=False):
+    def list_cached_chats(
+        self,
+        *,
+        page_size=50,
+        page_token=None,
+        include_avatar_uris=False,
+        no_empty_chats=True,
+    ):
         self.cached_list_calls.append((page_size, page_token, include_avatar_uris))
         return self.list_chats(
             page_size=page_size,
             page_token=page_token,
             include_avatar_uris=include_avatar_uris,
+            no_empty_chats=no_empty_chats,
         )
 
     def check_authentication(self):
@@ -396,6 +418,32 @@ class LocalTeamsServerTests(unittest.TestCase):
         self.assertEqual(result["source"], "cache")
         self.assertEqual(result["count"], 2)
         self.assertEqual(self.service.cached_list_calls, [(100, None, True)])
+
+    def test_chat_endpoints_hide_known_empty_chats_by_default_and_can_include_them(self):
+        self.service.chats.append(
+            ChatSummary(
+                "19:empty@thread.v2",
+                "Empty conversation",
+                is_empty_conversation=True,
+            )
+        )
+
+        status, _, body = self.request("GET", "/api/chats")
+        default_result = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(default_result["count"], 2)
+        self.assertNotIn("19:empty@thread.v2", {chat["id"] for chat in default_result["chats"]})
+
+        status, _, body = self.request("GET", "/api/chats?no_empty_chats=false")
+        complete_result = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(complete_result["count"], 3)
+        self.assertIn("19:empty@thread.v2", {chat["id"] for chat in complete_result["chats"]})
+
+        status, _, body = self.request("GET", "/api/cached-chats?no_empty_chats=false")
+        cached_result = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(cached_result["count"], 3)
 
     def test_auth_landing_explains_sign_in_and_gates_the_chat_page(self):
         self.service.auth_required = True
