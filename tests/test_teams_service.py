@@ -658,6 +658,22 @@ class TeamsServiceTests(unittest.TestCase):
         self.assertIn("third newest", resource["content"])
         self.assertNotIn("older excluded", resource["content"])
 
+    def test_unbounded_mcp_export_does_not_duplicate_every_id_for_the_job(self):
+        chat = self.connector.chats[0]
+        self.connector.pages[chat.id] = [
+            ([message("m2", 2, "newest"), message("m1", 1, "older")], None)
+        ]
+
+        result = self.service.export_chat(chat.id)
+
+        self.assertEqual(result["status"], "complete")
+        self.assertIsNone(result["coverage"]["remote_messages_retrieved_total"])
+        self.assertFalse(result["coverage"]["message_limit_reached"])
+        self.assertEqual(
+            self.service.index.count_export_job_messages(result["export_id"]),
+            0,
+        )
+
     def test_soft_deleted_message_remains_searchable_and_exported_with_a_clear_tag(self):
         chat = self.connector.chats[0]
         original = message("soft-deleted", 1, "retain this searchable project detail")
