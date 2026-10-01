@@ -332,6 +332,85 @@ class TeamsConnectorTests(unittest.TestCase):
         self.assertEqual(headers["x-skypetoken"], "skype-test-token")
         self.assertNotIn("Authentication", headers)
 
+    def test_csa_generic_chat_type_uses_one_to_one_flag_and_complete_roster(self):
+        def roster(size):
+            return [
+                {"mri": f"8:orgid:{identifier}", "objectId": identifier}
+                for identifier in ["self-guid"]
+                + [f"participant-{index}" for index in range(size - 1)]
+            ]
+
+        rows = [
+            {
+                "id": "19:group-a@thread.v2",
+                "title": "Group A",
+                "chatType": "chat",
+                "isOneOnOne": False,
+                "members": roster(9),
+                "lastMessage": {"originalArrivalTime": "2026-09-30T10:00:00Z"},
+            },
+            {
+                "id": "19:group-b@thread.v2",
+                "title": "Group B",
+                "chatType": "chat",
+                "isOneOnOne": False,
+                "members": roster(4),
+                "lastMessage": {"originalArrivalTime": "2026-09-30T09:00:00Z"},
+            },
+            {
+                "id": "19:group-c@thread.v2",
+                "title": "Group C",
+                "chatType": "chat",
+                "isOneOnOne": False,
+                "members": roster(5),
+                "lastMessage": {"originalArrivalTime": "2026-09-30T08:00:00Z"},
+            },
+            {
+                "id": "19:person@thread.v2",
+                "title": "Person",
+                "chatType": "chat",
+                "isOneOnOne": True,
+                "members": roster(2),
+                "lastMessage": {"originalArrivalTime": "2026-09-30T07:00:00Z"},
+            },
+            {
+                "id": "19:contradictory@thread.v2",
+                "title": "Contradictory roster",
+                "chatType": "chat",
+                "isOneOnOne": True,
+                "members": roster(3),
+                "lastMessage": {"originalArrivalTime": "2026-09-30T06:00:00Z"},
+            },
+        ]
+        expected = {
+            "19:group-a@thread.v2": "group",
+            "19:group-b@thread.v2": "group",
+            "19:group-c@thread.v2": "group",
+            "19:person@thread.v2": "oneOnOne",
+            "19:contradictory@thread.v2": "group",
+        }
+
+        startup = StubConnector([{
+            "chats": rows,
+            "metadata": {"isPartialData": False, "hasMoreChats": False},
+        }])
+        startup_chats = {chat.id: chat for chat in startup.list_chats()}
+        self.assertEqual(
+            {conversation_id: startup_chats[conversation_id].chat_type for conversation_id in expected},
+            expected,
+        )
+
+        updates = StubConnector([{
+            "chats": rows,
+            "channels": [],
+            "metadata": {"syncToken": "sanitized-next-token", "isPartialData": False, "hasMoreChats": False},
+        }])
+        update_chats = updates.get_chat_updates()["chats"]
+        self.assertEqual(
+            {chat.id: chat.chat_type for chat in update_chats if chat.id in expected},
+            expected,
+        )
+
     def test_csa_updates_send_sync_token_and_include_channel_rows(self):
         client = StubConnector([{
             "chats": [{
