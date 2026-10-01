@@ -479,6 +479,24 @@ class TeamsConnectorTests(unittest.TestCase):
             },
         )
 
+    def test_csa_chat_type_does_not_infer_meetings_from_placeholder_metadata(self):
+        client = StubConnector()
+
+        self.assertEqual(
+            client._csa_chat_type(
+                {
+                    "chatType": "chat",
+                    "isOneOnOne": False,
+                    "meetingInformation": {
+                        "subject": None,
+                        "startTime": "0001-01-01T00:00:00Z",
+                    },
+                }
+            ),
+            "group",
+        )
+        self.assertEqual(client._csa_chat_type({"chatType": "channel"}), "channel")
+
     def test_empty_chat_filter_uses_explicit_csa_flag_and_can_include_all_rows(self):
         rows = [
             {"id": "19:empty", "title": "Empty", "isEmptyConversation": True},
