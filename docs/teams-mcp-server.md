@@ -88,7 +88,7 @@ Replace `<repo>` with the absolute repository path and use the Python executable
 Add this to `~/.codex/config.toml`:
 
 ```toml
-[mcp_servers.teams_chat]
+[mcp_servers.lrh-teams]
 command = "C:\\path\\to\\scrape-teams-chat\\.venv\\Scripts\\python.exe"
 args = ["-m", "teams_exporter.mcp_server"]
 cwd = "C:\\path\\to\\scrape-teams-chat"
@@ -101,7 +101,7 @@ Create or update the project-root `.mcp.json`:
 ```json
 {
   "mcpServers": {
-    "teams_chat": {
+    "lrh-teams": {
       "type": "stdio",
       "command": "C:\\path\\to\\scrape-teams-chat\\.venv\\Scripts\\python.exe",
       "args": ["-m", "teams_exporter.mcp_server"]

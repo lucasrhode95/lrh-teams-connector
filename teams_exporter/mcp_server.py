@@ -448,7 +448,7 @@ def create_mcp_server(
     """Build the standard MCP tool server around the reusable Teams service."""
     teams = service or TeamsService(unsecure_tokens=unsecure_tokens)
     server = FastMCP(
-        "teams-chat-reader",
+        "lrh-teams",
         instructions=SERVER_INSTRUCTIONS,
     )
 
