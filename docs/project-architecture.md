@@ -69,3 +69,49 @@ On Windows, the absolute cache file is `%LOCALAPPDATA%\scrape-teams-chat\.teams_
 - [Teams API research](teams-api-research.md) records observed routes, payloads, and confidence limits.
 - [Product roadmap](teams-exporter-roadmap.md) records delivered work and remaining priorities.
 - [MCP server guide](teams-mcp-server.md) covers install, sign-in, configuration, tools, and archive operations.
+
+## Porting and rechecking an environment
+
+Use the [API research record](teams-api-research.md) as evidence and request-shape
+material, then investigate the target environment. The repository currently has no
+standalone research scripts or private probe-config file. The editable application
+settings and constructor parameters are the starting points:
+
+- The src/teams_connector implementation keeps tenant authority, client IDs, profiles,
+  denied pairs and fixed public API URLs in config.py. TokenProvider accepts profiles,
+  authority and a cache path. Changing clients may also require changing the sign-in
+  flow; the current command assumes the documented shared-client profile setup.
+- The teams_exporter implementation accepts tenant and a TokenProvider on TeamsConnector.
+  Its TokenProvider accepts tenant, client_id and cache_path. Service URLs and resource
+  scopes are named TeamsConnector constants. Keep this implementation independent until
+  its migration is requested.
+- Chat Service and Middle Tier regions come from the authenticated AuthZ response.
+  They must not be replaced with a copied user's regional URL. Tenant SharePoint links
+  come from service responses, not a fixed company hostname.
+- Both implementations select accounts from app-owned sign-in. There is no fixed expected
+  email. Preserve account-ownership checks and use a separate private cache/archive for
+  each investigation. The src implementation supports TEAMS_CONNECTOR_HOME; the legacy
+  provider accepts an explicit cache path.
+
+Investigation order:
+
+1. Select the tenant, approved client/resource profiles and an isolated private cache.
+   Complete the application's Microsoft sign-in without reusing browser credentials.
+2. Establish which resource tokens and Graph scopes that configuration actually grants.
+   Recorded denied pairs are the application's tested baseline, not a global ban. Reassess
+   them deliberately for a different environment before updating production settings.
+3. Make authorized read-only capability calls: identity; Graph teams/channels/files;
+   private-chat catalog and history; AuthZ regional discovery; CSA and Chat Service
+   equivalents where Graph does not serve the requirement. Compare each result to the
+   request shape and evidence in the research record.
+4. Record status, error category, response shape, counts, paging/coverage and date.
+   Missing tokens, HTTP errors and empty results need separate interpretation. A token
+   grant alone does not prove the operation works. Omit people, chat/project names,
+   identifiers, message text and credentials from published findings.
+5. Prefer documented Graph where proven usable, private services only for proven gaps,
+   and unsupported or unresolved where neither route is established. Changing endpoint
+   hosts also requires reviewing host allowlists, credential audiences and API compatibility.
+6. Verify with synthetic fixtures and fake transports. Run live writes only when the user
+   explicitly authorizes the destination and content; never include them in routine checks.
+
+Examples use fictional names and projects. Public source attribution remains intact.

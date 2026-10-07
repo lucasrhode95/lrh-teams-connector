@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlencode
 
+from teams_connector.config import GRAPH_ROOT
 from teams_connector.domain.errors import InvalidRequest, Upstream
 from teams_connector.remote.transport import (
     Credential,
@@ -23,7 +24,6 @@ from teams_connector.remote.transport import (
     service_error,
 )
 
-GRAPH_ROOT = "https://graph.microsoft.com/v1.0"
 PREFER = {"Prefer": "include-unknown-enum-members"}
 BATCH_LIMIT = 20  # Graph JSON batching maximum per request
 BATCH_CONCURRENCY = 2

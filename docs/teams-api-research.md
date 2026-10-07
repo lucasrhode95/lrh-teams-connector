@@ -17,6 +17,21 @@ The notes below use four evidence levels:
 
 Where evidence conflicts, prefer live traffic from the current Teams client.
 
+## Portability and privacy
+
+This is an anonymized compendium of observations from a tested environment, combined
+with attributed public sources. Live results describe their dated sample, client and
+resource configuration; they do not establish universal grants or denials. Names,
+search examples and message text in local examples and fixtures are fictional.
+
+For another account, tenant or changed policy, follow the investigation checklist in
+[the architecture guide](project-architecture.md#porting-and-rechecking-an-environment).
+Keep public API contracts, private request shapes and historical findings, and rerun
+the relevant calls before selecting a backend. A missing permission, expired token,
+bad request shape, transport failure and empty result are different outcomes.
+No private account, tenant identity, corporate endpoint or captured credential is
+required to use this record.
+
 ---
 
 # High-level architecture
@@ -1385,8 +1400,8 @@ Example:
   "EntityRequests": [
     {
       "Query": {
-        "QueryString": "Juniper",
-        "DisplayQueryString": "Juniper"
+        "QueryString": "Charlie",
+        "DisplayQueryString": "Charlie"
       },
       "EntityType": "People",
       "Size": 10,
@@ -1446,7 +1461,7 @@ Likely response:
   "EntityRequests": [
     {
       "Query": {
-        "QueryString": "analytics"
+        "QueryString": "example project"
       },
       "EntityType": "Chat",
       "Size": 10
@@ -2063,7 +2078,7 @@ that the browser's requests were intercepted.
   the tested upper-bound edge, so no server-side `until` filter is enabled.
 
 An additional focused history probe on 2026-09-30 used the user's selected
-Fiona direct conversation with the existing app-owned session. The exact
+direct conversation with the existing app-owned session. The exact
 display name resolved to one catalog entry; its two-member roster did not expose
 the supplied email address, so the conversation identity was matched by that
 unique display name rather than independently by email. No chat ID or message

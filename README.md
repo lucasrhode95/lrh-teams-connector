@@ -28,6 +28,15 @@ The local page uses Python's threaded standard-library HTTP server. It does not 
 
 The HTTP server writes formatted logs to stdout and to a daily-rotated file. The MCP server writes to the file only, keeping stdout available for MCP protocol messages. Logs are stored under `%LOCALAPPDATA%\scrape-teams-chat\logs` on Windows, or the standard per-user application data directory on other platforms. Each process uses its own log file so concurrent MCP and HTTP processes do not race while rotating files; seven daily backups are retained and older files are pruned at startup. Python warnings are redirected to the same logging system. The default level is `INFO`; set `TEAMS_EXPORTER_LOG_LEVEL=DEBUG` before starting a process for request and pagination detail. Operational logs record timings, statuses, and counts, not message bodies, search terms, chat names, identifiers, tokens, or authorization headers.
 
+## Portability and research
+
+The application has no fixed company account or tenant hostname. Public Microsoft client,
+resource and endpoint settings are editable, and regional service URLs come from sign-in.
+The [porting checklist](docs/project-architecture.md#porting-and-rechecking-an-environment)
+explains the two implementations' settings and how to reassess grants, Graph capabilities
+and private-service gaps. The research record contains anonymized historical observations,
+not universal permission guarantees.
+
 ## Project documentation
 
 - [Project architecture and module guide](docs/project-architecture.md)

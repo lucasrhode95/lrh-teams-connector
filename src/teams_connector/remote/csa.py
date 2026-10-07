@@ -1,6 +1,6 @@
 """Teams Chat Service Aggregator (private): the chat catalog, as a snapshot or a delta.
 
-Graph cannot list chats for the Teams client, so the chat catalog comes from here. Channels in the
+The tested baseline lacked Graph chat-list access, so this adapter supplies the chat catalog. Channels in the
 CSA rows are reported as ``channel_activity`` only: Graph is the channel catalog.
 """
 
@@ -10,6 +10,7 @@ import contextlib
 import re
 from typing import Any
 
+from teams_connector.config import CSA_UPDATES_URL as UPDATES_URL
 from teams_connector.domain.errors import InvalidRequest, Upstream
 from teams_connector.domain.models import Chat
 from teams_connector.remote import csa_mapping
@@ -19,7 +20,6 @@ from teams_connector.remote.ports import CatalogUpdate, People
 from teams_connector.remote.teams_session import CsaCredential, TeamsSession
 from teams_connector.remote.transport import TokenSource, Transport, operation
 
-UPDATES_URL = "https://teams.microsoft.com/api/csa/api/v1/teams/users/me/updates"
 MAX_FALLBACK_NAME_LOOKUPS = 20
 
 

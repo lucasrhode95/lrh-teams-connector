@@ -186,7 +186,7 @@ class SearchIndexStorageTests(unittest.TestCase):
             [
                 ChatSummary(
                     "19:channel@thread.tacv2",
-                    "Analytics · General",
+                    "Example Team · General",
                     chat_type="channel",
                     avatar_url="https://images.example.test/channel.png",
                 )

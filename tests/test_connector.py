@@ -574,10 +574,10 @@ class TeamsConnectorTests(unittest.TestCase):
         client = StubConnector()
         names = {
             "self-guid": "Taylor Example",
-            "z-guid": "Sutton, Dana",
-            "g-guid": "Grant, Fiona",
-            "p-guid": "Parker, Juniper",
-            "a-guid": "Archer, Nico",
+            "z-guid": "Taylor, Harper",
+            "g-guid": "Sample, Morgan",
+            "p-guid": "Smith, Charlie",
+            "a-guid": "Anderson, Jordan",
         }
         row = {
             "id": "19:untitled-group@thread.v2",
@@ -596,7 +596,7 @@ class TeamsConnectorTests(unittest.TestCase):
 
         self.assertEqual(
             summary.display_name,
-            "Archer, Nico | Grant, Fiona | Parker, Juniper | Sutton, Dana +1",
+            "Anderson, Jordan | Sample, Morgan | Smith, Charlie | Taylor, Harper +1",
         )
 
     def test_unnamed_group_title_uses_87_character_cutoff_and_counts_unknowns(self):
@@ -774,7 +774,7 @@ class TeamsConnectorTests(unittest.TestCase):
                         {
                             "conversationId": "19:channel@thread.tacv2",
                             "title": "General",
-                            "teamName": "Analytics",
+                            "teamName": "Example Team",
                             "lastMessage": {
                                 "content": "channel update",
                                 "originalArrivalTime": "2026-09-28T13:00:00Z",
@@ -807,7 +807,7 @@ class TeamsConnectorTests(unittest.TestCase):
         self.assertEqual(result["deleted_ids"], ["19:deleted@thread.tacv2"])
         channel = next(chat for chat in result["chats"] if chat.chat_type == "channel")
         self.assertEqual(channel.id, "19:channel@thread.tacv2")
-        self.assertEqual(channel.display_name, "Analytics · General")
+        self.assertEqual(channel.display_name, "Example Team · General")
         self.assertIn("profilepicturev2", channel.avatar_url)
         self.assertEqual(result["chats"][0].id, channel.id)
         self.assertNotIn("19:deleted@thread.tacv2", {chat.id for chat in result["chats"]})
@@ -1622,16 +1622,16 @@ class TeamsMessageFormatterTests(unittest.TestCase):
                 "messageType": "RichText/Html",
                 "content": (
                     "<p><span itemtype='http://schema.skype.com/Mention' "
-                    "itemid='0'>Parker,</span> "
+                    "itemid='0'>Smith,</span> "
                     "<span itemtype='http://schema.skype.com/Mention' "
-                    "itemid='1'>Juniper</span>"
+                    "itemid='1'>Charlie</span>"
                     " Please review the example plan.</p>"
                 ),
             }
         )
         self.assertEqual(
             text,
-            "@(Parker, Juniper) Please review the example plan.",
+            "@(Smith, Charlie) Please review the example plan.",
         )
 
     def test_split_mentions_merge_across_nbsp_whitespace_and_direct_adjacency(self):
@@ -1662,18 +1662,18 @@ class TeamsMessageFormatterTests(unittest.TestCase):
             {
                 "messageType": "RichText/Html",
                 "content": (
-                    "<span itemtype='http://schema.skype.com/Mention' itemid='0'>Baxter,</span>"
-                    "<span itemtype='http://schema.skype.com/Mention' itemid='1'>Jonah</span> "
-                    "<span itemtype='http://schema.skype.com/Mention' itemid='2'>Reyes,</span>"
-                    "<span itemtype='http://schema.skype.com/Mention' itemid='3'>Carla</span> "
-                    "<span itemtype='http://schema.skype.com/Mention' itemid='4'>Parker, Juniper</span>"
+                    "<span itemtype='http://schema.skype.com/Mention' itemid='0'>Example,</span>"
+                    "<span itemtype='http://schema.skype.com/Mention' itemid='1'>Avery</span> "
+                    "<span itemtype='http://schema.skype.com/Mention' itemid='2'>Sample,</span>"
+                    "<span itemtype='http://schema.skype.com/Mention' itemid='3'>Blake</span> "
+                    "<span itemtype='http://schema.skype.com/Mention' itemid='4'>Smith, Charlie</span>"
                     "<span itemtype='http://schema.skype.com/Mention' itemid='5'>Example, User</span>"
                 ),
             }
         )
         self.assertEqual(
             text,
-            "@(Baxter, Jonah) @(Reyes, Carla) @(Parker, Juniper)@(Example, User)",
+            "@(Example, Avery) @(Sample, Blake) @(Smith, Charlie)@(Example, User)",
         )
 
     def test_complete_mentions_do_not_merge_across_connective_text(self):
@@ -1682,26 +1682,26 @@ class TeamsMessageFormatterTests(unittest.TestCase):
                 "messageType": "RichText/Html",
                 "content": (
                     "<span itemtype='http://schema.skype.com/Mention'>"
-                    "Baxter, Jonah</span> and "
+                    "Example, Avery</span> and "
                     "<span itemtype='http://schema.skype.com/Mention'>"
-                    "Reyes, Carla</span>"
+                    "Sample, Blake</span>"
                 ),
             }
         )
-        self.assertEqual(text, "@(Baxter, Jonah) and @(Reyes, Carla)")
+        self.assertEqual(text, "@(Example, Avery) and @(Sample, Blake)")
 
     def test_surname_fragment_is_not_merged_with_another_complete_mention(self):
         text = self.formatter.format_message(
             {
                 "messageType": "RichText/Html",
                 "content": (
-                    "<span itemtype='http://schema.skype.com/Mention' itemid='0'>Baxter,</span>"
+                    "<span itemtype='http://schema.skype.com/Mention' itemid='0'>Example,</span>"
                     "<span itemtype='http://schema.skype.com/Mention' itemid='1'>"
-                    "Reyes, Carla</span>"
+                    "Sample, Blake</span>"
                 ),
             }
         )
-        self.assertEqual(text, "@(Baxter,)@(Reyes, Carla)")
+        self.assertEqual(text, "@(Example,)@(Sample, Blake)")
 
     def test_adjacent_different_mentions_keep_separate_delimiters(self):
         text = self.formatter.format_message(
@@ -1709,13 +1709,13 @@ class TeamsMessageFormatterTests(unittest.TestCase):
                 "messageType": "RichText/Html",
                 "content": (
                     "<span itemtype='http://schema.skype.com/Mention' "
-                    "itemid='8:orgid:one'>Parker</span> "
+                    "itemid='8:orgid:one'>Smith</span> "
                     "<span itemtype='http://schema.skype.com/Mention' "
-                    "itemid='8:orgid:two'>Juniper</span>"
+                    "itemid='8:orgid:two'>Charlie</span>"
                 ),
             }
         )
-        self.assertEqual(text, "@(Parker) @(Juniper)")
+        self.assertEqual(text, "@(Smith) @(Charlie)")
 
     def test_lists_links_blockquotes_and_code_are_readable(self):
         text = self.formatter.format_message(

@@ -96,3 +96,14 @@ Desktop.ini
 
 # Local scratch and derived files
 tmp/
+
+# Private network captures and exported browser sources
+web-app-download/
+captures/
+*.har
+*.har.*
+*.saz
+*.pcap
+*.pcapng
+*.zip
+*.7z

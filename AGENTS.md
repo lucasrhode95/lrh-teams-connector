@@ -53,6 +53,24 @@ uv run pytest
 
 Use synthetic fixtures and fake transports only. Never use live chat content, identities, or captures in tests.
 
+## Portability and research
+
+Keep source, documentation, comments and fixtures free of real personal names, account
+addresses, customer/project names and organization identifiers. Use fictional examples
+and synthetic message content, including HTML mention fragments and search examples.
+Deployment-specific URLs, clients, scopes and any expected-account checks belong in
+named configuration settings. Microsoft public endpoints and first-party client IDs
+may be baseline settings; keep regional service discovery and account-ownership checks.
+
+The research record is an anonymized, dated investigation starting point for forks and
+future policy changes. State which client, resource, operation and evidence support a
+finding, without identifying the account or organization. One environment's grants,
+denials or empty responses are not universal restrictions. Reassess capabilities before
+choosing Graph, private Teams services, or unsupported/unresolved status for a deployment.
+Flag genuinely organization-exclusive endpoints or fixed-account dependencies for the
+user's decision before changing them. If adding standalone research scripts, require an
+explicit private config file rather than embedding fallback settings in code.
+
 ## Teams-specific safety and authentication
 
 - Sending a Teams message is the only write path. Require explicit authorization for both destination and content. Send once; do not retry automatically after an uncertain result.

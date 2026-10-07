@@ -3,7 +3,7 @@
 All profiles use the Microsoft Teams public client, so one device-code sign-in yields a refresh token
 that silently serves every profile. The profiles encode the capability split established in
 docs/teams-api-research.md (Graph where it works for this client, private Teams services elsewhere);
-see docs/architecture.md §6 to adapt it.
+see docs/project-architecture.md (Porting and rechecking an environment) to adapt it.
 """
 
 from __future__ import annotations
@@ -16,6 +16,11 @@ APP_NAME = "lrh-teams-connector"
 CLI_NAME = "teams-connector"
 TENANT = "organizations"
 AUTHORITY = f"https://login.microsoftonline.com/{TENANT}"
+
+# Public-cloud endpoint settings. Regional Chat Service URLs still come from AuthZ.
+GRAPH_ROOT = "https://graph.microsoft.com/v1.0"
+AUTHZ_URL = "https://authsvc.teams.microsoft.com/v1.0/authz"
+CSA_UPDATES_URL = "https://teams.microsoft.com/api/csa/api/v1/teams/users/me/updates"
 
 TEAMS_CLIENT_ID = "1fec8e78-bce4-4aaf-ab1b-5451cc387264"
 
@@ -54,7 +59,7 @@ PROFILES: dict[str, TokenProfile] = {
 # The profile whose device-code sign-in creates the account's refresh token.
 SIGN_IN_PROFILE = "teams"
 
-# Client/scope pairs Microsoft refused with AADSTS65002 (research: Graph delegated access). Never request.
+# Denials observed in the tested baseline. Reassess for a new deployment; the app skips these pairs.
 DENIED_PAIRS: frozenset[tuple[str, str]] = frozenset(
     {
         (TEAMS_CLIENT_ID, "https://graph.microsoft.com/Chat.Read"),

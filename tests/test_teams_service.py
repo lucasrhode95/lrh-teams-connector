@@ -383,7 +383,7 @@ class TeamsServiceTests(unittest.TestCase):
             ),
             ChatSummary(
                 "19:channel@thread.tacv2",
-                "Analytics · General",
+                "Example Team · General",
                 chat_type="channel",
                 avatar_url="https://images.example.test/channel.png",
             ),
@@ -418,13 +418,13 @@ class TeamsServiceTests(unittest.TestCase):
             ),
             ChatSummary(
                 "19:group@thread.v2",
-                "Grant, Fiona | Parker, Juniper +1",
+                "Sample, Morgan | Smith, Charlie +1",
                 last_message_at=datetime(2026, 9, 28, 10, 0, 4, tzinfo=UTC),
                 chat_type="group",
             ),
             ChatSummary(
                 "19:human@thread.v2",
-                "Fiona Grant",
+                "Morgan Sample",
                 last_message_at=datetime(2026, 9, 28, 10, 0, 3, tzinfo=UTC),
                 chat_type="oneOnOne",
             ),
@@ -442,7 +442,7 @@ class TeamsServiceTests(unittest.TestCase):
         self.assertEqual(catalog["19:group@thread.v2"]["chat_type"], "group")
         self.assertEqual(
             catalog["19:group@thread.v2"]["display_name"],
-            "Grant, Fiona | Parker, Juniper +1",
+            "Sample, Morgan | Smith, Charlie +1",
         )
         self.assertEqual(catalog["19:human@thread.v2"]["chat_type"], "oneOnOne")
 

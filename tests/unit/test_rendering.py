@@ -42,21 +42,21 @@ def test_split_mention_fragments_merge(separator: str) -> None:
 
 def test_sequential_people_and_complete_mentions() -> None:
     content = (
-        MENTION.format(i=0, name="Baxter,") + MENTION.format(i=1, name="Jonah") + " "
-        + MENTION.format(i=2, name="Reyes,") + MENTION.format(i=3, name="Carla") + " "
-        + MENTION.format(i=4, name="Parker, Juniper") + MENTION.format(i=5, name="Example, User")
+        MENTION.format(i=0, name="Example,") + MENTION.format(i=1, name="Avery") + " "
+        + MENTION.format(i=2, name="Sample,") + MENTION.format(i=3, name="Blake") + " "
+        + MENTION.format(i=4, name="Smith, Charlie") + MENTION.format(i=5, name="Example, User")
     )  # fmt: skip
-    assert html(content) == "@(Baxter, Jonah) @(Reyes, Carla) @(Parker, Juniper)@(Example, User)"
+    assert html(content) == "@(Example, Avery) @(Sample, Blake) @(Smith, Charlie)@(Example, User)"
     connective = (
-        MENTION.format(i=0, name="Baxter, Jonah") + " and " + MENTION.format(i=1, name="Reyes, Carla")
+        MENTION.format(i=0, name="Example, Avery") + " and " + MENTION.format(i=1, name="Sample, Blake")
     )
-    assert html(connective) == "@(Baxter, Jonah) and @(Reyes, Carla)"
-    assert html(MENTION.format(i=0, name="Baxter,") + MENTION.format(i=1, name="Reyes, Carla")) == (
-        "@(Baxter,)@(Reyes, Carla)"
+    assert html(connective) == "@(Example, Avery) and @(Sample, Blake)"
+    assert html(MENTION.format(i=0, name="Example,") + MENTION.format(i=1, name="Sample, Blake")) == (
+        "@(Example,)@(Sample, Blake)"
     )
     assert (
-        html(MENTION.format(i=0, name="Parker") + " " + MENTION.format(i=1, name="Juniper"))
-        == "@(Parker) @(Juniper)"
+        html(MENTION.format(i=0, name="Smith") + " " + MENTION.format(i=1, name="Charlie"))
+        == "@(Smith) @(Charlie)"
     )
 
 

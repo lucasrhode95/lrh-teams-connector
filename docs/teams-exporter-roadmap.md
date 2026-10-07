@@ -100,7 +100,7 @@ presence                                              blocked by missing Presenc
 Microsoft Search chatMessage                          blocked in both v1 and beta
 ```
 
-An explicit delegated `Chat.Read` request with the Microsoft Teams first-party client ID returns `AADSTS65002`: Microsoft has not preauthorized that Microsoft-owned client for the requested Graph permission. Treat private-chat Graph reads as unavailable under the current app-owned authentication model unless Microsoft changes that preauthorization in the future.
+The tested environment's explicit delegated `Chat.Read` request with the Microsoft Teams first-party client ID returned `AADSTS65002`. Private-chat Graph reads remain unavailable in the current application's tested configuration. A fork or policy recheck must re-establish its grants and usable API calls before choosing this split; this historical denial is not a universal restriction.
 
 #### Migration order
 

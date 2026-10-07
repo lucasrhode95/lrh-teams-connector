@@ -13,10 +13,10 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
+from teams_connector.config import AUTHZ_URL
 from teams_connector.domain.errors import Upstream
 from teams_connector.remote.transport import Bearer, TokenSource, Transport, host_allowed, operation
 
-AUTHZ_URL = "https://authsvc.teams.microsoft.com/v1.0/authz"
 _DEFAULT_LIFETIME = 50 * 60
 _RENEW_MARGIN = 5 * 60
 
