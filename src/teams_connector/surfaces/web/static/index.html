@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="session-token" content="{{SESSION_TOKEN}}">
+  <title>Teams connector</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <p class="eyebrow">Teams connector</p>
+      <h1>Download conversations</h1>
+      <p>Choose one or more chats or channels, set optional filters, and download a text export.</p>
+    </div>
+    <div id="account-info" class="account-info" aria-label="Signed-in account" hidden>
+      <span id="account-avatar" class="avatar account-avatar" aria-hidden="true"></span>
+      <span class="account-copy">
+        <strong id="account-name"></strong>
+        <span id="account-email" class="account-email"></span>
+      </span>
+    </div>
+  </header>
+  <p id="auth-help" class="auth-help" hidden></p>
+  <section class="filters" aria-label="Export filters">
+    <div class="filter-field range-picker" id="range-picker">
+      <span class="field-label">Message date range</span>
+      <button id="range-toggle" class="range-toggle" type="button" aria-haspopup="dialog" aria-expanded="false">
+        <span id="range-label">Unlimited</span><span aria-hidden="true">⌄</span>
+      </button>
+      <div id="calendar" class="calendar" role="dialog" aria-label="Choose an inclusive message date range" hidden>
+        <div class="calendar-header">
+          <button id="previous-month" class="calendar-nav" type="button" aria-label="Previous month">‹</button>
+          <strong id="calendar-month"></strong>
+          <button id="next-month" class="calendar-nav" type="button" aria-label="Next month">›</button>
+        </div>
+        <div class="weekdays" aria-hidden="true"><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span><span>S</span></div>
+        <div id="calendar-days" class="calendar-days"></div>
+        <div class="calendar-footer">
+          <button id="clear-dates" class="secondary" type="button" aria-label="Clear date range (unlimited)">Clear</button>
+          <span id="calendar-hint" class="calendar-hint">Click once for one day; click again to set the end date.</span>
+          <button id="calendar-done" class="secondary" type="button">Done</button>
+        </div>
+      </div>
+      <input id="from-date" type="hidden">
+      <input id="to-date" type="hidden">
+    </div>
+    <label for="message-limit">Maximum messages per chat <input id="message-limit" type="number" min="1" max="1000000" step="1" placeholder="Unlimited"></label>
+    <label class="combine"><input id="combine" type="checkbox" disabled><span>Combine selected conversations into one text file</span></label>
+  </section>
+  <section aria-label="Conversation selection">
+    <div class="list-heading">
+      <label for="chat-search">Find a conversation <input id="chat-search" type="search" placeholder="Chat or channel name"></label>
+      <span id="selection-count" class="count">0 selected</span>
+    </div>
+    <div id="chat-list" class="chat-list" aria-live="polite"><div class="loading-state" role="status"><span class="spinner" aria-hidden="true"></span><span>Loading conversations…</span></div></div>
+  </section>
+  <div class="actions">
+    <p id="status" role="status" aria-live="polite"></p>
+    <div class="action-buttons">
+      <button id="refresh" class="secondary" type="button">Refresh chats</button>
+      <button id="cancel-export" class="secondary" type="button" hidden>Cancel export</button>
+      <button id="download" class="primary" type="button" disabled>Download</button>
+    </div>
+  </div>
+</main>
+<script src="/static/app.js" type="module"></script>
+</body>
+</html>

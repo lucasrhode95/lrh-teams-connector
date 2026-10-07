@@ -8,16 +8,17 @@ import re
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable, Iterator
+from contextlib import suppress
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from threading import Event
-from typing import Any, Callable, Iterator
+from typing import Any
 from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsplit
 
 from teams_exporter.token_provider import AuthenticationRequiredError, TokenProvider
-
 
 logger = logging.getLogger(__name__)
 
@@ -206,9 +207,7 @@ class TeamsConnector:
         tokens = self._authz_response.get("tokens") or {}
         nested_skype = self._authz_response.get("skypeToken") or {}
         self._skype_token = (
-            tokens.get("skypeToken")
-            or tokens.get("skypetoken")
-            or nested_skype.get("skypetoken")
+            tokens.get("skypeToken") or tokens.get("skypetoken") or nested_skype.get("skypetoken")
         )
         if not self._skype_token:
             raise RuntimeError("Teams AuthZ succeeded without returning a Skype token.")
@@ -232,11 +231,7 @@ class TeamsConnector:
             "name": claims.get("name"),
             "given_name": claims.get("given_name"),
             "family_name": claims.get("family_name"),
-            "username": (
-                claims.get("preferred_username")
-                or claims.get("upn")
-                or claims.get("unique_name")
-            ),
+            "username": (claims.get("preferred_username") or claims.get("upn") or claims.get("unique_name")),
             "user_id": claims.get("oid"),
             "tenant_id": claims.get("tid"),
             "country": claims.get("ctry"),
@@ -272,10 +267,7 @@ class TeamsConnector:
                 f"/profilepicturev2/{quote(target_mri, safe=':')}"
             )
         else:
-            picture_path = (
-                f"{base_path}/beta/users/{quote(target_mri, safe=':')}"
-                "/profilepicturev2"
-            )
+            picture_path = f"{base_path}/beta/users/{quote(target_mri, safe=':')}/profilepicturev2"
         name = display_name
         if name is None and target_id == current_user_id:
             name = self._spaces_claims.get("name")
@@ -311,9 +303,7 @@ class TeamsConnector:
                 "User-Agent": "Microsoft Teams compatible client",
             },
         )
-        opener = urllib.request.build_opener(
-            _MiddleTierRedirectHandler(self._middle_tier_url or "")
-        )
+        opener = urllib.request.build_opener(_MiddleTierRedirectHandler(self._middle_tier_url or ""))
         max_image_bytes = 2_000_000
         for attempt in range(1, self.READ_REQUEST_MAX_ATTEMPTS + 1):
             retry_after = None
@@ -330,7 +320,6 @@ class TeamsConnector:
                         raise RuntimeError("Teams profile picture exceeded the image size limit.")
                     return content, content_type
             except urllib.error.HTTPError as exc:
-                location = self._safe_location(url)
                 if exc.code in {401, 403}:
                     exc.close()
                     self.invalidate_session()
@@ -341,9 +330,7 @@ class TeamsConnector:
                 if exc.code not in self.RETRYABLE_HTTP_STATUSES:
                     status = exc.code
                     exc.close()
-                    raise RuntimeError(
-                        f"Teams profile picture request failed with HTTP {status}."
-                    ) from None
+                    raise RuntimeError(f"Teams profile picture request failed with HTTP {status}.") from None
                 retry_after = exc.headers.get("Retry-After") if exc.headers else None
                 exc.close()
             except (urllib.error.URLError, TimeoutError, OSError) as exc:
@@ -356,8 +343,7 @@ class TeamsConnector:
 
             if attempt >= self.READ_REQUEST_MAX_ATTEMPTS:
                 raise RuntimeError(
-                    "Teams profile picture request failed after "
-                    f"{self.READ_REQUEST_MAX_ATTEMPTS} attempts."
+                    f"Teams profile picture request failed after {self.READ_REQUEST_MAX_ATTEMPTS} attempts."
                 ) from None
             time.sleep(self._read_retry_delay(attempt, retry_after))
 
@@ -387,13 +373,10 @@ class TeamsConnector:
         self._require_logged_in()
         expires_at = self._spaces_claims.get("exp")
         if isinstance(expires_at, (int, float)):
-            expires_at = datetime.fromtimestamp(
-                expires_at, tz=timezone.utc
-            ).isoformat()
+            expires_at = datetime.fromtimestamp(expires_at, tz=UTC).isoformat()
         return {
             "authentication_sources": dict(self._auth_sources),
-            "client_id": self._spaces_claims.get("appid")
-            or self._spaces_claims.get("azp"),
+            "client_id": self._spaces_claims.get("appid") or self._spaces_claims.get("azp"),
             "audience": self._spaces_claims.get("aud"),
             "scopes": self._spaces_claims.get("scp"),
             "spaces_access_token_expires_at": expires_at,
@@ -490,12 +473,9 @@ class TeamsConnector:
         )
         self._add_one_to_one_profile_picture_uris(raw_chats, normalized)
         if no_empty_chats:
-            normalized = [
-                chat for chat in normalized
-                if chat.is_empty_conversation is not True
-            ]
+            normalized = [chat for chat in normalized if chat.is_empty_conversation is not True]
 
-        oldest = datetime.min.replace(tzinfo=timezone.utc)
+        oldest = datetime.min.replace(tzinfo=UTC)
         ordered = sorted(
             normalized,
             key=lambda chat: chat.last_message_at or oldest,
@@ -503,8 +483,7 @@ class TeamsConnector:
         )
         self.catalog_coverage = ChatCatalogCoverage(
             catalog_complete=(
-                metadata.get("isPartialData") is False
-                and metadata.get("hasMoreChats") is False
+                metadata.get("isPartialData") is False and metadata.get("hasMoreChats") is False
             ),
             catalog_source="CSA updates" + (" bootstrap" if not used_sync_token else " delta"),
             catalog_scope=self.CHAT_CATALOG_SCOPE,
@@ -525,17 +504,9 @@ class TeamsConnector:
 
     @staticmethod
     def _csa_update_conversation_id(row: dict[str, Any], entity_type: str) -> str:
-        keys = (
-            ("conversationId", "threadId", "id", "chatId")
-            if entity_type == "channel"
-            else ("id",)
-        )
+        keys = ("conversationId", "threadId", "id", "chatId") if entity_type == "channel" else ("id",)
         conversation_id = next(
-            (
-                value
-                for key in keys
-                if isinstance((value := row.get(key)), str) and value
-            ),
+            (value for key in keys if isinstance((value := row.get(key)), str) and value),
             None,
         )
         if not isinstance(conversation_id, str):
@@ -582,9 +553,13 @@ class TeamsConnector:
             or chat_id
         )
         team_title = row.get("teamName") or team.get("title") or team.get("displayName") or team.get("name")
-        if entity_type == "channel" and isinstance(team_title, str) and team_title.strip():
-            if str(title).casefold() != team_title.strip().casefold():
-                title = f"{team_title.strip()} · {title}"
+        if (
+            entity_type == "channel"
+            and isinstance(team_title, str)
+            and team_title.strip()
+            and str(title).casefold() != team_title.strip().casefold()
+        ):
+            title = f"{team_title.strip()} · {title}"
 
         content = last_message.get("content")
         preview = content.strip()[:240] if isinstance(content, str) else None
@@ -626,9 +601,7 @@ class TeamsConnector:
             thread_properties.get("threadType"),
         )
         normalized_types = {
-            normalized
-            for value in type_values
-            if (normalized := self._normalize_chat_type_value(value))
+            normalized for value in type_values if (normalized := self._normalize_chat_type_value(value))
         }
         if "meeting" in normalized_types:
             return "meeting"
@@ -704,8 +677,7 @@ class TeamsConnector:
             payload.get("type"),
         )
         return any(
-            isinstance(value, str)
-            and "synctokenexpired" in re.sub(r"[^a-z]", "", value.casefold())
+            isinstance(value, str) and "synctokenexpired" in re.sub(r"[^a-z]", "", value.casefold())
             for value in values
         )
 
@@ -717,16 +689,11 @@ class TeamsConnector:
         logger.info("Teams chat catalog fetch started")
         payload = self._request_csa(self.CSA_STARTUP_URL)
         metadata = self._mapping(payload.get("metadata"))
-        is_partial = metadata.get("isPartialData") is True or metadata.get(
-            "hasMoreChats"
-        ) is True
+        is_partial = metadata.get("isPartialData") is True or metadata.get("hasMoreChats") is True
         csa_reported_complete = (
-            metadata.get("isPartialData") is False
-            and metadata.get("hasMoreChats") is False
+            metadata.get("isPartialData") is False and metadata.get("hasMoreChats") is False
         )
-        csa_reported_partial = (
-            True if is_partial else False if csa_reported_complete else None
-        )
+        csa_reported_partial = True if is_partial else False if csa_reported_complete else None
         needs_chat_service_fallback = csa_reported_partial is not False
         chats = payload.get("chats")
         if not isinstance(chats, list):
@@ -774,26 +741,18 @@ class TeamsConnector:
                 fallback_summaries.append(summary)
                 fallback_chats_added += 1
                 known_ids.add(conversation_id)
-            fallback_name_lookups_attempted = self._resolve_fallback_chat_names(
-                fallback_rows, normalized
-            )
-        self_chat_synthesized = not any(
-            chat.id == self.SELF_CHAT_ID for chat in normalized
-        )
+            fallback_name_lookups_attempted = self._resolve_fallback_chat_names(fallback_rows, normalized)
+        self_chat_synthesized = not any(chat.id == self.SELF_CHAT_ID for chat in normalized)
         self._ensure_self_chat(normalized)
         fallback_chats_without_name = sum(
-            summary.display_name == summary.id
-            for summary in fallback_summaries
+            summary.display_name == summary.id for summary in fallback_summaries
         )
         if no_empty_chats:
-            normalized = [
-                chat for chat in normalized
-                if chat.is_empty_conversation is not True
-            ]
+            normalized = [chat for chat in normalized if chat.is_empty_conversation is not True]
         # The visible Teams chat rows matched descending last-message time in a live
         # comparison better than the raw CSA array. Stable sorting retains the
         # CSA order when two chats have the same timestamp.
-        oldest = datetime.min.replace(tzinfo=timezone.utc)
+        oldest = datetime.min.replace(tzinfo=UTC)
         ordered = sorted(
             normalized,
             key=lambda chat: chat.last_message_at or oldest,
@@ -803,10 +762,7 @@ class TeamsConnector:
         self.catalog_coverage = ChatCatalogCoverage(
             catalog_complete=(
                 csa_reported_partial is False
-                or (
-                    chat_service_unique_rows is not None
-                    and unclassified_rows_excluded == 0
-                )
+                or (chat_service_unique_rows is not None and unclassified_rows_excluded == 0)
             ),
             catalog_source=(
                 "; ".join(
@@ -832,7 +788,8 @@ class TeamsConnector:
             fallback_chats_without_resolved_name=fallback_chats_without_name,
         )
         logger.info(
-            "Teams chat catalog fetch completed chats=%d csa_partial=%s fallback_added=%d excluded_non_chat=%d excluded_unclassified=%d",
+            "Teams chat catalog fetch completed "
+            "chats=%d csa_partial=%s fallback_added=%d excluded_non_chat=%d excluded_unclassified=%d",
             len(ordered),
             csa_reported_partial,
             fallback_chats_added,
@@ -942,9 +899,7 @@ class TeamsConnector:
         )
 
     def _self_chat_display_name(self) -> str:
-        name = self._spaces_claims.get("name") or self._spaces_claims.get(
-            "preferred_username"
-        )
+        name = self._spaces_claims.get("name") or self._spaces_claims.get("preferred_username")
         if not isinstance(name, str) or not name.strip():
             return "Notes to self"
         label = name.strip()
@@ -957,9 +912,7 @@ class TeamsConnector:
         if not self._chat_service_url:
             raise RuntimeError("Teams AuthZ did not return a Chat Service URL.")
 
-        endpoint = (
-            f"{self._chat_service_url.rstrip('/')}/v1/users/ME/conversations"
-        )
+        endpoint = f"{self._chat_service_url.rstrip('/')}/v1/users/ME/conversations"
         url = self._set_query_parameters(
             endpoint,
             view="mychats",
@@ -972,24 +925,18 @@ class TeamsConnector:
         while url:
             self._validate_service_url(url, self._chat_service_url, "Chat Service")
             if url in seen_urls:
-                raise RuntimeError(
-                    "Teams repeated a conversation catalog continuation link."
-                )
+                raise RuntimeError("Teams repeated a conversation catalog continuation link.")
             seen_urls.add(url)
 
             payload = self._request_chat_service(url)
             page = payload.get("conversations")
-            if not isinstance(page, list) or any(
-                not isinstance(conversation, dict) for conversation in page
-            ):
+            if not isinstance(page, list) or any(not isinstance(conversation, dict) for conversation in page):
                 raise RuntimeError("Unexpected Teams conversation catalog response.")
 
             for conversation in page:
                 conversation_id = conversation.get("id")
                 if not isinstance(conversation_id, str) or not conversation_id:
-                    raise RuntimeError(
-                        "Unexpected Teams conversation catalog row without an ID."
-                    )
+                    raise RuntimeError("Unexpected Teams conversation catalog row without an ID.")
                 if conversation_id in seen_ids:
                     continue
                 conversations.append(conversation)
@@ -998,16 +945,12 @@ class TeamsConnector:
             metadata = self._mapping(payload.get("_metadata"))
             backward_link = metadata.get("backwardLink")
             if backward_link is not None and not isinstance(backward_link, str):
-                raise RuntimeError(
-                    "Unexpected Teams conversation catalog continuation link."
-                )
+                raise RuntimeError("Unexpected Teams conversation catalog continuation link.")
             url = backward_link or None
 
         return conversations
 
-    def _summarize_chat_service_conversation(
-        self, conversation: dict[str, Any]
-    ) -> ChatSummary:
+    def _summarize_chat_service_conversation(self, conversation: dict[str, Any]) -> ChatSummary:
         conversation_id = str(conversation["id"])
         properties = self._mapping(conversation.get("properties"))
         thread_properties = self._mapping(conversation.get("threadProperties"))
@@ -1026,9 +969,7 @@ class TeamsConnector:
             conversation_id,
         )
         last_message_at = self.message_datetime(last_message) or (
-            self.message_datetime(
-                {"originalArrivalTime": properties.get("lastimreceivedtime")}
-            )
+            self.message_datetime({"originalArrivalTime": properties.get("lastimreceivedtime")})
         )
         content = last_message.get("content")
         preview = content.strip()[:240] if isinstance(content, str) else None
@@ -1039,22 +980,16 @@ class TeamsConnector:
             thread_type,
             conversation_id,
         )
-        is_empty_conversation = self._optional_bool(
-            conversation.get("isEmptyConversation")
-        )
+        is_empty_conversation = self._optional_bool(conversation.get("isEmptyConversation"))
         if is_empty_conversation is None:
-            is_empty_conversation = self._optional_bool(
-                properties.get("isEmptyConversation")
-            )
+            is_empty_conversation = self._optional_bool(properties.get("isEmptyConversation"))
         return ChatSummary(
             id=conversation_id,
             display_name=str(title),
             last_message_at=last_message_at,
             last_message_preview=preview,
             chat_type=chat_type,
-            avatar_url=self._avatar_url_from_rows(
-                conversation, properties, thread_properties
-            ),
+            avatar_url=self._avatar_url_from_rows(conversation, properties, thread_properties),
             is_self_chat=conversation_id == self.SELF_CHAT_ID,
             is_empty_conversation=is_empty_conversation,
         )
@@ -1068,9 +1003,7 @@ class TeamsConnector:
     ) -> str | None:
         """Map Chat Service product/thread types onto the catalog taxonomy."""
         product_normalized = (
-            re.sub(r"[^a-z0-9]", "", product_type.casefold())
-            if isinstance(product_type, str)
-            else ""
+            re.sub(r"[^a-z0-9]", "", product_type.casefold()) if isinstance(product_type, str) else ""
         )
         if conversation_id == cls.SELF_CHAT_ID and product_normalized == "streamofnotes":
             return "chat"
@@ -1105,9 +1038,10 @@ class TeamsConnector:
             for member in members:
                 if not isinstance(member, dict):
                     continue
-                identifiers = [(value, self._profile_identifier(value)) for value in (
-                    member.get("mri"), member.get("objectId")
-                )]
+                identifiers = [
+                    (value, self._profile_identifier(value))
+                    for value in (member.get("mri"), member.get("objectId"))
+                ]
                 name = member.get("displayName") or member.get("name")
                 for value, identifier in identifiers:
                     if identifier and identifier != own_id:
@@ -1124,9 +1058,7 @@ class TeamsConnector:
             if peer_id.startswith("28:"):
                 continue
             display_name = member_name or summary.display_name
-            summary.avatar_url = self.get_profile_picture_uri(
-                source_id, display_name
-            )
+            summary.avatar_url = self.get_profile_picture_uri(source_id, display_name)
 
     @staticmethod
     def _avatar_url_from_rows(*rows: dict[str, Any]) -> str | None:
@@ -1238,9 +1170,7 @@ class TeamsConnector:
                 and complete_count > 2
                 and own_id in member_ids
             ):
-                group_candidates.append(
-                    (summary, member_ids, member_names, complete_count)
-                )
+                group_candidates.append((summary, member_ids, member_names, complete_count))
                 for member_id in peers:
                     if (
                         not member_names.get(member_id)
@@ -1251,13 +1181,9 @@ class TeamsConnector:
 
         profile_names: dict[str, str] = {}
         if profile_targets:
-            try:
-                profile_names = self._fetch_middle_tier_profile_names(
-                    list(profile_targets)
-                )
-            except RuntimeError:
-                # A profile lookup must not make the CSA catalog unavailable.
-                pass
+            # A profile lookup must not make the CSA catalog unavailable.
+            with suppress(RuntimeError):
+                profile_names = self._fetch_middle_tier_profile_names(list(profile_targets))
         for profile_id, summaries_for_profile in profile_targets.items():
             name = profile_names.get(profile_id)
             if name:
@@ -1267,9 +1193,7 @@ class TeamsConnector:
 
         for summary, member_ids, member_names, participant_count in group_candidates:
             resolved_names = [
-                member_names.get(member_id)
-                or names_by_id.get(member_id)
-                or profile_names.get(member_id)
+                member_names.get(member_id) or names_by_id.get(member_id) or profile_names.get(member_id)
                 for member_id in member_ids
                 if member_id != own_id and not member_id.startswith("28:")
             ]
@@ -1287,11 +1211,7 @@ class TeamsConnector:
     ) -> str | None:
         """Build a deterministic group label from names in a complete roster."""
         names = sorted(
-            [
-                name.strip()
-                for name in participant_names
-                if isinstance(name, str) and name.strip()
-            ],
+            [name.strip() for name in participant_names if isinstance(name, str) and name.strip()],
             key=lambda name: (name.casefold(), name),
         )
         if not names:
@@ -1373,9 +1293,7 @@ class TeamsConnector:
         for key in sender_keys:
             value = message.get(key)
             candidates = (
-                [value.get(nested_key) for nested_key in id_keys]
-                if isinstance(value, dict)
-                else [value]
+                [value.get(nested_key) for nested_key in id_keys] if isinstance(value, dict) else [value]
             )
             for candidate in candidates:
                 if not isinstance(candidate, str) or not candidate.strip():
@@ -1436,9 +1354,7 @@ class TeamsConnector:
         self._require_logged_in()
         if not isinstance(conversation_id, str) or not conversation_id.strip():
             raise ValueError("conversation_id must be a non-empty string.")
-        if limit is not None and (
-            isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0
-        ):
+        if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0):
             raise ValueError("limit must be a positive integer or None.")
         since_utc = self._validate_bound("since", since)
         until_utc = self._validate_bound("until", until)
@@ -1452,11 +1368,7 @@ class TeamsConnector:
         )
         url = self._set_query_parameters(
             endpoint,
-            startTime=(
-                str(self._epoch_milliseconds(since_utc))
-                if since_utc is not None
-                else "0"
-            ),
+            startTime=(str(self._epoch_milliseconds(since_utc)) if since_utc is not None else "0"),
             pageSize=str(first_page_size),
             view="msnp24Equivalent",
         )
@@ -1500,16 +1412,12 @@ class TeamsConnector:
                 except Exception:
                     retry_count += self.last_request_retry_count
                     if progress_callback is not None:
-                        progress_callback(
-                            pages_fetched, messages_retrieved, retry_count
-                        )
+                        progress_callback(pages_fetched, messages_retrieved, retry_count)
                     raise
                 retry_count += self.last_request_retry_count
 
                 page = payload.get("messages")
-                if not isinstance(page, list) or any(
-                    not isinstance(message, dict) for message in page
-                ):
+                if not isinstance(page, list) or any(not isinstance(message, dict) for message in page):
                     raise RuntimeError("Unexpected Teams messages response.")
 
                 raw_items_scanned += len(page)
@@ -1559,13 +1467,9 @@ class TeamsConnector:
                         "Chat Service",
                     )
 
-                pages_without_new_messages = (
-                    0 if new_ids_on_page else pages_without_new_messages + 1
-                )
+                pages_without_new_messages = 0 if new_ids_on_page else pages_without_new_messages + 1
                 if pages_without_new_messages >= 3 and not limit_reached:
-                    raise RuntimeError(
-                        "Teams returned three message pages without new message IDs."
-                    )
+                    raise RuntimeError("Teams returned three message pages without new message IDs.")
                 if progress_callback is not None:
                     progress_callback(pages_fetched, messages_retrieved, retry_count)
                 if selected_descending:
@@ -1592,7 +1496,8 @@ class TeamsConnector:
                 }
             )
             logger.info(
-                "Teams history read finished pages=%d scanned=%d retrieved=%d duplicates=%d retries=%d complete=%s",
+                "Teams history read finished "
+                "pages=%d scanned=%d retrieved=%d duplicates=%d retries=%d complete=%s",
                 pages_fetched,
                 raw_items_scanned,
                 messages_retrieved,
@@ -1634,11 +1539,7 @@ class TeamsConnector:
         if continuation_url is None:
             url = self._set_query_parameters(
                 self._messages_url(conversation_id),
-                startTime=(
-                    str(self._epoch_milliseconds(since_utc))
-                    if since_utc is not None
-                    else "0"
-                ),
+                startTime=(str(self._epoch_milliseconds(since_utc)) if since_utc is not None else "0"),
                 pageSize=str(page_size),
                 view="msnp24Equivalent",
             )
@@ -1647,7 +1548,8 @@ class TeamsConnector:
         self._validate_message_page_url(url, conversation_id)
 
         logger.debug(
-            "Teams bounded message page request started page_size=%d has_since=%s has_until=%s continuation=%s",
+            "Teams bounded message page request started "
+            "page_size=%d has_since=%s has_until=%s continuation=%s",
             page_size,
             since_utc is not None,
             until_utc is not None,
@@ -1655,9 +1557,7 @@ class TeamsConnector:
         )
         payload = self._request_chat_service(url)
         page = payload.get("messages")
-        if not isinstance(page, list) or any(
-            not isinstance(message, dict) for message in page
-        ):
+        if not isinstance(page, list) or any(not isinstance(message, dict) for message in page):
             raise RuntimeError("Unexpected Teams messages response.")
 
         selected: list[dict[str, Any]] = []
@@ -1680,7 +1580,8 @@ class TeamsConnector:
         if next_url:
             self._validate_message_page_url(next_url, conversation_id)
         logger.debug(
-            "Teams bounded message page received scanned=%d selected=%d missing_timestamps=%d has_continuation=%s",
+            "Teams bounded message page received "
+            "scanned=%d selected=%d missing_timestamps=%d has_continuation=%s",
             len(page),
             len(selected),
             missing_timestamp_count,
@@ -1701,14 +1602,11 @@ class TeamsConnector:
         if not self._chat_service_url:
             raise RuntimeError("Teams AuthZ did not return a Chat Service URL.")
         endpoint = (
-            f"{self._chat_service_url.rstrip('/')}/v1/threads/"
-            f"{quote(conversation_id, safe='')}/members"
+            f"{self._chat_service_url.rstrip('/')}/v1/threads/{quote(conversation_id, safe='')}/members"
         )
         payload = self._request_chat_service(endpoint)
         members = payload.get("members")
-        if not isinstance(members, list) or any(
-            not isinstance(member, dict) for member in members
-        ):
+        if not isinstance(members, list) or any(not isinstance(member, dict) for member in members):
             raise RuntimeError("Unexpected Teams conversation members response.")
         resolved_members = [dict(member) for member in members]
         identifiers = {
@@ -1751,22 +1649,14 @@ class TeamsConnector:
         if "\x00" in text:
             raise ValueError("text cannot contain a null character.")
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         candidate_id = self._epoch_milliseconds(now)
-        self._last_client_message_id = max(
-            candidate_id, self._last_client_message_id + 1
-        )
+        self._last_client_message_id = max(candidate_id, self._last_client_message_id + 1)
         client_message_id = str(self._last_client_message_id)
         normalized_text = text.replace("\r\n", "\n").replace("\r", "\n")
-        escaped_lines = [
-            html.escape(line, quote=False) for line in normalized_text.split("\n")
-        ]
+        escaped_lines = [html.escape(line, quote=False) for line in normalized_text.split("\n")]
         content = "<p>" + "<br>".join(escaped_lines) + "</p>"
-        sender_name = (
-            self._spaces_claims.get("name")
-            or self._spaces_claims.get("preferred_username")
-            or ""
-        )
+        sender_name = self._spaces_claims.get("name") or self._spaces_claims.get("preferred_username") or ""
         if not isinstance(sender_name, str):
             sender_name = ""
         payload = {
@@ -1803,9 +1693,7 @@ class TeamsConnector:
             "message_id": message_id,
             "client_message_id": client_message_id,
             "sent_at": (
-                sent_at.isoformat(timespec="milliseconds").replace("+00:00", "Z")
-                if sent_at
-                else None
+                sent_at.isoformat(timespec="milliseconds").replace("+00:00", "Z") if sent_at else None
             ),
         }
 
@@ -1817,7 +1705,7 @@ class TeamsConnector:
             raise TypeError(f"{name} must be a datetime or None.")
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError(f"{name} must include a timezone.")
-        return value.astimezone(timezone.utc)
+        return value.astimezone(UTC)
 
     def _validate_message_page_url(self, url: str, conversation_id: str) -> None:
         if not self._chat_service_url:
@@ -1839,10 +1727,7 @@ class TeamsConnector:
         if not self._chat_service_url:
             raise RuntimeError("Teams AuthZ did not return a Chat Service URL.")
         encoded_id = quote(conversation_id, safe="")
-        return (
-            f"{self._chat_service_url.rstrip('/')}/v1/users/ME/conversations/"
-            f"{encoded_id}/messages"
-        )
+        return f"{self._chat_service_url.rstrip('/')}/v1/users/ME/conversations/{encoded_id}/messages"
 
     def _request_chat_service(
         self,
@@ -1949,13 +1834,9 @@ class TeamsConnector:
             attempt_started = time.perf_counter()
             failure_kind = "request"
             failure_status: int | None = None
-            request = urllib.request.Request(
-                url, data=data, method=method, headers=request_headers
-            )
+            request = urllib.request.Request(url, data=data, method=method, headers=request_headers)
             try:
-                with urllib.request.urlopen(
-                    request, timeout=self.REQUEST_TIMEOUT_SECONDS
-                ) as response:
+                with urllib.request.urlopen(request, timeout=self.REQUEST_TIMEOUT_SECONDS) as response:
                     response_status = response.status
                     response_text = response.read().decode("utf-8")
                 self._raise_if_cancelled(cancel_event)
@@ -2014,8 +1895,7 @@ class TeamsConnector:
                 location = self._safe_location(url)
                 if not read_request:
                     raise RuntimeError(
-                        f"Teams request failed for {location}: "
-                        f"{self._safe_exception_detail(exc)}"
+                        f"Teams request failed for {location}: {self._safe_exception_detail(exc)}"
                     ) from None
                 transient_error = _TransientTeamsRequestError(
                     f"Teams request failed for {location}: {self._safe_exception_detail(exc)}"
@@ -2080,8 +1960,8 @@ class TeamsConnector:
                 try:
                     retry_at = parsedate_to_datetime(retry_after)
                     if retry_at.tzinfo is None:
-                        retry_at = retry_at.replace(tzinfo=timezone.utc)
-                    delay = (retry_at - datetime.now(timezone.utc)).total_seconds()
+                        retry_at = retry_at.replace(tzinfo=UTC)
+                    delay = (retry_at - datetime.now(UTC)).total_seconds()
                 except (TypeError, ValueError, OverflowError):
                     delay = -1
             if delay >= 0:
@@ -2195,35 +2075,31 @@ class TeamsConnector:
             elif isinstance(value, (int, float)) and not isinstance(value, bool):
                 seconds = value / 1000 if abs(value) > 100_000_000_000 else value
                 try:
-                    return datetime.fromtimestamp(seconds, tz=timezone.utc)
+                    return datetime.fromtimestamp(seconds, tz=UTC)
                 except (OverflowError, OSError, ValueError):
                     continue
             else:
                 continue
             if parsed.tzinfo is None or parsed.utcoffset() is None:
-                parsed = parsed.replace(tzinfo=timezone.utc)
-            return parsed.astimezone(timezone.utc)
+                parsed = parsed.replace(tzinfo=UTC)
+            return parsed.astimezone(UTC)
         return None
 
     @staticmethod
     def _epoch_milliseconds(value: datetime) -> int:
-        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        epoch = datetime(1970, 1, 1, tzinfo=UTC)
         delta = value - epoch
         return (delta.days * 86_400 + delta.seconds) * 1_000 + delta.microseconds // 1_000
 
     @classmethod
-    def _message_order_key(
-        cls, message: dict[str, Any]
-    ) -> tuple[int, int, datetime, str]:
+    def _message_order_key(cls, message: dict[str, Any]) -> tuple[int, int, datetime, str]:
         try:
             sequence = int(message.get("sequenceId"))
             has_sequence = 1
         except (TypeError, ValueError):
             sequence = 0
             has_sequence = 0
-        timestamp = cls.message_datetime(message) or datetime.min.replace(
-            tzinfo=timezone.utc
-        )
+        timestamp = cls.message_datetime(message) or datetime.min.replace(tzinfo=UTC)
         return (
             0 if has_sequence else 1,
             sequence,
@@ -2236,9 +2112,7 @@ class TeamsConnector:
         parts = urlsplit(url)
         query = dict(parse_qsl(parts.query, keep_blank_values=True))
         query.update(updates)
-        return urlunsplit(
-            (parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)
-        )
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
     @staticmethod
     def _decode_jwt_payload(token: str) -> dict[str, Any]:

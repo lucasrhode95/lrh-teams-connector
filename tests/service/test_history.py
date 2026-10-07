@@ -1,0 +1,132 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+import pytest
+
+from teams_connector.bootstrap import Services
+from teams_connector.domain.errors import InvalidRequest, NotFound
+from tests.fakes.teams_fake import FakeTeams, cs_message, graph_message
+
+ONE = "19:one@unq.gbl.spaces"
+CHANNEL = "19:general@thread.tacv2"
+
+
+def at(text: str) -> datetime:
+    return datetime.fromisoformat(text).replace(tzinfo=UTC)
+
+
+def long_chat(fake: FakeTeams, count: int = 120) -> None:
+    fake.chats[ONE].messages = [
+        cs_message(f"m{i:03d}", f"2026-06-{1 + i // 24:02d}T{i % 24:02d}:00:00.000Z", f"Message {i}")
+        for i in range(count)
+    ]
+
+
+async def test_pages_go_back_in_time_and_are_chronological_within(
+    services: Services, fake: FakeTeams
+) -> None:
+    long_chat(fake)
+    seen: list[str] = []
+    page = await services.history.get_messages(ONE, page_size=50)
+    while True:
+        ids = [m.id for m in page.items]
+        assert ids == sorted(ids)  # oldest first within a page
+        seen = ids + seen
+        if not page.cursor:
+            break
+        page = await services.history.get_messages(ONE, cursor=page.cursor)
+    assert seen == [f"m{i:03d}" for i in range(120)]  # nothing skipped, nothing repeated
+    assert page.coverage.complete and page.coverage.remote_complete
+
+
+async def test_until_filter_never_skips_unfetched_messages(services: Services, fake: FakeTeams) -> None:
+    long_chat(fake, 300)
+    until = at("2026-06-05T00:00:00")  # the newest 3 remote pages hold nothing in range
+    collected: list[str] = []
+    page = await services.history.get_messages(ONE, until=until, page_size=20)
+    while True:
+        collected = [m.id for m in page.items] + collected
+        if not page.cursor:
+            break
+        page = await services.history.get_messages(ONE, cursor=page.cursor)
+    assert collected == [f"m{i:03d}" for i in range(97)]  # m096 is exactly at the inclusive bound
+
+
+async def test_since_until_and_message_limit_select_the_latest_n(services: Services, fake: FakeTeams) -> None:
+    long_chat(fake)
+    page = await services.history.get_messages(
+        ONE, since=at("2026-06-02T00:00:00"), until=at("2026-06-03T23:59:59"), message_limit=30, page_size=20
+    )
+    assert [m.id for m in page.items] == [f"m{i:03d}" for i in range(52, 72)]
+    rest = await services.history.get_messages(ONE, cursor=page.cursor)
+    assert [m.id for m in rest.items] == [f"m{i:03d}" for i in range(42, 52)]
+    assert rest.cursor is None and rest.coverage.message_limit_reached
+
+
+async def test_retained_messages_survive_remote_deletion(services: Services, fake: FakeTeams) -> None:
+    await services.history.get_messages(ONE)
+    removed = fake.chats[ONE].messages.pop(0)  # gone from the server (e.g. past retention)
+    page = await services.history.get_messages(ONE)
+    assert removed["id"] in [m.id for m in page.items]
+    assert page.coverage.archive_only == 1
+
+
+async def test_is_self_and_attachments(services: Services) -> None:
+    page = await services.history.get_messages(ONE)
+    by_id = {m.id: m for m in page.items}
+    assert by_id["1002"].is_self is True and by_id["1001"].is_self is False
+    attachment = by_id["1003"].attachments[0]
+    assert attachment.name == "notes.txt" and "[Attachment: notes.txt]" in by_id["1003"].text
+
+
+async def test_text_budget_truncates_and_content_continues(services: Services, fake: FakeTeams) -> None:
+    fake.chats[ONE].messages = [cs_message("big", "2026-09-01T00:00:00.000Z", "x" * 9000)]
+    page = await services.history.get_messages(ONE, max_chars=4000)
+    message = page.items[0]
+    assert message.text_truncated and message.text_chars == 9000 and len(message.text) == 4000
+    rest = services.history.content(ONE, "big", offset=4000, max_chars=10_000)
+    assert rest.total_chars == 9000 and rest.next_offset is None and len(rest.text) == 5000
+
+
+async def test_channel_history_comes_from_graph_threads(services: Services, fake: FakeTeams) -> None:
+    page = await services.history.get_messages(CHANNEL)
+    assert [(m.id, m.reply_to_id) for m in page.items] == [("5003", None), ("5001", None), ("5002", "5001")]
+    root = page.items[1]
+    assert root.subject == "Launch" and root.text == "Launch plan" and root.author == "Pat Peer"
+    assert not any(c.startswith("GET emea.ng.msg") and "general" in c for c in fake.calls)
+
+
+async def test_channel_replies_inside_the_range_are_kept_and_old_threads_stop_paging(
+    services: Services, fake: FakeTeams
+) -> None:
+    channel = fake.channels[CHANNEL]
+    channel.threads += [
+        graph_message(f"old{i}", f"2025-01-{1 + i % 28:02d}T{i // 28:02d}:00:00Z") for i in range(150)
+    ]
+    page = await services.history.get_messages(CHANNEL, since=at("2026-09-02T00:00:00"))
+    assert [m.id for m in page.items] == ["5002"]  # the reply, although its root is older
+    assert page.coverage.complete
+    # page 2 holds only 2025 threads, so pages 3 and 4 are not read
+    assert sum("channels/19:general@thread.tacv2/messages" in c for c in fake.calls) == 2
+
+
+async def test_deleted_channel_post_keeps_its_known_text(services: Services, fake: FakeTeams) -> None:
+    await services.history.get_messages(CHANNEL)
+    fake.channels[CHANNEL].threads[1] = graph_message(
+        "5003", "2026-08-01T12:00:00Z", deleted="2026-09-10T00:00:00Z"
+    )
+    page = await services.history.get_messages(CHANNEL)
+    post = next(m for m in page.items if m.id == "5003")
+    assert post.is_deleted and post.text == "Old post" and post.author == "Pat Peer"
+
+
+async def test_invalid_requests(services: Services) -> None:
+    with pytest.raises(InvalidRequest):
+        await services.history.get_messages(
+            ONE, since=at("2026-02-01T00:00:00"), until=at("2026-01-01T00:00:00")
+        )
+    with pytest.raises(InvalidRequest):
+        await services.history.get_messages(ONE, since=datetime(2026, 1, 1))  # no timezone
+    with pytest.raises(NotFound):
+        services.history.content(ONE, "unknown", offset=0, max_chars=10)

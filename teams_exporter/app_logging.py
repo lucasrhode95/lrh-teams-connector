@@ -12,7 +12,6 @@ import traceback
 from pathlib import Path
 from typing import TextIO
 
-
 LOG_FORMAT = "%(asctime)s | %(levelname)s | %(filename)s:%(lineno)d | %(message)s"
 LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 DEFAULT_BACKUP_DAYS = 7
@@ -43,9 +42,7 @@ class SecretRedactionFilter(logging.Filter):
             record.msg = self._redact(record.getMessage())
             record.args = ()
             if record.exc_info:
-                record.exc_text = self._redact(
-                    "".join(traceback.format_exception(*record.exc_info))
-                )
+                record.exc_text = self._redact("".join(traceback.format_exception(*record.exc_info)))
                 record.exc_info = None
         except Exception:
             record.msg = "Log record omitted because safe formatting failed"

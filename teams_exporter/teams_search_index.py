@@ -7,10 +7,11 @@ import re
 import sqlite3
 import tempfile
 import unicodedata
+from collections.abc import Iterator
 from contextlib import closing, contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from teams_exporter.teams_connector import ChatSummary, TeamsConnector
 from teams_exporter.teams_message_formatter import TeamsMessageFormatter
@@ -163,9 +164,7 @@ class TeamsSearchIndex:
                     and existing_owner is not None
                     and existing_owner != self.owner_fingerprint
                 ):
-                    raise DatabaseOwnerMismatchError(
-                        "The selected Teams archive belongs to another account."
-                    )
+                    raise DatabaseOwnerMismatchError("The selected Teams archive belongs to another account.")
                 connection.execute("PRAGMA journal_mode = WAL")
                 connection.executescript(
                     """
@@ -267,14 +266,9 @@ class TeamsSearchIndex:
                         VALUES ('generation', '0');
                     """
                 )
-                chat_columns = {
-                    row["name"]
-                    for row in connection.execute("PRAGMA table_info(chats)")
-                }
+                chat_columns = {row["name"] for row in connection.execute("PRAGMA table_info(chats)")}
                 if "is_empty_conversation" not in chat_columns:
-                    connection.execute(
-                        "ALTER TABLE chats ADD COLUMN is_empty_conversation INTEGER"
-                    )
+                    connection.execute("ALTER TABLE chats ADD COLUMN is_empty_conversation INTEGER")
                 if self.owner_fingerprint is not None:
                     connection.execute(
                         "INSERT OR IGNORE INTO index_metadata(key, value) VALUES (?, ?)",
@@ -302,15 +296,15 @@ class TeamsSearchIndex:
 
     @staticmethod
     def _now() -> str:
-        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
     @staticmethod
     def _timestamp(value: datetime | None) -> str | None:
         if value is None:
             return None
         if value.tzinfo is None or value.utcoffset() is None:
-            value = value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            value = value.replace(tzinfo=UTC)
+        return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
     def upsert_chats(self, chats: list[ChatSummary]) -> None:
         now = self._now()
@@ -404,7 +398,10 @@ class TeamsSearchIndex:
                     END,
                     chat_type = COALESCE(excluded.chat_type, chats.chat_type),
                     last_message_at = COALESCE(excluded.last_message_at, chats.last_message_at),
-                    last_message_preview = COALESCE(excluded.last_message_preview, chats.last_message_preview),
+                    last_message_preview = COALESCE(
+                        excluded.last_message_preview,
+                        chats.last_message_preview
+                    ),
                     unread = COALESCE(excluded.unread, chats.unread),
                     avatar_url = COALESCE(excluded.avatar_url, chats.avatar_url),
                     is_empty_conversation = COALESCE(
@@ -421,9 +418,7 @@ class TeamsSearchIndex:
                     chat.last_message_preview,
                     None if chat.unread is None else int(chat.unread),
                     chat.avatar_url,
-                    None
-                    if chat.is_empty_conversation is None
-                    else int(chat.is_empty_conversation),
+                    None if chat.is_empty_conversation is None else int(chat.is_empty_conversation),
                     now,
                 ),
             )
@@ -434,24 +429,28 @@ class TeamsSearchIndex:
                 "SELECT * FROM chat_index_state WHERE conversation_id = ?",
                 (conversation_id,),
             ).fetchone()
-        return dict(row) if row else {
-            "conversation_id": conversation_id,
-            "messages_next_url": None,
-            "message_history_complete": 0,
-            "oldest_message_at": None,
-            "newest_message_at": None,
-            "messages_indexed_at": None,
-            "messages_stored": 0,
-            "messages_scanned": 0,
-            "message_pages": 0,
-            "missing_timestamp_messages": 0,
-            "participant_sync_complete": 0,
-            "participant_sync_error": None,
-            "participants_indexed_at": None,
-            "participants_scanned": 0,
-            "unresolved_participants": 0,
-            "sync_attempted_at": None,
-        }
+        return (
+            dict(row)
+            if row
+            else {
+                "conversation_id": conversation_id,
+                "messages_next_url": None,
+                "message_history_complete": 0,
+                "oldest_message_at": None,
+                "newest_message_at": None,
+                "messages_indexed_at": None,
+                "messages_stored": 0,
+                "messages_scanned": 0,
+                "message_pages": 0,
+                "missing_timestamp_messages": 0,
+                "participant_sync_complete": 0,
+                "participant_sync_error": None,
+                "participants_indexed_at": None,
+                "participants_scanned": 0,
+                "unresolved_participants": 0,
+                "sync_attempted_at": None,
+            }
+        )
 
     def sync_attempt_times(self) -> dict[str, str | None]:
         """Return persisted per-chat attempt times for fair bounded sync batches."""
@@ -560,8 +559,7 @@ class TeamsSearchIndex:
         now = self._now()
         with self._connect() as connection:
             prior = connection.execute(
-                "SELECT oldest_message_at, newest_message_at FROM chat_index_state "
-                "WHERE conversation_id = ?",
+                "SELECT oldest_message_at, newest_message_at FROM chat_index_state WHERE conversation_id = ?",
                 (conversation_id,),
             ).fetchone()
             stored, oldest, newest, _message_ids = self._upsert_message_rows(
@@ -616,9 +614,7 @@ class TeamsSearchIndex:
                     ensure_ascii=False,
                     separators=(",", ":"),
                 )
-                message_id = "generated:" + hashlib.sha256(
-                    fingerprint.encode("utf-8")
-                ).hexdigest()
+                message_id = "generated:" + hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()
             else:
                 message_id = str(message_id)
             message_ids.append(message_id)
@@ -627,15 +623,9 @@ class TeamsSearchIndex:
             if not isinstance(message_type, str):
                 message_type = None
             properties = self._message_properties(message)
-            edited_at = self._timestamp_value(
-                properties.get("edittime") or message.get("edittime")
-            )
-            deleted_at = self._timestamp_value(
-                properties.get("deletetime") or message.get("deletetime")
-            )
-            is_deleted = bool(
-                (message_type or "").casefold() == "messagedelete" or deleted_at
-            )
+            edited_at = self._timestamp_value(properties.get("edittime") or message.get("edittime"))
+            deleted_at = self._timestamp_value(properties.get("deletetime") or message.get("deletetime"))
+            is_deleted = bool((message_type or "").casefold() == "messagedelete" or deleted_at)
             existing = connection.execute(
                 """SELECT row_id, body, edited_at, deleted_at, is_deleted
                    FROM messages WHERE conversation_id = ? AND message_id = ?""",
@@ -756,17 +746,17 @@ class TeamsSearchIndex:
     def _timestamp_value(cls, value: Any) -> str | None:
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             try:
-                return datetime.fromtimestamp(float(value) / 1000, timezone.utc).isoformat().replace(
-                    "+00:00", "Z"
-                )
+                return datetime.fromtimestamp(float(value) / 1000, UTC).isoformat().replace("+00:00", "Z")
             except (ValueError, OverflowError, OSError):
                 return None
         if isinstance(value, str) and value.strip():
             if value.strip().isdigit():
                 try:
-                    return datetime.fromtimestamp(
-                        int(value.strip()) / 1000, timezone.utc
-                    ).isoformat().replace("+00:00", "Z")
+                    return (
+                        datetime.fromtimestamp(int(value.strip()) / 1000, UTC)
+                        .isoformat()
+                        .replace("+00:00", "Z")
+                    )
                 except (ValueError, OverflowError, OSError):
                     return None
             try:
@@ -797,9 +787,7 @@ class TeamsSearchIndex:
             predicates.append("m.sent_at <= ?")
             parameters.append(until)
         if before is not None:
-            predicates.append(
-                "(m.sent_at < ? OR (m.sent_at = ? AND m.message_id < ?))"
-            )
+            predicates.append("(m.sent_at < ? OR (m.sent_at = ? AND m.message_id < ?))")
             parameters.extend((before[0], before[0], before[1]))
         parameters.append(limit)
         with self._connect() as connection:
@@ -808,7 +796,7 @@ class TeamsSearchIndex:
                            m.sent_at, m.body, m.message_type, m.edited_at,
                            m.deleted_at, m.is_deleted, c.display_name
                     FROM messages m JOIN chats c USING(conversation_id)
-                    WHERE {' AND '.join(predicates)}
+                    WHERE {" AND ".join(predicates)}
                     ORDER BY m.sent_at DESC, m.message_id DESC
                     LIMIT ?""",
                 parameters,
@@ -843,15 +831,13 @@ class TeamsSearchIndex:
             rows = connection.execute(
                 f"""SELECT conversation_id, message_id, author, author_id, sent_at,
                            body, message_type, edited_at, deleted_at, is_deleted
-                    FROM messages WHERE {' AND '.join(predicates)}
+                    FROM messages WHERE {" AND ".join(predicates)}
                     ORDER BY sent_at ASC, message_id ASC LIMIT ?""",
                 parameters,
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def count_messages_in_range(
-        self, conversation_id: str, *, since: str | None, until: str | None
-    ) -> int:
+    def count_messages_in_range(self, conversation_id: str, *, since: str | None, until: str | None) -> int:
         predicates = ["conversation_id = ?", "sent_at IS NOT NULL"]
         parameters: list[Any] = [conversation_id]
         if since is not None:
@@ -861,10 +847,12 @@ class TeamsSearchIndex:
             predicates.append("sent_at <= ?")
             parameters.append(until)
         with self._connect() as connection:
-            return int(connection.execute(
-                f"SELECT COUNT(*) FROM messages WHERE {' AND '.join(predicates)}",
-                parameters,
-            ).fetchone()[0])
+            return int(
+                connection.execute(
+                    f"SELECT COUNT(*) FROM messages WHERE {' AND '.join(predicates)}",
+                    parameters,
+                ).fetchone()[0]
+            )
 
     def latest_message_cutoff(
         self,
@@ -887,7 +875,7 @@ class TeamsSearchIndex:
         with self._connect() as connection:
             row = connection.execute(
                 f"""SELECT sent_at, message_id FROM messages
-                    WHERE {' AND '.join(predicates)}
+                    WHERE {" AND ".join(predicates)}
                     ORDER BY sent_at DESC, message_id DESC LIMIT 1 OFFSET ?""",
                 parameters,
             ).fetchone()
@@ -925,16 +913,12 @@ class TeamsSearchIndex:
                    ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (export_id, conversation_id, since, until, message_limit, now, now),
             )
-            row = connection.execute(
-                "SELECT * FROM export_jobs WHERE export_id = ?", (export_id,)
-            ).fetchone()
+            row = connection.execute("SELECT * FROM export_jobs WHERE export_id = ?", (export_id,)).fetchone()
         return dict(row)
 
     def get_export_job(self, export_id: str) -> dict[str, Any] | None:
         with self._connect() as connection:
-            row = connection.execute(
-                "SELECT * FROM export_jobs WHERE export_id = ?", (export_id,)
-            ).fetchone()
+            row = connection.execute("SELECT * FROM export_jobs WHERE export_id = ?", (export_id,)).fetchone()
         return dict(row) if row else None
 
     def count_export_job_messages(self, export_id: str) -> int:
@@ -957,9 +941,7 @@ class TeamsSearchIndex:
     ) -> dict[str, Any]:
         now = self._now()
         with self._connect() as connection:
-            job = connection.execute(
-                "SELECT * FROM export_jobs WHERE export_id = ?", (export_id,)
-            ).fetchone()
+            job = connection.execute("SELECT * FROM export_jobs WHERE export_id = ?", (export_id,)).fetchone()
             if job is None:
                 raise KeyError("Export ID was not found.")
             seen_urls = json.loads(job["seen_urls_json"] or "[]")
@@ -968,8 +950,7 @@ class TeamsSearchIndex:
             if requested_url:
                 seen_urls.append(requested_url)
             chat_state = connection.execute(
-                "SELECT oldest_message_at, newest_message_at FROM chat_index_state "
-                "WHERE conversation_id = ?",
+                "SELECT oldest_message_at, newest_message_at FROM chat_index_state WHERE conversation_id = ?",
                 (job["conversation_id"],),
             ).fetchone()
             _, oldest, newest, message_ids = self._upsert_message_rows(
@@ -985,8 +966,7 @@ class TeamsSearchIndex:
             retrieved_count = 0
             if message_limit is not None:
                 connection.executemany(
-                    "INSERT OR IGNORE INTO export_job_messages(export_id, message_id) "
-                    "VALUES (?, ?)",
+                    "INSERT OR IGNORE INTO export_job_messages(export_id, message_id) VALUES (?, ?)",
                     ((export_id, message_id) for message_id in message_ids),
                 )
                 retrieved_count = int(
@@ -995,9 +975,7 @@ class TeamsSearchIndex:
                         (export_id,),
                     ).fetchone()[0]
                 )
-            limit_reached = (
-                message_limit is not None and retrieved_count >= int(message_limit)
-            )
+            limit_reached = message_limit is not None and retrieved_count >= int(message_limit)
             effective_next_url = None if limit_reached else next_url
             if effective_next_url and effective_next_url in seen_urls:
                 raise RuntimeError("Teams repeated an export continuation link.")
@@ -1047,9 +1025,7 @@ class TeamsSearchIndex:
                        message_count = ?, updated_at = ? WHERE export_id = ?""",
                 (snapshot_path, byte_size, message_count, self._now(), export_id),
             )
-            row = connection.execute(
-                "SELECT * FROM export_jobs WHERE export_id = ?", (export_id,)
-            ).fetchone()
+            row = connection.execute("SELECT * FROM export_jobs WHERE export_id = ?", (export_id,)).fetchone()
         if row is None:
             raise KeyError("Export ID was not found.")
         return dict(row)
@@ -1072,9 +1048,7 @@ class TeamsSearchIndex:
                 (conversation_id,),
             )
             if error is None:
-                connection.execute(
-                    "DELETE FROM participants WHERE conversation_id = ?", (conversation_id,)
-                )
+                connection.execute("DELETE FROM participants WHERE conversation_id = ?", (conversation_id,))
                 for participant in participants:
                     name = participant.get("display_name")
                     if not name:
@@ -1153,9 +1127,7 @@ class TeamsSearchIndex:
         else:
             raise ValueError("match_mode must be 'exact', 'substring', or 'all_terms'.")
         if after is not None:
-            predicates.append(
-                "(m.sent_at, m.conversation_id, m.message_id) < (?, ?, ?)"
-            )
+            predicates.append("(m.sent_at, m.conversation_id, m.message_id) < (?, ?, ?)")
             parameters.extend(after)
         parameters.append(limit + 1)
         with self._connect() as connection:
@@ -1164,7 +1136,7 @@ class TeamsSearchIndex:
                            m.sent_at, m.body, m.message_type, m.edited_at,
                            m.deleted_at, m.is_deleted, c.display_name
                     FROM messages m JOIN chats c USING(conversation_id)
-                    WHERE {' AND '.join(predicates)}
+                    WHERE {" AND ".join(predicates)}
                     ORDER BY m.sent_at DESC, m.conversation_id DESC, m.message_id DESC
                     LIMIT ?""",
                 parameters,
@@ -1212,10 +1184,10 @@ class TeamsSearchIndex:
         names_by_chat: dict[str, list[dict[str, str | None]]] = {}
         for row in participant_rows:
             names_by_chat.setdefault(row["conversation_id"], []).append(
-                    {
-                        "id": row["participant_id"] or None,
-                        "display_name": row["participant_name"],
-                    }
+                {
+                    "id": row["participant_id"] or None,
+                    "display_name": row["participant_name"],
+                }
             )
         grouped: dict[str, dict[str, Any]] = {}
         for row in chat_rows:
@@ -1240,9 +1212,7 @@ class TeamsSearchIndex:
         where = "WHERE c.conversation_id = ?" if conversation_id else ""
         parameters: tuple[Any, ...] = (conversation_id,) if conversation_id else ()
         with self._connect() as connection:
-            total = connection.execute(
-                f"SELECT COUNT(*) FROM chats c {where}", parameters
-            ).fetchone()[0]
+            total = connection.execute(f"SELECT COUNT(*) FROM chats c {where}", parameters).fetchone()[0]
             rows = connection.execute(
                 f"""SELECT c.conversation_id, c.display_name, c.last_message_at,
                           c.catalogued_at, s.messages_next_url,
@@ -1260,9 +1230,7 @@ class TeamsSearchIndex:
                 (*parameters, limit, offset),
             ).fetchall()
             generation = int(
-                connection.execute(
-                    "SELECT value FROM index_metadata WHERE key = 'generation'"
-                ).fetchone()[0]
+                connection.execute("SELECT value FROM index_metadata WHERE key = 'generation'").fetchone()[0]
             )
         return [dict(row) for row in rows], total, generation
 
@@ -1278,9 +1246,11 @@ class TeamsSearchIndex:
                 "complete_participant_rosters": connection.execute(
                     "SELECT COUNT(*) FROM chat_index_state WHERE participant_sync_complete = 1"
                 ).fetchone()[0],
-                "generation": int(connection.execute(
-                    "SELECT value FROM index_metadata WHERE key = 'generation'"
-                ).fetchone()[0]),
+                "generation": int(
+                    connection.execute(
+                        "SELECT value FROM index_metadata WHERE key = 'generation'"
+                    ).fetchone()[0]
+                ),
             }
 
     def participant_coverage(self) -> dict[str, int]:
@@ -1302,12 +1272,12 @@ class TeamsSearchIndex:
                     "SELECT COALESCE(SUM(unresolved_participants), 0) "
                     "FROM chat_index_state WHERE participant_sync_complete = 1"
                 ).fetchone()[0],
-                "indexed_participants": connection.execute(
-                    "SELECT COUNT(*) FROM participants"
-                ).fetchone()[0],
-                "generation": int(connection.execute(
-                    "SELECT value FROM index_metadata WHERE key = 'generation'"
-                ).fetchone()[0]),
+                "indexed_participants": connection.execute("SELECT COUNT(*) FROM participants").fetchone()[0],
+                "generation": int(
+                    connection.execute(
+                        "SELECT value FROM index_metadata WHERE key = 'generation'"
+                    ).fetchone()[0]
+                ),
             }
 
     def coverage_summary(
@@ -1341,9 +1311,9 @@ class TeamsSearchIndex:
             catalog_latest = row["last_message_at"]
             missing_timestamps = int(row["missing_timestamp_messages"] or 0)
             has_time_filter = since is not None or until is not None
-            fresh_through_catalog = (
-                newest is None and catalog_latest is None
-            ) or bool(newest and catalog_latest and newest >= catalog_latest)
+            fresh_through_catalog = (newest is None and catalog_latest is None) or bool(
+                newest and catalog_latest and newest >= catalog_latest
+            )
             range_covered = False
             if complete_history and not (has_time_filter and missing_timestamps):
                 if not has_time_filter:
@@ -1356,11 +1326,7 @@ class TeamsSearchIndex:
                     range_covered = bool(oldest and since >= oldest and fresh_through_catalog)
             if not range_covered and since is not None and oldest and newest:
                 lower_covered = since >= oldest
-                upper_covered = (
-                    until <= newest
-                    if until is not None
-                    else fresh_through_catalog
-                )
+                upper_covered = until <= newest if until is not None else fresh_through_catalog
                 if until is not None and not upper_covered and fresh_through_catalog:
                     upper_covered = bool(catalog_latest and until >= catalog_latest)
                 range_covered = lower_covered and upper_covered and not missing_timestamps

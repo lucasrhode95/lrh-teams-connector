@@ -8,7 +8,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -20,9 +19,7 @@ class MCPContractTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             environment = os.environ.copy()
-            environment["TEAMS_SEARCH_INDEX_PATH"] = str(
-                Path(temp_dir) / "contract-test.sqlite3"
-            )
+            environment["TEAMS_SEARCH_INDEX_PATH"] = str(Path(temp_dir) / "contract-test.sqlite3")
             environment["LOCALAPPDATA"] = str(Path(temp_dir) / "appdata")
             parameters = StdioServerParameters(
                 command=sys.executable,
@@ -32,116 +29,117 @@ class MCPContractTests(unittest.TestCase):
             )
 
             async def exercise_client():
-                async with stdio_client(parameters) as (read_stream, write_stream):
-                    async with ClientSession(read_stream, write_stream) as session:
-                        await session.initialize()
-                        response = await session.list_tools()
-                        tools_by_name = {tool.name: tool for tool in response.tools}
-                        expected_names = {
-                            "list_chats",
-                            "search_chats",
-                            "get_messages",
-                            "get_message_content",
-                            "search_messages",
-                            "export_chat",
-                            "read_export",
-                            "sync_search_index",
-                            "get_search_index_status",
-                            "send_message",
-                        }
-                        self.assertEqual(set(tools_by_name), expected_names)
-                        for tool in tools_by_name.values():
-                            self.assertTrue(tool.inputSchema["properties"])
-                            self.assertIsNotNone(tool.outputSchema)
+                async with (
+                    stdio_client(parameters) as (read_stream, write_stream),
+                    ClientSession(read_stream, write_stream) as session,
+                ):
+                    await session.initialize()
+                    response = await session.list_tools()
+                    tools_by_name = {tool.name: tool for tool in response.tools}
+                    expected_names = {
+                        "list_chats",
+                        "search_chats",
+                        "get_messages",
+                        "get_message_content",
+                        "search_messages",
+                        "export_chat",
+                        "read_export",
+                        "sync_search_index",
+                        "get_search_index_status",
+                        "send_message",
+                    }
+                    self.assertEqual(set(tools_by_name), expected_names)
+                    for tool in tools_by_name.values():
+                        self.assertTrue(tool.inputSchema["properties"])
+                        self.assertIsNotNone(tool.outputSchema)
 
-                        catalog_schema = str(tools_by_name["list_chats"].outputSchema)
-                        self.assertIn("catalog_scope", catalog_schema)
-                        self.assertIn("unclassified_service_rows_excluded", catalog_schema)
-                        self.assertIn("empty_chats_excluded", catalog_schema)
-                        self.assertIn(
-                            "is_empty_conversation",
-                            str(tools_by_name["list_chats"].outputSchema),
-                        )
-                        self.assertIn(
-                            "no_empty_chats",
-                            tools_by_name["list_chats"].inputSchema["properties"],
-                        )
-                        self.assertIn(
-                            "retry_count_this_call",
-                            str(tools_by_name["get_messages"].outputSchema),
-                        )
-                        self.assertIn(
-                            "content_next_offset",
-                            str(tools_by_name["get_messages"].outputSchema),
-                        )
-                        self.assertIn(
-                            "message_retries_this_call",
-                            str(tools_by_name["sync_search_index"].outputSchema),
-                        )
-                        export_schema = str(tools_by_name["export_chat"].outputSchema)
-                        self.assertIn("remote_messages_retrieved_total", export_schema)
-                        self.assertIn("message_limit_reached", export_schema)
+                    catalog_schema = str(tools_by_name["list_chats"].outputSchema)
+                    self.assertIn("catalog_scope", catalog_schema)
+                    self.assertIn("unclassified_service_rows_excluded", catalog_schema)
+                    self.assertIn("empty_chats_excluded", catalog_schema)
+                    self.assertIn(
+                        "is_empty_conversation",
+                        str(tools_by_name["list_chats"].outputSchema),
+                    )
+                    self.assertIn(
+                        "no_empty_chats",
+                        tools_by_name["list_chats"].inputSchema["properties"],
+                    )
+                    self.assertIn(
+                        "retry_count_this_call",
+                        str(tools_by_name["get_messages"].outputSchema),
+                    )
+                    self.assertIn(
+                        "content_next_offset",
+                        str(tools_by_name["get_messages"].outputSchema),
+                    )
+                    self.assertIn(
+                        "message_retries_this_call",
+                        str(tools_by_name["sync_search_index"].outputSchema),
+                    )
+                    export_schema = str(tools_by_name["export_chat"].outputSchema)
+                    self.assertIn("remote_messages_retrieved_total", export_schema)
+                    self.assertIn("message_limit_reached", export_schema)
 
-                        search_tool = tools_by_name["search_messages"]
-                        self.assertEqual(
-                            search_tool.inputSchema["properties"]["match_mode"]["enum"],
-                            ["exact", "substring", "all_terms"],
-                        )
-                        self.assertIn("since", search_tool.inputSchema["required"])
-                        self.assertIn("until", search_tool.inputSchema["required"])
-                        self.assertIn("max_matches", search_tool.inputSchema["properties"])
-                        search_schema = str(search_tool.outputSchema)
-                        self.assertIn("is_deleted", search_schema)
-                        self.assertIn("deleted_at", search_schema)
-                        templates = await session.list_resource_templates()
-                        self.assertEqual(len(templates.resourceTemplates), 1)
-                        self.assertIn(
-                            "teams-export://exports/{export_id}/parts/{offset_bytes}",
-                            templates.resourceTemplates[0].uriTemplate,
-                        )
+                    search_tool = tools_by_name["search_messages"]
+                    self.assertEqual(
+                        search_tool.inputSchema["properties"]["match_mode"]["enum"],
+                        ["exact", "substring", "all_terms"],
+                    )
+                    self.assertIn("since", search_tool.inputSchema["required"])
+                    self.assertIn("until", search_tool.inputSchema["required"])
+                    self.assertIn("max_matches", search_tool.inputSchema["properties"])
+                    search_schema = str(search_tool.outputSchema)
+                    self.assertIn("is_deleted", search_schema)
+                    self.assertIn("deleted_at", search_schema)
+                    templates = await session.list_resource_templates()
+                    self.assertEqual(len(templates.resourceTemplates), 1)
+                    self.assertIn(
+                        "teams-export://exports/{export_id}/parts/{offset_bytes}",
+                        templates.resourceTemplates[0].uriTemplate,
+                    )
 
-                        send_tool = tools_by_name["send_message"]
-                        self.assertEqual(
-                            set(send_tool.inputSchema["required"]),
-                            {
-                                "conversation_id",
-                                "expected_chat_name",
-                                "text",
-                                "user_confirmation",
-                            },
-                        )
-                        self.assertFalse(send_tool.annotations.readOnlyHint)
-                        self.assertTrue(send_tool.annotations.destructiveHint)
-                        self.assertTrue(send_tool.annotations.openWorldHint)
-                        self.assertIn("explicitly authorized", send_tool.description)
+                    send_tool = tools_by_name["send_message"]
+                    self.assertEqual(
+                        set(send_tool.inputSchema["required"]),
+                        {
+                            "conversation_id",
+                            "expected_chat_name",
+                            "text",
+                            "user_confirmation",
+                        },
+                    )
+                    self.assertFalse(send_tool.annotations.readOnlyHint)
+                    self.assertTrue(send_tool.annotations.destructiveHint)
+                    self.assertTrue(send_tool.annotations.openWorldHint)
+                    self.assertIn("explicitly authorized", send_tool.description)
 
-                        rejected_send = await session.call_tool(
-                            "send_message",
-                            {
-                                "conversation_id": "19:fixture@thread.v2",
-                                "expected_chat_name": "Fixture",
-                                "text": "Should not be sent",
-                                "user_confirmation": "",
-                            },
-                        )
-                        self.assertTrue(rejected_send.isError)
-                        rejection_text = " ".join(
-                            item.text
-                            for item in rejected_send.content
-                            if hasattr(item, "text")
-                        )
-                        self.assertIn("explicit send authorization", rejection_text)
+                    rejected_send = await session.call_tool(
+                        "send_message",
+                        {
+                            "conversation_id": "19:fixture@thread.v2",
+                            "expected_chat_name": "Fixture",
+                            "text": "Should not be sent",
+                            "user_confirmation": "",
+                        },
+                    )
+                    self.assertTrue(rejected_send.isError)
+                    rejection_text = " ".join(
+                        item.text for item in rejected_send.content if hasattr(item, "text")
+                    )
+                    self.assertIn("explicit send authorization", rejection_text)
 
-                        invalid_scope = await session.call_tool(
-                            "search_messages", {"query": "sanitized contract probe"}
-                        )
-                        self.assertTrue(invalid_scope.isError)
+                    invalid_scope = await session.call_tool(
+                        "search_messages", {"query": "sanitized contract probe"}
+                    )
+                    self.assertTrue(invalid_scope.isError)
 
             asyncio.run(exercise_client())
 
     def test_generic_mcp_client_can_call_archive_tools_and_read_export_resource(self):
         import asyncio
         import json
+
         from mcp.shared.memory import create_connected_server_and_client_session
         from pydantic import AnyUrl
 
@@ -262,21 +260,15 @@ class MCPContractTests(unittest.TestCase):
                 self.assertFalse(page.isError)
                 self.assertEqual(page.structuredContent["items"], [])
 
-                exported = await session.call_tool(
-                    "export_chat", {"conversation_id": "19:fixture@thread.v2"}
-                )
+                exported = await session.call_tool("export_chat", {"conversation_id": "19:fixture@thread.v2"})
                 self.assertFalse(exported.isError)
                 uri = exported.structuredContent["resource_uri"]
                 self.assertTrue(uri.startswith("teams-export://exports/"))
                 self.assertEqual(
-                    exported.structuredContent["coverage"][
-                        "remote_messages_retrieved_total"
-                    ],
+                    exported.structuredContent["coverage"]["remote_messages_retrieved_total"],
                     1,
                 )
-                self.assertTrue(
-                    exported.structuredContent["coverage"]["message_limit_reached"]
-                )
+                self.assertTrue(exported.structuredContent["coverage"]["message_limit_reached"])
 
                 resource = await session.read_resource(AnyUrl(uri))
                 payload = json.loads(resource.contents[0].text)

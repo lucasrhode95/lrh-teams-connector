@@ -11,12 +11,12 @@ import logging
 import os
 import time
 import urllib.error
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any
 
 import msal
-
 
 logger = logging.getLogger(__name__)
 
@@ -123,14 +123,10 @@ class TokenProvider:
         selected_path = cache_path
         if selected_path is None:
             selected_path = (
-                self._default_debug_cache_path()
-                if self.unsecure
-                else self._default_secure_cache_path()
+                self._default_debug_cache_path() if self.unsecure else self._default_secure_cache_path()
             )
         self.cache_path = Path(selected_path).expanduser().resolve()
-        self._cache_lock_path = self.cache_path.with_suffix(
-            self.cache_path.suffix + ".lock"
-        )
+        self._cache_lock_path = self.cache_path.with_suffix(self.cache_path.suffix + ".lock")
 
     @property
     def mode(self) -> str:
@@ -197,7 +193,7 @@ class TokenProvider:
     ) -> tuple[dict[str, Any], str]:
         for account in app.get_accounts():
             result = self._retry_token_request(
-                lambda: app.acquire_token_silent(scopes=[scope], account=account),
+                lambda account=account: app.acquire_token_silent(scopes=[scope], account=account),
                 scope=scope,
             )
             if isinstance(result, dict) and result.get("access_token"):
@@ -211,9 +207,7 @@ class TokenProvider:
 
         flow = app.initiate_device_flow(scopes=[scope])
         if not isinstance(flow, dict) or not flow.get("user_code"):
-            raise RuntimeError(
-                f"Could not start device-code authentication for {self._scope_name(scope)}."
-            )
+            raise RuntimeError(f"Could not start device-code authentication for {self._scope_name(scope)}.")
         print(flow.get("message", "Complete sign-in in the browser window."))
         result = self._retry_token_request(
             lambda: app.acquire_token_by_device_flow(flow),
@@ -279,8 +273,7 @@ class TokenProvider:
         if error in self._REJECTED_CREDENTIAL_ERRORS:
             raise self._stored_credentials_rejected()
         raise RuntimeError(
-            f"Microsoft sign-in failed for {self._scope_name(scope)}. "
-            f"Run `{self.sign_in_command}` and retry."
+            f"Microsoft sign-in failed for {self._scope_name(scope)}. Run `{self.sign_in_command}` and retry."
         )
 
     @staticmethod
@@ -293,17 +286,11 @@ class TokenProvider:
         try:
             from msal_extensions import FilePersistence, PersistedTokenCache
 
-            persistence = (
-                FilePersistence(str(path))
-                if self.unsecure
-                else self._encrypted_persistence(path)
-            )
+            persistence = FilePersistence(str(path)) if self.unsecure else self._encrypted_persistence(path)
             return PersistedTokenCache(persistence)
         except Exception:
             if self.unsecure:
-                raise RuntimeError(
-                    "The plaintext development MSAL cache could not be opened."
-                ) from None
+                raise RuntimeError("The plaintext development MSAL cache could not be opened.") from None
             raise self._encrypted_storage_unavailable() from None
 
     @staticmethod

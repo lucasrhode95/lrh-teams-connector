@@ -1835,8 +1835,7 @@ For example:
 ```python
 is_html = (
     "html" in str(message.get("messagetype") or message.get("messageType") or "").lower()
-    or
-    "html" in str(message.get("contenttype") or message.get("contentType") or "").lower()
+    or "html" in str(message.get("contenttype") or message.get("contentType") or "").lower()
 )
 ```
 
@@ -1877,7 +1876,7 @@ A live message also contained a semantic mention element in its HTML, marked wit
 itemtype="http://schema.skype.com/Mention"
 ```
 
-The element wrapped the mentioned display name, while `properties.mentions` identified the mention and its `displayName`. A formatter can therefore render a delimited marker such as `@(Rhode, Lucas)` based on message markup/metadata rather than treating every matching name in plain text as a mention.
+The element wrapped the mentioned display name, while `properties.mentions` identified the mention and its `displayName`. A formatter can therefore render a delimited marker such as `@(Example, User)` based on message markup/metadata rather than treating every matching name in plain text as a mention.
 
 ### Reactions
 

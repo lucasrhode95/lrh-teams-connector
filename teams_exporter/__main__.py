@@ -11,9 +11,7 @@ from teams_exporter.token_provider import AuthenticationRequiredError, TokenProv
 def main() -> int:
     parser = argparse.ArgumentParser(prog="python -m teams_exporter")
     commands = parser.add_subparsers(dest="command", required=True)
-    auth_parser = commands.add_parser(
-        "auth", help="complete the interactive Microsoft device-code sign-in"
-    )
+    auth_parser = commands.add_parser("auth", help="complete the interactive Microsoft device-code sign-in")
     auth_parser.add_argument(
         "--unsecure",
         action="store_true",
@@ -65,9 +63,7 @@ def main() -> int:
     if args.command == "backup":
         try:
             service = TeamsService()
-            destination = service.index.backup_to(
-                args.destination, overwrite=args.overwrite
-            )
+            destination = service.index.backup_to(args.destination, overwrite=args.overwrite)
         except AuthenticationRequiredError as exc:
             print(str(exc), file=sys.stderr)
             return 2

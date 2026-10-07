@@ -21,8 +21,8 @@ from teams_exporter.teams_connector import (
     ExtractionCancelled,
     TeamsConnector,
 )
-from teams_exporter.token_provider import AuthenticationRequiredError
 from teams_exporter.teams_message_formatter import TeamsMessageFormatter
+from teams_exporter.token_provider import AuthenticationRequiredError
 
 
 class ExportConnector:
@@ -90,7 +90,7 @@ class ExportConnector:
                         raise ExtractionCancelled("cancelled")
             if cancel_event is not None and cancel_event.is_set():
                 raise ExtractionCancelled("cancelled")
-            pages_fetched += 1
+            pages_fetched = page_index + 1
             messages_retrieved += len(page)
             if progress_callback is not None:
                 progress_callback(pages_fetched, messages_retrieved, 0)
@@ -148,11 +148,7 @@ class ExportService:
         self.list_calls.append((page_size, page_token, include_avatar_uris))
         if refresh:
             self.refresh_calls.append(True)
-        chats = [
-            chat
-            for chat in self.chats
-            if not no_empty_chats or chat.is_empty_conversation is not True
-        ]
+        chats = [chat for chat in self.chats if not no_empty_chats or chat.is_empty_conversation is not True]
         offset = int(page_token.split(":")[1]) if page_token else 0
         selected = chats[offset : offset + page_size]
         next_offset = offset + len(selected)
@@ -207,17 +203,9 @@ class ExportService:
     def _messages_in_range(self, conversation_id, *, since=None, until=None):
         messages = list(self.archive.get(conversation_id, {}).values())
         if since is not None:
-            messages = [
-                message
-                for message in messages
-                if TeamsConnector.message_datetime(message) >= since
-            ]
+            messages = [message for message in messages if TeamsConnector.message_datetime(message) >= since]
         if until is not None:
-            messages = [
-                message
-                for message in messages
-                if TeamsConnector.message_datetime(message) <= until
-            ]
+            messages = [message for message in messages if TeamsConnector.message_datetime(message) <= until]
         return sorted(
             messages,
             key=lambda message: (
@@ -250,18 +238,14 @@ class ExportService:
                     "__formatted_body": self.formatter.format_message(message),
                 }
 
-    def archived_export_message_count(
-        self, conversation_id, *, since=None, until=None, limit=None
-    ):
+    def archived_export_message_count(self, conversation_id, *, since=None, until=None, limit=None):
         messages = self._messages_in_range(conversation_id, since=since, until=until)
         if limit is not None:
             messages = messages[-limit:]
         cutoff = None
         if limit is not None and messages:
             first = messages[0]
-            timestamp = TeamsConnector.message_datetime(first).isoformat().replace(
-                "+00:00", "Z"
-            )
+            timestamp = TeamsConnector.message_datetime(first).isoformat().replace("+00:00", "Z")
             cutoff = (timestamp, first["id"])
         return len(messages), cutoff
 
@@ -274,9 +258,7 @@ class ExportService:
                 message
                 for message in messages
                 if (
-                    TeamsConnector.message_datetime(message)
-                    .isoformat()
-                    .replace("+00:00", "Z"),
+                    TeamsConnector.message_datetime(message).isoformat().replace("+00:00", "Z"),
                     message["id"],
                 )
                 >= from_key
@@ -307,13 +289,15 @@ class LocalTeamsServerTests(unittest.TestCase):
         ):
             handler.handle()
 
-        with patch.object(
-            BaseHTTPRequestHandler,
-            "handle",
-            side_effect=RuntimeError("unexpected handler failure"),
+        with (
+            patch.object(
+                BaseHTTPRequestHandler,
+                "handle",
+                side_effect=RuntimeError("unexpected handler failure"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "unexpected handler failure"),
         ):
-            with self.assertRaisesRegex(RuntimeError, "unexpected handler failure"):
-                handler.handle()
+            handler.handle()
 
     def test_duplicate_server_instance_cannot_share_the_same_port(self):
         with self.assertRaises(OSError):
@@ -342,15 +326,11 @@ class LocalTeamsServerTests(unittest.TestCase):
         request_id = json.loads(body)["request_id"]
         deadline = time_module.monotonic() + 5
         while time_module.monotonic() < deadline:
-            status, _, body = self.request(
-                "GET", f"/api/download-status?request_id={request_id}"
-            )
+            status, _, body = self.request("GET", f"/api/download-status?request_id={request_id}")
             self.assertEqual(status, 200)
             job = json.loads(body)
             if job["status"] == "complete":
-                return self.request(
-                    "GET", f"/api/download-file?request_id={request_id}"
-                )
+                return self.request("GET", f"/api/download-file?request_id={request_id}")
             if job["status"] in {"failed", "cancelled"}:
                 self.fail(f"export ended as {job['status']}: {job.get('error')}")
             time_module.sleep(0.01)
@@ -374,7 +354,7 @@ class LocalTeamsServerTests(unittest.TestCase):
         self.assertIn(b'href="/static/app.css"', page)
         self.assertIn(b'src="/static/app.js"', page)
         self.assertIn(b"Loading conversations", page)
-        self.assertIn(b"class=\"spinner\"", page)
+        self.assertIn(b'class="spinner"', page)
         self.assertEqual(page_headers["Content-Security-Policy"].split(";", 1)[0], "default-src 'none'")
         self.assertIn("img-src 'self' https:", page_headers["Content-Security-Policy"])
         self.assertIn("style-src 'self'; script-src 'self'", page_headers["Content-Security-Policy"])
@@ -431,8 +411,7 @@ class LocalTeamsServerTests(unittest.TestCase):
             status, _, _ = self.request("GET", "/static/app.css")
         self.assertEqual(status, 200)
         static_request_logs = [
-            record for record in captured.records
-            if record.getMessage().startswith("HTTP request ")
+            record for record in captured.records if record.getMessage().startswith("HTTP request ")
         ]
         self.assertEqual(len(static_request_logs), 1)
         self.assertEqual(static_request_logs[0].levelno, logging.DEBUG)
@@ -443,8 +422,7 @@ class LocalTeamsServerTests(unittest.TestCase):
             status, _, _ = self.request("GET", picture_path)
         self.assertEqual(status, 200)
         picture_request_logs = [
-            record for record in captured.records
-            if record.getMessage().startswith("HTTP request ")
+            record for record in captured.records if record.getMessage().startswith("HTTP request ")
         ]
         self.assertEqual(len(picture_request_logs), 1)
         self.assertEqual(picture_request_logs[0].levelno, logging.DEBUG)
@@ -576,8 +554,7 @@ class LocalTeamsServerTests(unittest.TestCase):
 
     def test_chat_catalog_continues_through_bounded_pages(self):
         self.service.chats = [
-            ChatSummary(f"19:chat-{index}@thread.v2", f"Chat {index}")
-            for index in range(205)
+            ChatSummary(f"19:chat-{index}@thread.v2", f"Chat {index}") for index in range(205)
         ]
         status, _, body = self.request("GET", "/api/chats")
         result = json.loads(body)
@@ -702,16 +679,12 @@ class LocalTeamsServerTests(unittest.TestCase):
     def test_download_progress_and_cancel_preserve_completed_page_counts(self):
         connector = self.service.connector
         connector.block_after_first_page = True
-        status, _, body = self.request(
-            "POST", "/api/download", {"chat_ids": ["19:alpha@thread.v2"]}
-        )
+        status, _, body = self.request("POST", "/api/download", {"chat_ids": ["19:alpha@thread.v2"]})
         self.assertEqual(status, 202)
         request_id = json.loads(body)["request_id"]
         self.assertTrue(connector.waiting_for_cancel.wait(2))
 
-        status, _, body = self.request(
-            "GET", f"/api/download-status?request_id={request_id}"
-        )
+        status, _, body = self.request("GET", f"/api/download-status?request_id={request_id}")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["progress"]["pages_fetched"], 1)
 
@@ -721,9 +694,7 @@ class LocalTeamsServerTests(unittest.TestCase):
 
         deadline = time_module.monotonic() + 3
         while time_module.monotonic() < deadline:
-            status, _, body = self.request(
-                "GET", f"/api/download-status?request_id={request_id}"
-            )
+            status, _, body = self.request("GET", f"/api/download-status?request_id={request_id}")
             job = json.loads(body)
             if job["status"] == "cancelled":
                 break
@@ -739,9 +710,7 @@ class LocalTeamsServerTests(unittest.TestCase):
             with self.subTest(path=path):
                 status, _, body = self.request("GET", path)
                 self.assertEqual(status, expected_status)
-                self.assertIn(
-                    json.loads(body)["error"]["code"], {"invalid_request", "not_found"}
-                )
+                self.assertIn(json.loads(body)["error"]["code"], {"invalid_request", "not_found"})
 
     def test_authentication_needed_and_invalid_origin_are_clear(self):
         self.service.auth_required = True
@@ -760,16 +729,12 @@ class LocalTeamsServerTests(unittest.TestCase):
         self.assertEqual(json.loads(body)["error"]["code"], "origin_rejected")
         self.assertEqual(self.service.connector.calls, [])
 
-        status, _, body = self.request(
-            "GET", "/api/chats", extra_headers={"Host": "untrusted.example"}
-        )
+        status, _, body = self.request("GET", "/api/chats", extra_headers={"Host": "untrusted.example"})
         self.assertEqual(status, 403)
         self.assertEqual(json.loads(body)["error"]["code"], "local_only")
 
     def test_unknown_chat_and_invalid_limit_are_rejected(self):
-        status, _, body = self.request(
-            "POST", "/api/download", {"chat_ids": ["unknown-chat"]}
-        )
+        status, _, body = self.request("POST", "/api/download", {"chat_ids": ["unknown-chat"]})
         self.assertEqual(status, 400)
         self.assertEqual(json.loads(body)["error"]["code"], "invalid_request")
 

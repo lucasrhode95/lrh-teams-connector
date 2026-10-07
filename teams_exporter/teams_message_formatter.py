@@ -8,7 +8,6 @@ import re
 from html.parser import HTMLParser
 from typing import Any
 
-
 _URI_OBJECT_RE = re.compile(
     r"<URIObject\b(?P<attributes>[^>]*)>(?P<content>.*?)</URIObject\s*>",
     re.IGNORECASE | re.DOTALL,
@@ -25,9 +24,7 @@ class _TagAttributeParser(HTMLParser):
     def handle_starttag(self, _tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self.attributes = {name.lower(): value or "" for name, value in attrs}
 
-    def handle_startendtag(
-        self, _tag: str, attrs: list[tuple[str, str | None]]
-    ) -> None:
+    def handle_startendtag(self, _tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self.handle_starttag(_tag, attrs)
 
 
@@ -81,11 +78,7 @@ def _merge_uri_object_text(visible_text: str, card_text: list[str]) -> str:
             if not normalized:
                 continue
             if any(
-                normalized == previous
-                or (
-                    len(normalized) >= 3
-                    and f" {normalized} " in f" {previous} "
-                )
+                normalized == previous or (len(normalized) >= 3 and f" {normalized} " in f" {previous} ")
                 for previous in seen
             ):
                 continue
@@ -237,6 +230,7 @@ def _rewrite_swift_uriobjects(source: str, *, as_html: bool) -> tuple[str, bool]
     rewritten, orphan_payloads = _remove_swift_payload_elements(rewritten)
     return rewritten, found or bool(orphan_payloads)
 
+
 class TeamsHtmlParser(HTMLParser):
     """Convert common Teams rich-text markup into readable Markdown-like text."""
 
@@ -252,15 +246,11 @@ class TeamsHtmlParser(HTMLParser):
         self.suppress_leading_mention_at = False
         self.mention_tags: list[str] = []
         self.mention_content_starts: list[int] = []
-        self.mention_join_snapshots: list[
-            tuple[list[str], int] | None
-        ] = []
+        self.mention_join_snapshots: list[tuple[list[str], int] | None] = []
         self.last_mention_content_start: int | None = None
         self.last_mention_close_index: int | None = None
 
-    def handle_starttag(
-        self, tag: str, attrs: list[tuple[str, str | None]]
-    ) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attributes = {name.lower(): value or "" for name, value in attrs}
         item_type = attributes.get("itemtype", "").lower()
         if item_type.rstrip("/").endswith("/mention"):
@@ -293,9 +283,7 @@ class TeamsHtmlParser(HTMLParser):
         elif tag == "br":
             self._newline(1)
         elif tag in {"ul", "ol"}:
-            self.list_stack.append(
-                {"tag": tag, "next": self._positive_int(attributes.get("start"), 1)}
-            )
+            self.list_stack.append({"tag": tag, "next": self._positive_int(attributes.get("start"), 1)})
         elif tag == "li":
             self._newline(1)
             depth = max(0, len(self.list_stack) - 1)
@@ -412,9 +400,7 @@ class TeamsHtmlParser(HTMLParser):
         if not self.parts[close_index].endswith(")"):
             return None
 
-        first_name = self._plain_mention_text(
-            self.parts[content_start:close_index]
-        )
+        first_name = self._plain_mention_text(self.parts[content_start:close_index])
         if not first_name.endswith(","):
             return None
 
@@ -492,9 +478,8 @@ class TeamsMessageFormatter:
         is_html = "html" in kind.lower() or "html" in content_type.lower()
 
         decoded_content = html.unescape(content)
-        if (
-            not re.search(r"<URIObject\b", content, re.IGNORECASE)
-            and re.search(r"<URIObject\b", decoded_content, re.IGNORECASE)
+        if not re.search(r"<URIObject\b", content, re.IGNORECASE) and re.search(
+            r"<URIObject\b", decoded_content, re.IGNORECASE
         ):
             content = decoded_content
         content, _ = _rewrite_swift_uriobjects(content, as_html=is_html)
@@ -525,9 +510,8 @@ class TeamsMessageFormatter:
         """Remove or decode any SWIFT payloads in a cached formatted body."""
         source = body
         decoded_source = html.unescape(body)
-        if (
-            not re.search(r"<URIObject\b", source, re.IGNORECASE)
-            and re.search(r"<URIObject\b", decoded_source, re.IGNORECASE)
+        if not re.search(r"<URIObject\b", source, re.IGNORECASE) and re.search(
+            r"<URIObject\b", decoded_source, re.IGNORECASE
         ):
             source = decoded_source
         rewritten, found = _rewrite_swift_uriobjects(source, as_html=False)
@@ -536,11 +520,7 @@ class TeamsMessageFormatter:
     def _attachment_markers(self, message: dict[str, Any]) -> list[str]:
         properties = message.get("properties")
         properties = properties if isinstance(properties, dict) else {}
-        raw_files = (
-            properties.get("files")
-            or message.get("files")
-            or message.get("attachments")
-        )
+        raw_files = properties.get("files") or message.get("files") or message.get("attachments")
         files = self._as_items(raw_files)
         markers: list[str] = []
         for item in files:
@@ -548,12 +528,7 @@ class TeamsMessageFormatter:
                 continue
             info = item.get("fileInfo")
             info = info if isinstance(info, dict) else {}
-            name = (
-                item.get("fileName")
-                or item.get("filename")
-                or item.get("name")
-                or item.get("displayName")
-            )
+            name = item.get("fileName") or item.get("filename") or item.get("name") or item.get("displayName")
             url = (
                 info.get("fileUrl")
                 or info.get("shareUrl")
@@ -618,5 +593,3 @@ class TeamsMessageFormatter:
                 output.append(value)
                 seen.add(value)
         return output
-
-

@@ -6,10 +6,10 @@ import logging
 import re
 import shutil
 import tempfile
-import zipfile
 import threading
 import time as time_module
 import uuid
+import zipfile
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -27,7 +27,6 @@ from teams_exporter.teams_connector import (
 from teams_exporter.teams_exporter import TeamsExporter
 from teams_exporter.teams_service import TeamsService
 from teams_exporter.token_provider import AuthenticationRequiredError
-
 
 MAX_REQUEST_BYTES = 1_000_000
 MAX_CHAT_CATALOG_SIZE = 10_000
@@ -48,7 +47,6 @@ TEMPLATE_ENVIRONMENT = Environment(
     autoescape=select_autoescape(("html",)),
 )
 logger = logging.getLogger(__name__)
-
 
 
 @dataclass(frozen=True)
@@ -158,7 +156,8 @@ class LocalTeamsHTTPServer(ThreadingHTTPServer):
                     job.progress = {
                         key: value
                         for key, value in update.items()
-                        if key in {
+                        if key
+                        in {
                             "phase",
                             "chat_index",
                             "chats_total",
@@ -336,7 +335,9 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if not self._request_is_local():
-            self._send_json(403, self._error("local_only", "This server accepts local browser requests only."))
+            self._send_json(
+                403, self._error("local_only", "This server accepts local browser requests only.")
+            )
             return
         parsed_target = urlsplit(self.path)
         path = parsed_target.path
@@ -390,7 +391,9 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
                 or not isinstance(content_type, str)
                 or not content_type.startswith("image/")
             ):
-                self._send_json(502, self._error("profile_picture_failed", "Teams returned an invalid image."))
+                self._send_json(
+                    502, self._error("profile_picture_failed", "Teams returned an invalid image.")
+                )
                 return
             etag = f'"{hashlib.sha256(image).hexdigest()}"'
             if self._if_none_match_matches(etag):
@@ -423,7 +426,9 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
             except OSError:
                 self._send_json(404, self._error("not_found", "Not found."))
                 return
-            content_type = "text/css; charset=utf-8" if asset_name.endswith(".css") else "text/javascript; charset=utf-8"
+            content_type = (
+                "text/css; charset=utf-8" if asset_name.endswith(".css") else "text/javascript; charset=utf-8"
+            )
             self.send_response(200)
             self._security_headers(content_type)
             self.send_header("Content-Length", str(len(body)))
@@ -580,7 +585,9 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         if not self._request_is_local():
-            self._send_json(403, self._error("local_only", "This server accepts local browser requests only."))
+            self._send_json(
+                403, self._error("local_only", "This server accepts local browser requests only.")
+            )
             return
         if not self._origin_is_local():
             self._send_json(403, self._error("origin_rejected", "The request origin is not allowed."))
@@ -673,9 +680,15 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
     def _safe_route(self) -> str:
         path = urlsplit(getattr(self, "path", "")).path
         known = {
-            "/", "/chats", "/api/auth-status", "/api/chats",
-            "/api/cached-chats", "/api/download-status", "/api/download-file",
-            "/api/download", "/api/cancel",
+            "/",
+            "/chats",
+            "/api/auth-status",
+            "/api/chats",
+            "/api/cached-chats",
+            "/api/download-status",
+            "/api/download-file",
+            "/api/download",
+            "/api/cancel",
         }
         if path in known:
             return path
@@ -706,9 +719,7 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
             seen_tokens: set[str] = set()
             while True:
                 list_method = (
-                    self.server.service.list_cached_chats
-                    if cached
-                    else self.server.service.list_chats
+                    self.server.service.list_cached_chats if cached else self.server.service.list_chats
                 )
                 result = list_method(
                     page_size=100,
@@ -775,8 +786,10 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
         if not isinstance(payload, dict):
             raise ValueError("The request body must be a JSON object.")
         chat_ids = payload.get("chat_ids")
-        if not isinstance(chat_ids, list) or not chat_ids or any(
-            not isinstance(chat_id, str) or not chat_id.strip() for chat_id in chat_ids
+        if (
+            not isinstance(chat_ids, list)
+            or not chat_ids
+            or any(not isinstance(chat_id, str) or not chat_id.strip() for chat_id in chat_ids)
         ):
             raise ValueError("Select one or more conversations.")
         chat_ids = list(dict.fromkeys(chat_id.strip() for chat_id in chat_ids))
@@ -803,7 +816,9 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
         by_id = {chat["id"]: chat for chat in chats}
         missing = [chat_id for chat_id in chat_ids if chat_id not in by_id]
         if missing:
-            raise ValueError("One or more selected chats are no longer available. Refresh the list and try again.")
+            raise ValueError(
+                "One or more selected chats are no longer available. Refresh the list and try again."
+            )
         selected_chats = [by_id[chat_id] for chat_id in chat_ids]
 
         return DownloadRequest(
@@ -945,10 +960,7 @@ class LocalTeamsRequestHandler(BaseHTTPRequestHandler):
 
     def _send_file(self, path: Path, filename: str, content_type: str) -> None:
         fallback = re.sub(r"[^A-Za-z0-9._-]", "_", filename) or "teams-export"
-        disposition = (
-            f'attachment; filename="{fallback}"; '
-            f"filename*=UTF-8''{quote(filename, safe='')}"
-        )
+        disposition = f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename, safe='')}"
         self.send_response(200)
         self._security_headers(content_type)
         self.send_header("Content-Disposition", disposition)

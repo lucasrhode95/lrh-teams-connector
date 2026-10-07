@@ -44,9 +44,7 @@ class AppLoggingTests(unittest.TestCase):
             self.assertEqual(len(handlers), 1)
             handler = handlers[0]
             self.assertIsInstance(handler, logging.handlers.TimedRotatingFileHandler)
-            self.assertFalse(
-                any(getattr(item, "stream", None) is sys.stdout for item in handlers)
-            )
+            self.assertFalse(any(getattr(item, "stream", None) is sys.stdout for item in handlers))
             self.assertEqual(handler.when, "MIDNIGHT")
             self.assertEqual(handler.backupCount, DEFAULT_BACKUP_DAYS)
 
@@ -70,9 +68,7 @@ class AppLoggingTests(unittest.TestCase):
     def test_stdout_configuration_writes_to_both_stream_and_file(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             stream = io.StringIO()
-            path = configure_app_logging(
-                "http", directory=temporary, stdout=True, stream=stream
-            )
+            path = configure_app_logging("http", directory=temporary, stdout=True, stream=stream)
             logging.getLogger("test.http").warning("HTTP server ready")
             for handler in self.root.handlers:
                 handler.flush()
@@ -92,9 +88,7 @@ class AppLoggingTests(unittest.TestCase):
                 )
         else:
             with patch.dict(os.environ, {"XDG_DATA_HOME": "/tmp/test-app-data"}):
-                self.assertEqual(
-                    app_data_directory(), Path("/tmp/test-app-data") / "scrape-teams-chat"
-                )
+                self.assertEqual(app_data_directory(), Path("/tmp/test-app-data") / "scrape-teams-chat")
 
 
 if __name__ == "__main__":

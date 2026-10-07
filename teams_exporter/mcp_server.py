@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import argparse
-import logging
 import functools
 import json
+import logging
 import sys
 import time
 from datetime import datetime
@@ -15,7 +15,6 @@ from mcp.types import CallToolResult, ResourceLink, TextContent, ToolAnnotations
 from teams_exporter.app_logging import configure_app_logging
 from teams_exporter.teams_service import TeamsService
 from teams_exporter.token_provider import TokenProvider
-
 
 logger = logging.getLogger(__name__)
 
@@ -36,15 +35,14 @@ def _result_log_summary(result: object) -> str:
         if isinstance(value, int) and not isinstance(value, bool):
             fields.append(f"{key}={value}")
     status = result.get("status")
-    if isinstance(status, str) and status in {
-        "complete", "preparing", "accepted", "cancelled", "failed"
-    }:
+    if isinstance(status, str) and status in {"complete", "preparing", "accepted", "cancelled", "failed"}:
         fields.append(f"status={status}")
     return " ".join(fields) or f"result_fields={len(result)}"
 
 
 def _logged_operation(function):
     """Add privacy-safe timing and outcome logs around one MCP operation."""
+
     @functools.wraps(function)
     def wrapped(*args, **kwargs):
         operation = function.__name__
@@ -548,7 +546,7 @@ def create_mcp_server(
         Coverage reports remote/archive composition and transient retries.
 
         Args:
-            conversation_id: Stable Teams conversation ID from list_chats/search results. The self chat uses 48:notes.
+            conversation_id: Stable Teams ID from list_chats/search results; the self chat uses 48:notes.
             page_size: Requested message count (1–50); the response-size budget may lower the effective count.
             since: Inclusive lower timestamp, or null for the oldest available history.
             until: Inclusive upper timestamp, or null for no upper bound.
@@ -806,9 +804,11 @@ def create_mcp_server(
 
         Args:
             conversation_id: Stable ID from list_chats or a search result.
-            expected_chat_name: Exact current chat name from list_chats; checked against the live catalog before sending.
+            expected_chat_name: Current name from list_chats; checked before sending.
             text: Plain-text message body, up to 10,000 characters. HTML is escaped.
-            user_confirmation: Short quote or record of the user's explicit authorization for this recipient and content (1–1,000 characters). Never invent or infer it; this value alone does not authorize the action.
+            user_confirmation: Record of explicit user authorization for this destination and content
+                (1–1,000 characters). Never invent or infer it; this value alone does not
+                authorize the action.
         """
         return teams.send_message(
             conversation_id,

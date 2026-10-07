@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from secrets import token_urlsafe
 from typing import Any
@@ -24,12 +24,12 @@ from teams_exporter.teams_message_formatter import TeamsMessageFormatter
 from teams_exporter.teams_search_index import TeamsSearchIndex
 from teams_exporter.token_provider import AuthenticationRequiredError
 
-
 logger = logging.getLogger(__name__)
 
 
 def _logged_service_operation(function):
     """Log operation timing and safe result counts without recording arguments."""
+
     @functools.wraps(function)
     def wrapped(*args, **kwargs):
         operation = function.__name__
@@ -53,15 +53,23 @@ def _logged_service_operation(function):
                 if isinstance(value, list):
                     details.append(f"{key}_count={len(value)}")
             for key in (
-                "returned_count", "archive_messages_in_range", "pages_fetched",
-                "messages_retrieved", "total_matches_in_index", "message_count",
+                "returned_count",
+                "archive_messages_in_range",
+                "pages_fetched",
+                "messages_retrieved",
+                "total_matches_in_index",
+                "message_count",
             ):
                 value = result.get(key)
                 if isinstance(value, int) and not isinstance(value, bool):
                     details.append(f"{key}={value}")
             status = result.get("status")
             if isinstance(status, str) and status in {
-                "complete", "preparing", "accepted", "cancelled", "failed"
+                "complete",
+                "preparing",
+                "accepted",
+                "cancelled",
+                "failed",
             }:
                 details.append(f"status={status}")
         logger.info(
@@ -256,10 +264,7 @@ class TeamsService:
                 catalog_bootstrap=update.get("is_bootstrap") is True,
             )
             self._refresh_self_chat_activity()
-            self._chats_cache = [
-                self._chat_from_record(record)
-                for record in self.index.chat_catalog()
-            ]
+            self._chats_cache = [self._chat_from_record(record) for record in self.index.chat_catalog()]
             self._chats_cache_until = time.monotonic() + 60
         return self._chats_cache
 
@@ -332,7 +337,7 @@ class TeamsService:
         next_offset = offset + len(page)
         items = [self._chat_record(chat) for chat in page]
         if include_avatar_uris:
-            for item, chat in zip(items, page):
+            for item, chat in zip(items, page, strict=True):
                 item["avatar_url"] = chat.avatar_url
         return {
             "items": items,
@@ -392,7 +397,7 @@ class TeamsService:
         next_offset = offset + len(page)
         items = [self._chat_record(chat) for chat in page]
         if include_avatar_uris:
-            for item, chat in zip(items, page):
+            for item, chat in zip(items, page, strict=True):
                 item["avatar_url"] = chat.avatar_url
         return {
             "items": items,
@@ -428,9 +433,7 @@ class TeamsService:
         if not isinstance(text, str) or not text.strip():
             raise ValueError("text must be a non-empty string.")
         if len(text) > MAX_SEND_MESSAGE_CHARS:
-            raise ValueError(
-                f"text must contain at most {MAX_SEND_MESSAGE_CHARS:,} characters."
-            )
+            raise ValueError(f"text must contain at most {MAX_SEND_MESSAGE_CHARS:,} characters.")
         if "\x00" in text:
             raise ValueError("text cannot contain a null character.")
         if (
@@ -438,18 +441,12 @@ class TeamsService:
             or not user_confirmation.strip()
             or len(user_confirmation) > MAX_USER_CONFIRMATION_CHARS
         ):
-            raise ValueError(
-                "user_confirmation must contain the user's explicit send authorization."
-            )
+            raise ValueError("user_confirmation must contain the user's explicit send authorization.")
 
         self._ensure_session()
         chat_id = conversation_id.strip()
         chat = next(
-            (
-                candidate
-                for candidate in self._get_chats(refresh=True)
-                if candidate.id == chat_id
-            ),
+            (candidate for candidate in self._get_chats(refresh=True) if candidate.id == chat_id),
             None,
         )
         if chat is None:
@@ -457,9 +454,7 @@ class TeamsService:
         actual_name = " ".join(chat.display_name.split()).casefold()
         expected_name = " ".join(expected_chat_name.split()).casefold()
         if actual_name != expected_name:
-            raise ValueError(
-                "expected_chat_name does not match the current Teams chat catalog entry."
-            )
+            raise ValueError("expected_chat_name does not match the current Teams chat catalog entry.")
 
         result = self.connector.send_message(chat_id, text)
         if not isinstance(result, dict):
@@ -494,13 +489,9 @@ class TeamsService:
         else:
             offset = 0
 
-        items, total = self.index.search_chats_by_participant(
-            query, limit=page_size, offset=offset
-        )
+        items, total = self.index.search_chats_by_participant(query, limit=page_size, offset=offset)
         for item in items:
-            item["is_self_chat"] = (
-                item.get("id") == TeamsConnector.SELF_CHAT_ID
-            )
+            item["is_self_chat"] = item.get("id") == TeamsConnector.SELF_CHAT_ID
         coverage = self.index.participant_coverage()
         complete = coverage["catalog_chats"] == coverage["complete_rosters"]
         next_offset = offset + len(items)
@@ -525,9 +516,7 @@ class TeamsService:
                 "catalog_chats": coverage["catalog_chats"],
                 "rosters_indexed": coverage["complete_rosters"],
                 "rosters_synced": coverage["synced_rosters"],
-                "rosters_not_indexed": max(
-                    0, coverage["catalog_chats"] - coverage["synced_rosters"]
-                ),
+                "rosters_not_indexed": max(0, coverage["catalog_chats"] - coverage["synced_rosters"]),
                 "rosters_with_unresolved_names": coverage["rosters_with_unresolved_names"],
                 "unresolved_participants": coverage["unresolved_participants"],
                 "complete_for_chat_catalog": complete and coverage["catalog_chats"] > 0,
@@ -584,9 +573,8 @@ class TeamsService:
             }
 
         request_url = state["continuation_url"]
-        if request_url:
-            if request_url in state["seen_continuation_urls"]:
-                raise RuntimeError("Teams repeated a message continuation link.")
+        if request_url and request_url in state["seen_continuation_urls"]:
+            raise RuntimeError("Teams repeated a message continuation link.")
         messages, next_url, raw_scanned, missing_timestamps = self.connector.get_messages_page(
             conversation_id,
             page_size=effective_page_size,
@@ -638,14 +626,9 @@ class TeamsService:
             self._cursors.pop(cursor, None)
 
         account_user_id = self._current_account_user_id()
-        fetched_ids = {
-            str(message["id"])
-            for message in messages
-            if message.get("id") is not None
-        }
+        fetched_ids = {str(message["id"]) for message in messages if message.get("id") is not None}
         records = [
-            self._stored_message_record(row, account_user_id=account_user_id)
-            for row in reversed(stored_page)
+            self._stored_message_record(row, account_user_id=account_user_id) for row in reversed(stored_page)
         ]
         base_records = []
         for record in records:
@@ -663,9 +646,7 @@ class TeamsService:
                 "id": conversation_id,
                 "name": chat.display_name if chat else conversation_id,
                 "is_self_chat": (
-                    chat.is_self_chat
-                    if chat is not None
-                    else conversation_id == TeamsConnector.SELF_CHAT_ID
+                    chat.is_self_chat if chat is not None else conversation_id == TeamsConnector.SELF_CHAT_ID
                 ),
             },
             "items": records,
@@ -712,9 +693,7 @@ class TeamsService:
             content_budget = max(0, content_budget - spent)
             remaining_records -= 1
         result["coverage"]["messages_with_truncated_content"] = bodies_truncated
-        result["coverage"]["content_continuation_tool"] = (
-            "get_message_content" if bodies_truncated else None
-        )
+        result["coverage"]["content_continuation_tool"] = "get_message_content" if bodies_truncated else None
         return result
 
     @staticmethod
@@ -782,9 +761,7 @@ class TeamsService:
         coverage = dict(self.connector.last_message_read_coverage)
         since_key = self._bound_key(since_utc) or None
         until_key = self._bound_key(until_utc) or None
-        archive_count = self.index.count_messages_in_range(
-            conversation_id, since=since_key, until=until_key
-        )
+        archive_count = self.index.count_messages_in_range(conversation_id, since=since_key, until=until_key)
         return {
             "conversation_id": conversation_id,
             "requested_message_limit": message_limit,
@@ -806,9 +783,7 @@ class TeamsService:
             self._validate_unbounded_positive_int("limit", limit)
         since_key = self._bound_key(self._normalize_bound("since", since)) or None
         until_key = self._bound_key(self._normalize_bound("until", until)) or None
-        total = self.index.count_messages_in_range(
-            conversation_id, since=since_key, until=until_key
-        )
+        total = self.index.count_messages_in_range(conversation_id, since=since_key, until=until_key)
         count = min(total, limit) if limit is not None else total
         cutoff = (
             self.index.latest_message_cutoff(
@@ -903,9 +878,7 @@ class TeamsService:
         max_pages_to_fetch: int = 20,
     ) -> dict[str, Any]:
         """Prepare a resumable full-text snapshot from remote and retained messages."""
-        self._validate_int(
-            "max_pages_to_fetch", max_pages_to_fetch, 1, MAX_EXPORT_PAGES_PER_CALL
-        )
+        self._validate_int("max_pages_to_fetch", max_pages_to_fetch, 1, MAX_EXPORT_PAGES_PER_CALL)
         if message_limit is not None:
             self._validate_unbounded_positive_int("message_limit", message_limit)
         since_utc = self._normalize_bound("since", since)
@@ -952,34 +925,29 @@ class TeamsService:
         pages_this_call = 0
         retries_this_call = 0
         remote_messages_retrieved = (
-            self.index.count_export_job_messages(export_id)
-            if job["message_limit"] is not None
-            else None
+            self.index.count_export_job_messages(export_id) if job["message_limit"] is not None else None
         )
         if not job["complete"]:
             since_value = self._parse_stored_bound(job["since"])
             until_value = self._parse_stored_bound(job["until"])
             while pages_this_call < max_pages_to_fetch:
                 request_url = job["next_url"]
-                messages, next_url, raw_scanned, missing_timestamps = (
-                    self.connector.get_messages_page(
-                        str(job["conversation_id"]),
-                        page_size=(
-                            TeamsConnector.MESSAGE_PAGE_SIZE
-                            if job["message_limit"] is None
-                            else min(
-                                TeamsConnector.MESSAGE_PAGE_SIZE,
-                                max(
-                                    1,
-                                    int(job["message_limit"])
-                                    - remote_messages_retrieved,
-                                ),
-                            )
-                        ),
-                        since=since_value,
-                        until=until_value,
-                        continuation_url=request_url,
-                    )
+                messages, next_url, raw_scanned, missing_timestamps = self.connector.get_messages_page(
+                    str(job["conversation_id"]),
+                    page_size=(
+                        TeamsConnector.MESSAGE_PAGE_SIZE
+                        if job["message_limit"] is None
+                        else min(
+                            TeamsConnector.MESSAGE_PAGE_SIZE,
+                            max(
+                                1,
+                                int(job["message_limit"]) - remote_messages_retrieved,
+                            ),
+                        )
+                    ),
+                    since=since_value,
+                    until=until_value,
+                    continuation_url=request_url,
                 )
                 retries_this_call += int(self.connector.last_request_retry_count)
                 job = self.index.save_export_job_page(
@@ -993,9 +961,7 @@ class TeamsService:
                 )
                 pages_this_call += 1
                 if job["message_limit"] is not None:
-                    remote_messages_retrieved = (
-                        self.index.count_export_job_messages(export_id)
-                    )
+                    remote_messages_retrieved = self.index.count_export_job_messages(export_id)
                 if job["complete"]:
                     break
 
@@ -1021,9 +987,7 @@ class TeamsService:
                         job["message_limit"] is not None
                         and remote_messages_retrieved >= int(job["message_limit"])
                     ),
-                    "missing_timestamp_items_excluded_total": int(
-                        job["missing_timestamps"]
-                    ),
+                    "missing_timestamp_items_excluded_total": int(job["missing_timestamps"]),
                     "retry_count_this_call": retries_this_call,
                     "archive_included": True,
                 },
@@ -1047,9 +1011,7 @@ class TeamsService:
                 "remote_items_scanned_total": int(job["scanned"]),
                 "remote_messages_retrieved_total": remote_messages_retrieved,
                 "message_limit_reached": False,
-                "missing_timestamp_items_excluded_total": int(
-                    job["missing_timestamps"]
-                ),
+                "missing_timestamp_items_excluded_total": int(job["missing_timestamps"]),
                 "retry_count_this_call": retries_this_call,
                 "archive_included": True,
             },
@@ -1087,9 +1049,7 @@ class TeamsService:
                 stream.seek(offset_bytes)
                 first_byte = stream.read(1)
                 if first_byte and first_byte[0] & 0xC0 == 0x80:
-                    raise ValueError(
-                        "offset_bytes must be a UTF-8 boundary returned by a previous read."
-                    )
+                    raise ValueError("offset_bytes must be a UTF-8 boundary returned by a previous read.")
             stream.seek(offset_bytes)
             raw = stream.read(max_bytes)
         content = ""
@@ -1125,9 +1085,7 @@ class TeamsService:
         conversation_id = str(job["conversation_id"])
         since = str(job["since"] or "") or None
         until = str(job["until"] or "") or None
-        total = self.index.count_messages_in_range(
-            conversation_id, since=since, until=until
-        )
+        total = self.index.count_messages_in_range(conversation_id, since=since, until=until)
         message_limit = job.get("message_limit")
         output_count = min(total, int(message_limit)) if message_limit is not None else total
         cutoff = (
@@ -1181,8 +1139,7 @@ class TeamsService:
                         break
                     for row in rows:
                         marker = (
-                            " "
-                            + self.formatter.soft_deleted_marker(row["deleted_at"])
+                            " " + self.formatter.soft_deleted_marker(row["deleted_at"])
                             if row["is_deleted"]
                             else ""
                         )
@@ -1231,9 +1188,7 @@ class TeamsService:
             raise ValueError("match_mode must be 'exact', 'substring', or 'all_terms'.")
         self._validate_int("result_limit", result_limit, 1, MAX_SEARCH_RESULTS)
         self._validate_unbounded_positive_int("max_matches", max_matches)
-        self._validate_int(
-            "max_pages_to_fetch", max_pages_to_fetch, 1, MAX_SEARCH_PAGES_PER_CALL
-        )
+        self._validate_int("max_pages_to_fetch", max_pages_to_fetch, 1, MAX_SEARCH_PAGES_PER_CALL)
         since_utc = self._normalize_bound("since", since)
         until_utc = self._normalize_bound("until", until)
         if since_utc is None or until_utc is None:
@@ -1247,10 +1202,12 @@ class TeamsService:
         if not all_catalog:
             if not isinstance(conversation_ids, list) or not conversation_ids:
                 raise ValueError("conversation_ids must contain at least one conversation ID.")
-            conversation_ids = list(dict.fromkeys(
-                self._validate_query(conversation_id, "conversation_ids item")
-                for conversation_id in conversation_ids
-            ))
+            conversation_ids = list(
+                dict.fromkeys(
+                    self._validate_query(conversation_id, "conversation_ids item")
+                    for conversation_id in conversation_ids
+                )
+            )
         self._ensure_session()
         if all_catalog:
             chats = self._get_chats(refresh=cursor is None)
@@ -1294,14 +1251,12 @@ class TeamsService:
             if request_url and request_url in state["seen_continuation_urls"]:
                 raise RuntimeError("Teams repeated a message continuation link.")
             try:
-                messages, next_url, raw_scanned, missing_timestamps = (
-                    self.connector.get_messages_page(
-                        chat_id,
-                        page_size=MAX_HISTORY_PAGE_SIZE,
-                        since=since_utc,
-                        until=until_utc,
-                        continuation_url=request_url,
-                    )
+                messages, next_url, raw_scanned, missing_timestamps = self.connector.get_messages_page(
+                    chat_id,
+                    page_size=MAX_HISTORY_PAGE_SIZE,
+                    since=since_utc,
+                    until=until_utc,
+                    continuation_url=request_url,
                 )
                 if request_url:
                     state["seen_continuation_urls"].add(request_url)
@@ -1328,8 +1283,7 @@ class TeamsService:
                 "until": until_key,
                 "remote_pages_fetched": previous.get("remote_pages_fetched", 0) + 1,
                 "remote_items_scanned": previous.get("remote_items_scanned", 0) + raw_scanned,
-                "missing_timestamp_items": previous.get("missing_timestamp_items", 0)
-                + missing_timestamps,
+                "missing_timestamp_items": previous.get("missing_timestamp_items", 0) + missing_timestamps,
                 "remote_complete": next_url is None,
                 "last_refreshed_at": self.index._now(),
             }
@@ -1361,9 +1315,7 @@ class TeamsService:
             requested_coverage.append(dict(item))
         preparation_complete = state["phase"] == "results"
         if not preparation_complete or failed_chat:
-            next_cursor = self._store_cursor(
-                "search_messages", scope, state, old=cursor
-            )
+            next_cursor = self._store_cursor("search_messages", scope, state, old=cursor)
             return {
                 "items": [],
                 "max_matches": max_matches,
@@ -1407,10 +1359,7 @@ class TeamsService:
         )
         truncated = remaining <= len(rows) and has_more
         account_user_id = self._current_account_user_id()
-        items = [
-            self._indexed_message_record(row, query, account_user_id=account_user_id)
-            for row in rows
-        ]
+        items = [self._indexed_message_record(row, query, account_user_id=account_user_id) for row in rows]
         state["returned_total"] += len(items)
         if rows:
             last = rows[-1]
@@ -1422,9 +1371,7 @@ class TeamsService:
         if truncated:
             next_cursor = None
         elif has_more:
-            next_cursor = self._store_cursor(
-                "search_messages", scope, state, old=cursor
-            )
+            next_cursor = self._store_cursor("search_messages", scope, state, old=cursor)
         else:
             next_cursor = None
             if cursor:
@@ -1502,8 +1449,7 @@ class TeamsService:
                 "participant_count": int(state["participants_scanned"]),
                 "named_participant_count": max(
                     0,
-                    int(state["participants_scanned"])
-                    - int(state["unresolved_participants"]),
+                    int(state["participants_scanned"]) - int(state["unresolved_participants"]),
                 ),
                 "unresolved_participants": int(state["unresolved_participants"]),
                 "error": state["participant_sync_error"],
@@ -1548,9 +1494,11 @@ class TeamsService:
             message_error = None
             if page_budget > 0 and message_budget > 0 and (not history_complete or refresh_latest):
                 is_latest_refresh = history_complete
-                continuation_url = None if is_latest_refresh or state["messages_scanned"] == 0 else state[
-                    "messages_next_url"
-                ]
+                continuation_url = (
+                    None
+                    if is_latest_refresh or state["messages_scanned"] == 0
+                    else state["messages_next_url"]
+                )
                 seen_links: set[str] = set()
                 while page_budget > 0 and message_budget > 0:
                     if continuation_url and continuation_url in seen_links:
@@ -1560,12 +1508,10 @@ class TeamsService:
                         seen_links.add(continuation_url)
                     request_size = min(MAX_HISTORY_PAGE_SIZE, message_budget)
                     try:
-                        page, next_url, raw_scanned, missing_timestamps = (
-                            self.connector.get_messages_page(
-                                chat.id,
-                                page_size=request_size,
-                                continuation_url=continuation_url,
-                            )
+                        page, next_url, raw_scanned, missing_timestamps = self.connector.get_messages_page(
+                            chat.id,
+                            page_size=request_size,
+                            continuation_url=continuation_url,
                         )
                     except AuthenticationRequiredError:
                         message_retries += int(self.connector.last_request_retry_count)
@@ -1583,9 +1529,7 @@ class TeamsService:
                         raw_scanned=raw_scanned,
                         missing_timestamp_count=missing_timestamps,
                         formatter=self.formatter,
-                        history_complete=(
-                            True if is_latest_refresh else next_url is None
-                        ),
+                        history_complete=(True if is_latest_refresh else next_url is None),
                     )
                     message_pages += 1
                     message_items += int(new_state["messages_added_this_page"])
@@ -1724,9 +1668,7 @@ class TeamsService:
             "author": row["author"],
             "author_id": author_id,
             "is_self": (
-                author_identifier == account_identifier
-                if author_identifier and account_identifier
-                else None
+                author_identifier == account_identifier if author_identifier and account_identifier else None
             ),
             "timestamp": row["sent_at"],
             "content": body,
@@ -1755,16 +1697,15 @@ class TeamsService:
             "author": row["author"],
             "author_id": author_id,
             "is_self": (
-                author_identifier == account_identifier
-                if author_identifier and account_identifier
-                else None
+                author_identifier == account_identifier if author_identifier and account_identifier else None
             ),
             "timestamp": row["sent_at"],
             "excerpt": (
                 f"{self.formatter.soft_deleted_marker(row.get('deleted_at'))} "
                 if row.get("is_deleted")
                 else ""
-            ) + self._excerpt(row["body"], query),
+            )
+            + self._excerpt(row["body"], query),
             "message_type": row["message_type"],
             "is_deleted": bool(row.get("is_deleted")),
             "deleted_at": row.get("deleted_at"),
@@ -1781,9 +1722,7 @@ class TeamsService:
     @staticmethod
     def _participant_record(member: dict[str, Any]) -> dict[str, str | None]:
         return {
-            "id": TeamsService._first_string(
-                member, "id", "mri", "objectId", "userId", "userMri"
-            ),
+            "id": TeamsService._first_string(member, "id", "mri", "objectId", "userId", "userMri"),
             "display_name": TeamsService._first_string(
                 member, "userDisplayName", "displayName", "name", "friendlyName"
             ),
@@ -1815,9 +1754,7 @@ class TeamsService:
         if isinstance(unread, int) and not isinstance(unread, bool):
             unread = bool(unread)
         is_empty_conversation = record.get("is_empty_conversation")
-        if isinstance(is_empty_conversation, int) and not isinstance(
-            is_empty_conversation, bool
-        ):
+        if isinstance(is_empty_conversation, int) and not isinstance(is_empty_conversation, bool):
             is_empty_conversation = bool(is_empty_conversation)
         return ChatSummary(
             id=str(record["conversation_id"]),
@@ -1829,9 +1766,7 @@ class TeamsService:
             avatar_url=record.get("avatar_url"),
             is_self_chat=str(record["conversation_id"]) == TeamsConnector.SELF_CHAT_ID,
             is_empty_conversation=(
-                is_empty_conversation
-                if isinstance(is_empty_conversation, bool)
-                else None
+                is_empty_conversation if isinstance(is_empty_conversation, bool) else None
             ),
         )
 
@@ -1860,8 +1795,8 @@ class TeamsService:
         if value is None:
             return None
         if value.tzinfo is None or value.utcoffset() is None:
-            value = value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+            value = value.replace(tzinfo=UTC)
+        return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
     @staticmethod
     def _normalize_bound(name: str, value: datetime | None) -> datetime | None:
@@ -1871,7 +1806,7 @@ class TeamsService:
             raise TypeError(f"{name} must be a datetime or None.")
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError(f"{name} must include a timezone.")
-        return value.astimezone(timezone.utc)
+        return value.astimezone(UTC)
 
     @staticmethod
     def _bound_key(value: datetime | None) -> str:

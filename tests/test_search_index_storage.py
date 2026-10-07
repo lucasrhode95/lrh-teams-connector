@@ -14,7 +14,7 @@ from teams_exporter.teams_service import TeamsService
 
 
 def fingerprint(tenant_id: str, user_id: str) -> str:
-    return hashlib.sha256(f"{tenant_id}:{user_id}".encode("utf-8")).hexdigest()
+    return hashlib.sha256(f"{tenant_id}:{user_id}".encode()).hexdigest()
 
 
 class CachedIdentityConnector:
@@ -41,9 +41,7 @@ class SearchIndexStorageTests(unittest.TestCase):
         unowned = TeamsSearchIndex(base)
         unowned.upsert_chats([ChatSummary("19:unowned@thread.v2", "Unowned")])
 
-        selected, warning = TeamsSearchIndex.resolve_account_path(
-            base, fingerprint("tenant-a", "user-a")
-        )
+        selected, warning = TeamsSearchIndex.resolve_account_path(base, fingerprint("tenant-a", "user-a"))
 
         self.assertNotEqual(selected, base)
         self.assertIn("no verified account owner", warning)
@@ -86,7 +84,9 @@ class SearchIndexStorageTests(unittest.TestCase):
         self.assertNotEqual(first_index.path, other_index.path)
         self.assertEqual(other_index.counts()["catalog_chats"], 0)
         self.assertIn("belongs to another account", other_service.database_notice)
-        self.assertEqual(TeamsSearchIndex.read_owner_fingerprint(first_index.path), fingerprint("tenant-a", "user-a"))
+        self.assertEqual(
+            TeamsSearchIndex.read_owner_fingerprint(first_index.path), fingerprint("tenant-a", "user-a")
+        )
 
     def test_backup_is_consistent_portable_and_refuses_accidental_overwrite(self):
         owner = fingerprint("tenant-a", "user-a")
@@ -110,14 +110,16 @@ class SearchIndexStorageTests(unittest.TestCase):
         def save(content: str, edit_time: str) -> None:
             index.upsert_messages(
                 "19:alpha@thread.v2",
-                [{
-                    "id": "m1",
-                    "originalarrivaltime": "2026-09-28T10:00:00Z",
-                    "imdisplayname": "Taylor",
-                    "messagetype": "Text",
-                    "content": content,
-                    "properties": {"edittime": edit_time},
-                }],
+                [
+                    {
+                        "id": "m1",
+                        "originalarrivaltime": "2026-09-28T10:00:00Z",
+                        "imdisplayname": "Taylor",
+                        "messagetype": "Text",
+                        "content": content,
+                        "properties": {"edittime": edit_time},
+                    }
+                ],
                 formatter=formatter,
             )
 
@@ -125,9 +127,7 @@ class SearchIndexStorageTests(unittest.TestCase):
         save("new edited body " + ("x" * 2_000), "2026-09-28T10:03:00Z")
         save("stale body", "2026-09-28T10:02:00Z")
 
-        rows = index.query_message_page(
-            "19:alpha@thread.v2", since=None, until=None, before=None, limit=10
-        )
+        rows = index.query_message_page("19:alpha@thread.v2", since=None, until=None, before=None, limit=10)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["body"], "new edited body " + ("x" * 2_000))
         self.assertEqual(rows[0]["edited_at"], "2026-09-28T10:03:00Z")
@@ -142,13 +142,15 @@ class SearchIndexStorageTests(unittest.TestCase):
         )
         index.upsert_messages(
             "19:alpha@thread.v2",
-            [{
-                "id": "m1",
-                "originalarrivaltime": "2026-09-28T10:00:00Z",
-                "messagetype": "MessageDelete",
-                "content": "",
-                "properties": {"deletetime": "2026-09-28T11:00:00Z"},
-            }],
+            [
+                {
+                    "id": "m1",
+                    "originalarrivaltime": "2026-09-28T10:00:00Z",
+                    "messagetype": "MessageDelete",
+                    "content": "",
+                    "properties": {"deletetime": "2026-09-28T11:00:00Z"},
+                }
+            ],
             formatter=formatter,
         )
 
@@ -157,9 +159,7 @@ class SearchIndexStorageTests(unittest.TestCase):
         self.assertEqual(row["deleted_at"], "2026-09-28T11:00:00Z")
         self.assertEqual(row["body"], "kept locally")
 
-        page = index.query_message_page(
-            "19:alpha@thread.v2", since=None, until=None, before=None, limit=10
-        )
+        page = index.query_message_page("19:alpha@thread.v2", since=None, until=None, before=None, limit=10)
         self.assertEqual([item["message_id"] for item in page], ["m1"])
         self.assertTrue(page[0]["is_deleted"])
         self.assertEqual(page[0]["body"], "kept locally")
@@ -183,23 +183,27 @@ class SearchIndexStorageTests(unittest.TestCase):
         index = TeamsSearchIndex(path)
         formatter = TeamsMessageFormatter()
         index.upsert_chat_updates(
-            [ChatSummary(
-                "19:channel@thread.tacv2",
-                "Analytics · General",
-                chat_type="channel",
-                avatar_url="https://images.example.test/channel.png",
-            )],
+            [
+                ChatSummary(
+                    "19:channel@thread.tacv2",
+                    "Analytics · General",
+                    chat_type="channel",
+                    avatar_url="https://images.example.test/channel.png",
+                )
+            ],
             "sanitized-sync-token",
         )
         index.upsert_messages(
             "19:channel@thread.tacv2",
-            [{
-                "id": "m1",
-                "originalarrivaltime": "2026-09-28T10:00:00Z",
-                "imdisplayname": "Taylor",
-                "messagetype": "Text",
-                "content": "retained channel message",
-            }],
+            [
+                {
+                    "id": "m1",
+                    "originalarrivaltime": "2026-09-28T10:00:00Z",
+                    "imdisplayname": "Taylor",
+                    "messagetype": "Text",
+                    "content": "retained channel message",
+                }
+            ],
             formatter=formatter,
         )
         index.upsert_chat_updates([], "sanitized-next-sync-token", deleted_ids=["19:channel@thread.tacv2"])

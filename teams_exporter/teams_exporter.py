@@ -4,10 +4,11 @@ import json
 import os
 import re
 import tempfile
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
-from typing import Any, Callable
+from typing import Any
 
 from teams_exporter.teams_connector import (
     ChatSummary,
@@ -55,6 +56,7 @@ class TeamsExporter:
             encoding="utf-8",
             newline="\n",
         ) as spool:
+
             def report_fetch(pages: int, messages: int, retries: int) -> None:
                 if progress_callback is not None:
                     progress_callback(
@@ -105,9 +107,7 @@ class TeamsExporter:
                     message_count += len(page)
 
             coverage = self.connector.last_message_read_coverage
-            missing_timestamps = int(
-                coverage.get("missing_timestamp_messages_excluded", 0)
-            )
+            missing_timestamps = int(coverage.get("missing_timestamp_messages_excluded", 0))
             retry_count = int(coverage.get("retry_count", 0))
             descriptor, temporary_name = tempfile.mkstemp(
                 prefix=f".{destination.name}.",
@@ -120,7 +120,7 @@ class TeamsExporter:
                     lines = [
                         f"Conversation: {chat.display_name}",
                         f"Conversation ID: {chat.id}",
-                        f"Exported: {datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')}",
+                        f"Exported: {datetime.now(UTC).isoformat().replace('+00:00', 'Z')}",
                         f"Messages: {message_count}",
                     ]
                     if since is not None:
@@ -131,19 +131,14 @@ class TeamsExporter:
                         lines.append(f"Limit: {limit}")
                     if missing_timestamps:
                         lines.append(
-                            "Messages excluded because their timestamp was missing: "
-                            f"{missing_timestamps}"
+                            f"Messages excluded because their timestamp was missing: {missing_timestamps}"
                         )
                     if retry_count:
                         lines.append(f"Transient read retries: {retry_count}")
                     output.write("\n".join(lines) + "\n\n")
 
                     written = 0
-                    replay_offsets = (
-                        page_offsets
-                        if self.service is not None
-                        else reversed(page_offsets)
-                    )
+                    replay_offsets = page_offsets if self.service is not None else reversed(page_offsets)
                     for offset in replay_offsets:
                         self._raise_if_cancelled(cancel_event)
                         spool.seek(offset)
@@ -154,21 +149,14 @@ class TeamsExporter:
                                 output.write("\n")
                             timestamp = TeamsConnector.message_datetime(message)
                             timestamp_text = (
-                                timestamp.isoformat().replace("+00:00", "Z")
-                                if timestamp
-                                else "unknown time"
+                                timestamp.isoformat().replace("+00:00", "Z") if timestamp else "unknown time"
                             )
                             marker = (
-                                " "
-                                + self.formatter.soft_deleted_marker(
-                                    message.get("__deleted_at")
-                                )
+                                " " + self.formatter.soft_deleted_marker(message.get("__deleted_at"))
                                 if message.get("__is_deleted")
                                 else ""
                             )
-                            output.write(
-                                f"[{timestamp_text}] {self._author(message)}{marker}\n"
-                            )
+                            output.write(f"[{timestamp_text}] {self._author(message)}{marker}\n")
                             body = message.get("__formatted_body")
                             if isinstance(body, str):
                                 body = self.formatter.sanitize_preformatted_body(body)
@@ -227,7 +215,7 @@ class TeamsExporter:
                 suffix += 1
             used_names.add(stem.casefold())
 
-            def report_chat_progress(update: dict[str, Any]) -> None:
+            def report_chat_progress(update: dict[str, Any], index: int = index) -> None:
                 if progress_callback is not None:
                     progress_callback(
                         {

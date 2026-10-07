@@ -2,9 +2,9 @@ import base64
 import json
 import tempfile
 import threading
-import urllib.error
 import unittest
-from datetime import datetime, timezone
+import urllib.error
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
@@ -17,9 +17,8 @@ from teams_exporter.teams_connector import (
     TeamsConnector,
 )
 from teams_exporter.teams_exporter import TeamsExporter
-from teams_exporter.teams_message_formatter import TeamsHtmlParser, TeamsMessageFormatter
+from teams_exporter.teams_message_formatter import TeamsMessageFormatter
 from teams_exporter.token_provider import AuthenticationRequiredError, TokenProvider
-
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -179,33 +178,37 @@ class TeamsConnectorTests(unittest.TestCase):
         )
 
     def test_chat_rows_use_backend_avatar_urls_or_one_to_one_picture_uri(self):
-        client = StubConnector([{
-            "chats": [
+        client = StubConnector(
+            [
                 {
-                    "id": "19:group@thread.v2",
-                    "title": "Group",
-                    "chatType": "group",
-                    "avatarUrl": "https://images.example.test/group.png",
-                    "lastMessage": {},
-                },
-                {
-                    "id": "19:direct@thread.v2",
-                    "title": "Taylor Example",
-                    "chatType": "chat",
-                    "isOneOnOne": True,
-                    "members": [
-                        {"objectId": "self-guid", "mri": "8:orgid:self-guid"},
+                    "chats": [
                         {
-                            "objectId": "peer-guid",
-                            "mri": "8:orgid:peer-guid",
-                            "displayName": "Jordan Example",
+                            "id": "19:group@thread.v2",
+                            "title": "Group",
+                            "chatType": "group",
+                            "avatarUrl": "https://images.example.test/group.png",
+                            "lastMessage": {},
+                        },
+                        {
+                            "id": "19:direct@thread.v2",
+                            "title": "Taylor Example",
+                            "chatType": "chat",
+                            "isOneOnOne": True,
+                            "members": [
+                                {"objectId": "self-guid", "mri": "8:orgid:self-guid"},
+                                {
+                                    "objectId": "peer-guid",
+                                    "mri": "8:orgid:peer-guid",
+                                    "displayName": "Jordan Example",
+                                },
+                            ],
+                            "lastMessage": {},
                         },
                     ],
-                    "lastMessage": {},
-                },
-            ],
-            "metadata": {"isPartialData": False, "hasMoreChats": False},
-        }])
+                    "metadata": {"isPartialData": False, "hasMoreChats": False},
+                }
+            ]
+        )
 
         chats = {chat.id: chat for chat in client.list_chats()}
 
@@ -218,15 +221,11 @@ class TeamsConnectorTests(unittest.TestCase):
             direct_picture.path,
             "/beta/users/self-guid/profilepicturev2/8:orgid:peer-guid",
         )
-        self.assertEqual(
-            parse_qs(direct_picture.query)["displayname"], ["Jordan Example"]
-        )
+        self.assertEqual(parse_qs(direct_picture.query)["displayname"], ["Jordan Example"])
         self.assertEqual(len(client.requests), 1)
 
     def test_send_message_posts_escaped_plain_text_with_chat_service_credentials(self):
-        client = StubConnector(
-            [{"id": "sent-message-id", "OriginalArrivalTime": 1790123456789}]
-        )
+        client = StubConnector([{"id": "sent-message-id", "OriginalArrivalTime": 1790123456789}])
         client._spaces_claims["name"] = "Taylor Example"
 
         result = client.send_message(
@@ -237,8 +236,7 @@ class TeamsConnectorTests(unittest.TestCase):
         url, method, body, headers = client.requests[0]
         self.assertEqual(
             url,
-            "https://chat.example.test/v1/users/ME/conversations/"
-            "19%3Achat%40thread.v2/messages",
+            "https://chat.example.test/v1/users/ME/conversations/19%3Achat%40thread.v2/messages",
         )
         self.assertEqual(method, "POST")
         self.assertEqual(
@@ -260,9 +258,8 @@ class TeamsConnectorTests(unittest.TestCase):
         client = StubConnector()
 
         for text in ("  ", "x" * 10_001, "bad\x00text"):
-            with self.subTest(length=len(text)):
-                with self.assertRaises(ValueError):
-                    client.send_message("19:chat@thread.v2", text)
+            with self.subTest(length=len(text)), self.assertRaises(ValueError):
+                client.send_message("19:chat@thread.v2", text)
 
         self.assertEqual(client.requests, [])
 
@@ -282,9 +279,7 @@ class TeamsConnectorTests(unittest.TestCase):
         self.assertEqual(result, {})
 
     def test_members_enrich_blank_display_names_from_middle_tier_profiles(self):
-        client = StubConnector(
-            [{"members": [{"id": "8:orgid:ABC123", "displayName": ""}]}]
-        )
+        client = StubConnector([{"members": [{"id": "8:orgid:ABC123", "displayName": ""}]}])
         with patch.object(
             client,
             "_fetch_middle_tier_profile_names",
@@ -296,20 +291,25 @@ class TeamsConnectorTests(unittest.TestCase):
         resolve_names.assert_called_once_with(["abc123"])
 
     def test_csa_catalog_sorts_by_activity_and_stabilizes_ties(self):
-        client = StubConnector([
-            fixture("csa_startup.json"),
-            fixture("profile_response.json"),
-        ])
+        client = StubConnector(
+            [
+                fixture("csa_startup.json"),
+                fixture("profile_response.json"),
+            ]
+        )
 
         chats = client.list_chats()
 
-        self.assertEqual([chat.id for chat in chats], [
-            "19:zeta@thread.v2",
-            "19:beta@thread.v2",
-            "19:alpha@thread.v2",
-            "19:untitled@thread.v2",
-            "48:notes",
-        ])
+        self.assertEqual(
+            [chat.id for chat in chats],
+            [
+                "19:zeta@thread.v2",
+                "19:beta@thread.v2",
+                "19:alpha@thread.v2",
+                "19:untitled@thread.v2",
+                "48:notes",
+            ],
+        )
         self.assertEqual(chats[-1].id, "48:notes")
         self.assertTrue(chats[-1].is_self_chat)
         self.assertEqual(chats[-1].display_name, "Notes to self")
@@ -320,9 +320,7 @@ class TeamsConnectorTests(unittest.TestCase):
         self.assertEqual(chats[2].unread, False)
         self.assertEqual(chats[3].display_name, "Resolved One-to-one Person")
         self.assertEqual(client.requests[1][1], "POST")
-        self.assertEqual(
-            client.requests[1][3]["Authorization"], "Bearer spaces-test-token"
-        )
+        self.assertEqual(client.requests[1][3]["Authorization"], "Bearer spaces-test-token")
         self.assertEqual(
             client.requests[0][0],
             TeamsConnector.CSA_STARTUP_URL,
@@ -336,8 +334,7 @@ class TeamsConnectorTests(unittest.TestCase):
         def roster(size):
             return [
                 {"mri": f"8:orgid:{identifier}", "objectId": identifier}
-                for identifier in ["self-guid"]
-                + [f"participant-{index}" for index in range(size - 1)]
+                for identifier in ["self-guid"] + [f"participant-{index}" for index in range(size - 1)]
             ]
 
         rows = [
@@ -421,21 +418,33 @@ class TeamsConnectorTests(unittest.TestCase):
             "19:unknown-incomplete@thread.v2": None,
         }
 
-        startup = StubConnector([{
-            "chats": rows,
-            "metadata": {"isPartialData": False, "hasMoreChats": False},
-        }])
+        startup = StubConnector(
+            [
+                {
+                    "chats": rows,
+                    "metadata": {"isPartialData": False, "hasMoreChats": False},
+                }
+            ]
+        )
         startup_chats = {chat.id: chat for chat in startup.list_chats()}
         self.assertEqual(
             {conversation_id: startup_chats[conversation_id].chat_type for conversation_id in expected},
             expected,
         )
 
-        updates = StubConnector([{
-            "chats": rows,
-            "channels": [],
-            "metadata": {"syncToken": "sanitized-next-token", "isPartialData": False, "hasMoreChats": False},
-        }])
+        updates = StubConnector(
+            [
+                {
+                    "chats": rows,
+                    "channels": [],
+                    "metadata": {
+                        "syncToken": "sanitized-next-token",
+                        "isPartialData": False,
+                        "hasMoreChats": False,
+                    },
+                }
+            ]
+        )
         update_chats = updates.get_chat_updates()["chats"]
         updates_by_id = {chat.id: chat for chat in update_chats}
         self.assertEqual(
@@ -581,10 +590,7 @@ class TeamsConnectorTests(unittest.TestCase):
             ],
         }
         summary = client._summarize_csa_row(row, "chat")
-        users = [
-            {"objectId": identifier, "displayName": name}
-            for identifier, name in names.items()
-        ]
+        users = [{"objectId": identifier, "displayName": name} for identifier, name in names.items()]
 
         client._resolve_untitled_chat_names([row], [summary], users)
 
@@ -636,9 +642,7 @@ class TeamsConnectorTests(unittest.TestCase):
             {"objectId": "third-guid", "displayName": "Third Name"},
         ]
 
-        client._resolve_untitled_chat_names(
-            [incomplete, titled], [incomplete_summary, titled_summary], users
-        )
+        client._resolve_untitled_chat_names([incomplete, titled], [incomplete_summary, titled_summary], users)
 
         self.assertEqual(incomplete_summary.display_name, incomplete["id"])
         self.assertEqual(titled_summary.display_name, "Authoritative title")
@@ -652,8 +656,7 @@ class TeamsConnectorTests(unittest.TestCase):
             "isOneOnOne": False,
             "rosterVersion": 8,
             "members": [
-                {"mri": f"8:orgid:{identifier}", "objectId": identifier}
-                for identifier in member_ids
+                {"mri": f"8:orgid:{identifier}", "objectId": identifier} for identifier in member_ids
             ],
         }
         summary = client._summarize_csa_row(row, "chat")
@@ -691,10 +694,7 @@ class TeamsConnectorTests(unittest.TestCase):
             client._resolve_untitled_chat_names(
                 [row],
                 [summary],
-                [
-                    {"objectId": member_id, "displayName": name}
-                    for member_id, name in names.items()
-                ],
+                [{"objectId": member_id, "displayName": name} for member_id, name in names.items()],
             )
             return summary.display_name
 
@@ -728,9 +728,7 @@ class TeamsConnectorTests(unittest.TestCase):
             {"19:message-without-preview", "19:unknown", "48:notes"},
         )
         self.assertEqual(len(all_chats), 4)
-        self.assertTrue(
-            next(chat for chat in all_chats if chat.id == "19:empty").is_empty_conversation
-        )
+        self.assertTrue(next(chat for chat in all_chats if chat.id == "19:empty").is_empty_conversation)
 
     def test_csa_update_empty_filter_can_be_disabled(self):
         response = {
@@ -758,30 +756,45 @@ class TeamsConnectorTests(unittest.TestCase):
         )
 
     def test_csa_updates_send_sync_token_and_include_channel_rows(self):
-        client = StubConnector([{
-            "chats": [{
-                "id": "19:alpha@thread.v2",
-                "title": "Alpha",
-                "chatType": "group",
-                "lastMessage": {"content": "chat update", "originalArrivalTime": "2026-09-28T12:00:00Z"},
-            }],
-            "channels": [{
-                "conversationId": "19:channel@thread.tacv2",
-                "title": "General",
-                "teamName": "Analytics",
-                "lastMessage": {"content": "channel update", "originalArrivalTime": "2026-09-28T13:00:00Z"},
-                "avatarUrl": "https://middle.example.test/beta/users/self-guid/profilepicturev2/8:orgid:team-guid",
-            }, {
-                "id": "19:deleted@thread.tacv2",
-                "displayName": "Deleted channel",
-                "isDeleted": True,
-            }],
-            "metadata": {
-                "syncToken": "sanitized-next-sync-token",
-                "isPartialData": False,
-                "hasMoreChats": False,
-            },
-        }])
+        client = StubConnector(
+            [
+                {
+                    "chats": [
+                        {
+                            "id": "19:alpha@thread.v2",
+                            "title": "Alpha",
+                            "chatType": "group",
+                            "lastMessage": {
+                                "content": "chat update",
+                                "originalArrivalTime": "2026-09-28T12:00:00Z",
+                            },
+                        }
+                    ],
+                    "channels": [
+                        {
+                            "conversationId": "19:channel@thread.tacv2",
+                            "title": "General",
+                            "teamName": "Analytics",
+                            "lastMessage": {
+                                "content": "channel update",
+                                "originalArrivalTime": "2026-09-28T13:00:00Z",
+                            },
+                            "avatarUrl": "https://middle.example.test/beta/users/self-guid/profilepicturev2/8:orgid:team-guid",
+                        },
+                        {
+                            "id": "19:deleted@thread.tacv2",
+                            "displayName": "Deleted channel",
+                            "isDeleted": True,
+                        },
+                    ],
+                    "metadata": {
+                        "syncToken": "sanitized-next-sync-token",
+                        "isPartialData": False,
+                        "hasMoreChats": False,
+                    },
+                }
+            ]
+        )
 
         result = client.get_chat_updates("sanitized-previous-sync-token")
 
@@ -800,14 +813,20 @@ class TeamsConnectorTests(unittest.TestCase):
         self.assertNotIn("19:deleted@thread.tacv2", {chat.id for chat in result["chats"]})
 
     def test_expired_csa_sync_token_restarts_from_a_fresh_snapshot(self):
-        client = StubConnector([
-            {"error": {"code": "SyncTokenExpired"}},
-            {
-                "chats": [],
-                "channels": [],
-                "metadata": {"syncToken": "sanitized-recovered-token", "isPartialData": False, "hasMoreChats": False},
-            },
-        ])
+        client = StubConnector(
+            [
+                {"error": {"code": "SyncTokenExpired"}},
+                {
+                    "chats": [],
+                    "channels": [],
+                    "metadata": {
+                        "syncToken": "sanitized-recovered-token",
+                        "isPartialData": False,
+                        "hasMoreChats": False,
+                    },
+                },
+            ]
+        )
 
         result = client.get_chat_updates("sanitized-expired-token")
 
@@ -819,81 +838,86 @@ class TeamsConnectorTests(unittest.TestCase):
 
     def test_partial_csa_catalog_follows_chat_service_pages_and_preserves_csa_rows(self):
         next_page = "https://chat.example.test/v1/users/ME/conversations?cursor=next"
-        client = StubConnector([
-            {
-                "chats": [{
-                    "id": "19:rich@thread.v2",
-                    "title": "Rich CSA chat",
-                    "lastMessage": {
-                        "content": "CSA preview",
-                        "originalArrivalTime": "2026-09-28T10:00:00Z",
-                    },
-                    "isRead": False,
-                }],
-                "metadata": {"hasMoreChats": True},
-            },
-            {
-                "conversations": [
-                    {
-                        "id": "19:rich@thread.v2",
-                        "threadProperties": {"topic": "Raw duplicate title"},
-                    },
-                    {
-                        "id": "19:extra@thread.v2",
-                        "threadProperties": {
-                            "topic": "Extra chat",
-                            "productThreadType": "Chat",
-                            "threadType": "chat",
+        client = StubConnector(
+            [
+                {
+                    "chats": [
+                        {
+                            "id": "19:rich@thread.v2",
+                            "title": "Rich CSA chat",
+                            "lastMessage": {
+                                "content": "CSA preview",
+                                "originalArrivalTime": "2026-09-28T10:00:00Z",
+                            },
+                            "isRead": False,
+                        }
+                    ],
+                    "metadata": {"hasMoreChats": True},
+                },
+                {
+                    "conversations": [
+                        {
+                            "id": "19:rich@thread.v2",
+                            "threadProperties": {"topic": "Raw duplicate title"},
                         },
-                        "properties": {"lastimreceivedtime": 1790590000000},
-                    },
-                    {
-                        "id": "48:notifications",
-                        "threadProperties": {
-                            "productThreadType": "StreamOfNotifications",
-                            "threadType": "streamofnotifications",
+                        {
+                            "id": "19:extra@thread.v2",
+                            "threadProperties": {
+                                "topic": "Extra chat",
+                                "productThreadType": "Chat",
+                                "threadType": "chat",
+                            },
+                            "properties": {"lastimreceivedtime": 1790590000000},
                         },
-                    },
-                    {
-                        "id": "19:channel@thread.tacv2",
-                        "threadProperties": {"productThreadType": "TeamsStandardChannel"},
-                    },
-                    {
-                        "id": "19:future@thread.v2",
-                        "threadProperties": {"productThreadType": "FutureRecord"},
-                    },
-                ],
-                "_metadata": {"backwardLink": next_page},
-            },
-            {
-                "conversations": [
-                    {"id": "19:extra@thread.v2"},
-                    {
-                        "id": "19:last@thread.v2",
-                        "threadProperties": {
-                            "topic": "Last meeting",
-                            "productThreadType": "Meeting",
-                            "threadType": "meeting",
+                        {
+                            "id": "48:notifications",
+                            "threadProperties": {
+                                "productThreadType": "StreamOfNotifications",
+                                "threadType": "streamofnotifications",
+                            },
                         },
-                    },
-                ],
-                "_metadata": {},
-            },
-        ])
+                        {
+                            "id": "19:channel@thread.tacv2",
+                            "threadProperties": {"productThreadType": "TeamsStandardChannel"},
+                        },
+                        {
+                            "id": "19:future@thread.v2",
+                            "threadProperties": {"productThreadType": "FutureRecord"},
+                        },
+                    ],
+                    "_metadata": {"backwardLink": next_page},
+                },
+                {
+                    "conversations": [
+                        {"id": "19:extra@thread.v2"},
+                        {
+                            "id": "19:last@thread.v2",
+                            "threadProperties": {
+                                "topic": "Last meeting",
+                                "productThreadType": "Meeting",
+                                "threadType": "meeting",
+                            },
+                        },
+                    ],
+                    "_metadata": {},
+                },
+            ]
+        )
 
         chats = client.list_chats()
 
         chats_by_id = {chat.id: chat for chat in chats}
-        self.assertEqual(set(chats_by_id), {
-            "48:notes",
-            "19:rich@thread.v2",
-            "19:extra@thread.v2",
-            "19:last@thread.v2",
-        })
-        self.assertEqual(chats_by_id["19:rich@thread.v2"].display_name, "Rich CSA chat")
         self.assertEqual(
-            chats_by_id["19:rich@thread.v2"].last_message_preview, "CSA preview"
+            set(chats_by_id),
+            {
+                "48:notes",
+                "19:rich@thread.v2",
+                "19:extra@thread.v2",
+                "19:last@thread.v2",
+            },
         )
+        self.assertEqual(chats_by_id["19:rich@thread.v2"].display_name, "Rich CSA chat")
+        self.assertEqual(chats_by_id["19:rich@thread.v2"].last_message_preview, "CSA preview")
         self.assertTrue(chats_by_id["19:rich@thread.v2"].unread)
         self.assertEqual(chats_by_id["19:extra@thread.v2"].display_name, "Extra chat")
         self.assertEqual(chats_by_id["19:last@thread.v2"].display_name, "Last meeting")
@@ -913,28 +937,32 @@ class TeamsConnectorTests(unittest.TestCase):
         self.assertEqual(client.requests[2][0], next_page)
 
     def test_fallback_one_to_one_name_uses_read_only_roster(self):
-        client = StubConnector([
-            {
-                "chats": [],
-                "metadata": {"isPartialData": True, "hasMoreChats": False},
-            },
-            {
-                "conversations": [{
-                    "id": "19:untitled@thread.v2",
-                    "threadProperties": {
-                        "productThreadType": "OneToOneChat",
-                        "threadType": "chat",
-                    },
-                }],
-                "_metadata": {},
-            },
-            {
-                "members": [
-                    {"id": "8:orgid:self-guid", "displayName": "Taylor Example"},
-                    {"id": "8:orgid:peer-guid", "displayName": "Jordan Example"},
-                ]
-            },
-        ])
+        client = StubConnector(
+            [
+                {
+                    "chats": [],
+                    "metadata": {"isPartialData": True, "hasMoreChats": False},
+                },
+                {
+                    "conversations": [
+                        {
+                            "id": "19:untitled@thread.v2",
+                            "threadProperties": {
+                                "productThreadType": "OneToOneChat",
+                                "threadType": "chat",
+                            },
+                        }
+                    ],
+                    "_metadata": {},
+                },
+                {
+                    "members": [
+                        {"id": "8:orgid:self-guid", "displayName": "Taylor Example"},
+                        {"id": "8:orgid:peer-guid", "displayName": "Jordan Example"},
+                    ]
+                },
+            ]
+        )
 
         chats = client.list_chats()
 
@@ -945,10 +973,12 @@ class TeamsConnectorTests(unittest.TestCase):
         self.assertTrue(client.catalog_coverage.catalog_complete)
 
     def test_unspecified_csa_completeness_uses_paginated_fallback(self):
-        client = StubConnector([
-            {"chats": [], "metadata": {}},
-            {"conversations": [], "_metadata": {}},
-        ])
+        client = StubConnector(
+            [
+                {"chats": [], "metadata": {}},
+                {"conversations": [], "_metadata": {}},
+            ]
+        )
 
         chats = client.list_chats()
 
@@ -959,13 +989,20 @@ class TeamsConnectorTests(unittest.TestCase):
         self.assertEqual(len(client.requests), 2)
 
     def test_raw_self_chat_is_named_and_counted_as_a_chat(self):
-        client = StubConnector([
-            {"chats": [], "metadata": {"isPartialData": True}},
-            {"conversations": [{
-                "id": "48:notes",
-                "threadProperties": {"productThreadType": "StreamOfNotes"},
-            }], "_metadata": {}},
-        ])
+        client = StubConnector(
+            [
+                {"chats": [], "metadata": {"isPartialData": True}},
+                {
+                    "conversations": [
+                        {
+                            "id": "48:notes",
+                            "threadProperties": {"productThreadType": "StreamOfNotes"},
+                        }
+                    ],
+                    "_metadata": {},
+                },
+            ]
+        )
 
         chats = client.list_chats()
 
@@ -976,23 +1013,37 @@ class TeamsConnectorTests(unittest.TestCase):
         self.assertEqual(client.catalog_coverage.fallback_chats_without_resolved_name, 0)
 
     def test_catalog_rejects_csa_rows_without_ids_instead_of_silently_dropping_them(self):
-        client = StubConnector([
-            {"chats": [{"title": "Missing identifier"}], "metadata": {
-                "isPartialData": False,
-                "hasMoreChats": False,
-            }},
-        ])
+        client = StubConnector(
+            [
+                {
+                    "chats": [{"title": "Missing identifier"}],
+                    "metadata": {
+                        "isPartialData": False,
+                        "hasMoreChats": False,
+                    },
+                },
+            ]
+        )
 
         with self.assertRaisesRegex(RuntimeError, "chat row has no ID"):
             client.list_chats()
 
     def test_catalog_rejects_chat_service_rows_without_ids(self):
-        client = StubConnector([
-            {"chats": [], "metadata": {"isPartialData": True}},
-            {"conversations": [{"threadProperties": {
-                "productThreadType": "Chat",
-            }}], "_metadata": {}},
-        ])
+        client = StubConnector(
+            [
+                {"chats": [], "metadata": {"isPartialData": True}},
+                {
+                    "conversations": [
+                        {
+                            "threadProperties": {
+                                "productThreadType": "Chat",
+                            }
+                        }
+                    ],
+                    "_metadata": {},
+                },
+            ]
+        )
 
         with self.assertRaisesRegex(RuntimeError, "catalog row without an ID"):
             client.list_chats()
@@ -1018,48 +1069,47 @@ class TeamsConnectorTests(unittest.TestCase):
         self.assertEqual(client.requests[3][1], "POST")
 
     def test_message_pagination_follows_opaque_link_and_sorts_oldest_first(self):
-        client = StubConnector([
-            fixture("messages_page_1.json"),
-            fixture("messages_page_2.json"),
-        ])
+        client = StubConnector(
+            [
+                fixture("messages_page_1.json"),
+                fixture("messages_page_2.json"),
+            ]
+        )
         conversation_id = "19:fixture@thread.v2"
 
         messages = client.get_messages(conversation_id)
 
-        self.assertEqual([message["id"] for message in messages], [
-            "message-1", "message-2", "message-3"
-        ])
+        self.assertEqual([message["id"] for message in messages], ["message-1", "message-2", "message-3"])
         self.assertEqual(len(client.requests), 2)
         initial = client.requests[0][0]
         self.assertIn("/19%3Afixture%40thread.v2/messages", initial)
-        self.assertEqual(parse_qs(urlsplit(initial).query), {
-            "startTime": ["0"],
-            "pageSize": ["100"],
-            "view": ["msnp24Equivalent"],
-        })
+        self.assertEqual(
+            parse_qs(urlsplit(initial).query),
+            {
+                "startTime": ["0"],
+                "pageSize": ["100"],
+                "view": ["msnp24Equivalent"],
+            },
+        )
         self.assertEqual(
             client.requests[1][0],
             fixture("messages_page_1.json")["_metadata"]["backwardLink"],
         )
 
     def test_count_and_inclusive_date_filter_apply_together(self):
-        client = StubConnector([
-            fixture("messages_page_1.json"),
-            fixture("messages_page_2.json"),
-        ])
-        cutoff = datetime(2026, 9, 28, 10, 1, tzinfo=timezone.utc)
-
-        messages = client.get_messages(
-            "19:fixture@thread.v2", limit=2, since=cutoff
+        client = StubConnector(
+            [
+                fixture("messages_page_1.json"),
+                fixture("messages_page_2.json"),
+            ]
         )
+        cutoff = datetime(2026, 9, 28, 10, 1, tzinfo=UTC)
 
-        self.assertEqual([message["id"] for message in messages], [
-            "message-2", "message-3"
-        ])
+        messages = client.get_messages("19:fixture@thread.v2", limit=2, since=cutoff)
+
+        self.assertEqual([message["id"] for message in messages], ["message-2", "message-3"])
         self.assertEqual(len(client.requests), 1)
-        self.assertEqual(
-            parse_qs(urlsplit(client.requests[0][0]).query)["pageSize"], ["2"]
-        )
+        self.assertEqual(parse_qs(urlsplit(client.requests[0][0]).query)["pageSize"], ["2"])
         self.assertEqual(
             parse_qs(urlsplit(client.requests[0][0]).query)["startTime"],
             [str(TeamsConnector._epoch_milliseconds(cutoff))],
@@ -1067,12 +1117,14 @@ class TeamsConnectorTests(unittest.TestCase):
         self.assertNotIn("endTime", parse_qs(urlsplit(client.requests[0][0]).query))
 
     def test_inclusive_date_range_works_with_unlimited_message_count(self):
-        client = StubConnector([
-            fixture("messages_page_1.json"),
-            fixture("messages_page_2.json"),
-        ])
-        since = datetime(2026, 9, 28, 10, 1, tzinfo=timezone.utc)
-        until = datetime(2026, 9, 28, 10, 2, tzinfo=timezone.utc)
+        client = StubConnector(
+            [
+                fixture("messages_page_1.json"),
+                fixture("messages_page_2.json"),
+            ]
+        )
+        since = datetime(2026, 9, 28, 10, 1, tzinfo=UTC)
+        until = datetime(2026, 9, 28, 10, 2, tzinfo=UTC)
 
         messages = client.get_messages(
             "19:fixture@thread.v2",
@@ -1097,8 +1149,8 @@ class TeamsConnectorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "earlier than or equal"):
             client.get_messages(
                 "19:fixture@thread.v2",
-                since=datetime(2026, 9, 2, tzinfo=timezone.utc),
-                until=datetime(2026, 9, 1, tzinfo=timezone.utc),
+                since=datetime(2026, 9, 2, tzinfo=UTC),
+                until=datetime(2026, 9, 1, tzinfo=UTC),
             )
         self.assertEqual(client.requests, [])
 
@@ -1117,24 +1169,24 @@ class TeamsConnectorTests(unittest.TestCase):
         }
         page_one = {
             "messages": [old, new],
-            "_metadata": {
-                "backwardLink": "https://chat.example.test/v1/older?cursor=one"
-            },
+            "_metadata": {"backwardLink": "https://chat.example.test/v1/older?cursor=one"},
         }
         page_two = {
-            "messages": [{
-                "id": "also-in-range",
-                "sequenceId": 3,
-                "originalarrivaltime": "2026-09-28T10:01:00Z",
-                "content": "also in range",
-            }],
+            "messages": [
+                {
+                    "id": "also-in-range",
+                    "sequenceId": 3,
+                    "originalarrivaltime": "2026-09-28T10:01:00Z",
+                    "content": "also in range",
+                }
+            ],
             "_metadata": {},
         }
         client = StubConnector([page_one, page_two])
 
         messages = client.get_messages(
             "19:fixture@thread.v2",
-            since=datetime(2026, 9, 28, 10, 1, tzinfo=timezone.utc),
+            since=datetime(2026, 9, 28, 10, 1, tzinfo=UTC),
         )
 
         self.assertEqual(
@@ -1146,17 +1198,17 @@ class TeamsConnectorTests(unittest.TestCase):
     def test_naive_date_is_rejected(self):
         client = StubConnector()
         with self.assertRaisesRegex(ValueError, "timezone"):
-            client.get_messages(
-                "19:fixture@thread.v2", since=datetime(2026, 9, 1)
-            )
+            client.get_messages("19:fixture@thread.v2", since=datetime(2026, 9, 1))
         self.assertEqual(client.requests, [])
 
     def test_repeated_continuation_link_is_rejected(self):
         link = "https://chat.example.test/v1/older?cursor=cycle"
-        client = StubConnector([
-            {"messages": [], "_metadata": {"backwardLink": link}},
-            {"messages": [], "_metadata": {"backwardLink": link}},
-        ])
+        client = StubConnector(
+            [
+                {"messages": [], "_metadata": {"backwardLink": link}},
+                {"messages": [], "_metadata": {"backwardLink": link}},
+            ]
+        )
         with self.assertRaisesRegex(RuntimeError, "repeated a message continuation"):
             client.get_messages("19:fixture@thread.v2")
         self.assertEqual(len(client.requests), 2)
@@ -1171,50 +1223,50 @@ class TeamsConnectorTests(unittest.TestCase):
 
     def test_date_range_and_limit_fetch_only_until_enough_qualifying_messages(self):
         continuation = "https://chat.example.test/v1/older?cursor=bounded-range"
-        client = StubConnector([
-            {
-                "messages": [
-                    {
-                        "id": "outside-until",
-                        "sequenceId": 4,
-                        "originalarrivaltime": "2026-09-28T10:03:00Z",
-                        "content": "newer than requested range",
-                    },
-                    {
-                        "id": "at-until",
-                        "sequenceId": 3,
-                        "originalarrivaltime": "2026-09-28T10:02:00Z",
-                        "content": "inclusive upper bound",
-                    },
-                ],
-                "_metadata": {"backwardLink": continuation},
-            },
-            {
-                "messages": [
-                    {
-                        "id": "at-since",
-                        "sequenceId": 2,
-                        "originalarrivaltime": "2026-09-28T10:01:00Z",
-                        "content": "second latest qualifying message",
-                    },
-                    {
-                        "id": "older-than-since",
-                        "sequenceId": 1,
-                        "originalarrivaltime": "2026-09-28T09:59:00Z",
-                        "content": "outside lower bound",
-                    },
-                ],
-                "_metadata": {
-                    "backwardLink": "https://chat.example.test/v1/older?cursor=older"
+        client = StubConnector(
+            [
+                {
+                    "messages": [
+                        {
+                            "id": "outside-until",
+                            "sequenceId": 4,
+                            "originalarrivaltime": "2026-09-28T10:03:00Z",
+                            "content": "newer than requested range",
+                        },
+                        {
+                            "id": "at-until",
+                            "sequenceId": 3,
+                            "originalarrivaltime": "2026-09-28T10:02:00Z",
+                            "content": "inclusive upper bound",
+                        },
+                    ],
+                    "_metadata": {"backwardLink": continuation},
                 },
-            },
-        ])
+                {
+                    "messages": [
+                        {
+                            "id": "at-since",
+                            "sequenceId": 2,
+                            "originalarrivaltime": "2026-09-28T10:01:00Z",
+                            "content": "second latest qualifying message",
+                        },
+                        {
+                            "id": "older-than-since",
+                            "sequenceId": 1,
+                            "originalarrivaltime": "2026-09-28T09:59:00Z",
+                            "content": "outside lower bound",
+                        },
+                    ],
+                    "_metadata": {"backwardLink": "https://chat.example.test/v1/older?cursor=older"},
+                },
+            ]
+        )
 
         messages = client.get_messages(
             "19:fixture@thread.v2",
             limit=2,
-            since=datetime(2026, 9, 28, 10, 0, tzinfo=timezone.utc),
-            until=datetime(2026, 9, 28, 10, 2, tzinfo=timezone.utc),
+            since=datetime(2026, 9, 28, 10, 0, tzinfo=UTC),
+            until=datetime(2026, 9, 28, 10, 2, tzinfo=UTC),
         )
 
         self.assertEqual([item["id"] for item in messages], ["at-since", "at-until"])
@@ -1237,9 +1289,11 @@ class TeamsConnectorTests(unittest.TestCase):
         response.__exit__ = Mock(return_value=False)
         response.status = 200
         response.read.return_value = b'{"ok": true}'
-        with patch("urllib.request.urlopen", side_effect=[unavailable, response]) as urlopen:
-            with patch("time.sleep"):
-                payload = client._http_json("https://chat.example.test/messages")
+        with (
+            patch("urllib.request.urlopen", side_effect=[unavailable, response]) as urlopen,
+            patch("time.sleep"),
+        ):
+            payload = client._http_json("https://chat.example.test/messages")
 
         self.assertEqual(payload, {"ok": True})
         self.assertEqual(urlopen.call_count, 2)
@@ -1248,15 +1302,15 @@ class TeamsConnectorTests(unittest.TestCase):
     def test_read_retry_budget_is_four_total_attempts(self):
         client = TeamsConnector()
         failures = [
-            urllib.error.HTTPError(
-                "https://chat.example.test/messages", 503, "Unavailable", {}, None
-            )
+            urllib.error.HTTPError("https://chat.example.test/messages", 503, "Unavailable", {}, None)
             for _ in range(client.READ_REQUEST_MAX_ATTEMPTS)
         ]
-        with patch("urllib.request.urlopen", side_effect=failures) as urlopen:
-            with patch("time.sleep"):
-                with self.assertRaisesRegex(RuntimeError, "4-attempt limit"):
-                    client._http_json("https://chat.example.test/messages")
+        with (
+            patch("urllib.request.urlopen", side_effect=failures) as urlopen,
+            patch("time.sleep"),
+            self.assertRaisesRegex(RuntimeError, "4-attempt limit"),
+        ):
+            client._http_json("https://chat.example.test/messages")
 
         self.assertEqual(urlopen.call_count, 4)
         self.assertEqual(client.last_request_retry_count, 3)
@@ -1268,12 +1322,14 @@ class TeamsConnectorTests(unittest.TestCase):
         response.__exit__ = Mock(return_value=False)
         response.status = 200
         response.read.return_value = b'{"ok": true}'
-        with patch(
-            "urllib.request.urlopen",
-            side_effect=[RuntimeError("sanitized transient fixture"), response],
-        ) as urlopen:
-            with patch("time.sleep") as sleep:
-                payload = client._http_json("https://chat.example.test/messages")
+        with (
+            patch(
+                "urllib.request.urlopen",
+                side_effect=[RuntimeError("sanitized transient fixture"), response],
+            ) as urlopen,
+            patch("time.sleep") as sleep,
+        ):
+            payload = client._http_json("https://chat.example.test/messages")
 
         self.assertEqual(payload, {"ok": True})
         self.assertEqual(urlopen.call_count, 2)
@@ -1304,14 +1360,12 @@ class TeamsConnectorTests(unittest.TestCase):
 
     def test_write_requests_are_not_retried(self):
         client = TeamsConnector()
-        failure = urllib.error.HTTPError(
-            "https://chat.example.test/send", 503, "Unavailable", {}, None
-        )
-        with patch("urllib.request.urlopen", side_effect=failure) as urlopen:
-            with self.assertRaisesRegex(RuntimeError, "HTTP 503"):
-                client._http_json(
-                    "https://chat.example.test/send", method="POST", body=b"{}"
-                )
+        failure = urllib.error.HTTPError("https://chat.example.test/send", 503, "Unavailable", {}, None)
+        with (
+            patch("urllib.request.urlopen", side_effect=failure) as urlopen,
+            self.assertRaisesRegex(RuntimeError, "HTTP 503"),
+        ):
+            client._http_json("https://chat.example.test/send", method="POST", body=b"{}")
 
         self.assertEqual(urlopen.call_count, 1)
         self.assertEqual(client.last_request_retry_count, 0)
@@ -1323,16 +1377,16 @@ class TeamsConnectorTests(unittest.TestCase):
     def test_cancellation_interrupts_retry_backoff(self):
         client = TeamsConnector()
         cancel_event = threading.Event()
-        failure = urllib.error.HTTPError(
-            "https://chat.example.test/messages", 503, "Unavailable", {}, None
-        )
-        with patch("urllib.request.urlopen", side_effect=failure) as urlopen:
-            with patch.object(cancel_event, "wait", return_value=True):
-                with self.assertRaisesRegex(ExtractionCancelled, "cancelled"):
-                    client._http_json(
-                        "https://chat.example.test/messages",
-                        cancel_event=cancel_event,
-                    )
+        failure = urllib.error.HTTPError("https://chat.example.test/messages", 503, "Unavailable", {}, None)
+        with (
+            patch("urllib.request.urlopen", side_effect=failure) as urlopen,
+            patch.object(cancel_event, "wait", return_value=True),
+            self.assertRaisesRegex(ExtractionCancelled, "cancelled"),
+        ):
+            client._http_json(
+                "https://chat.example.test/messages",
+                cancel_event=cancel_event,
+            )
 
         self.assertEqual(urlopen.call_count, 1)
 
@@ -1350,9 +1404,11 @@ class TeamsConnectorTests(unittest.TestCase):
             root = Path(directory)
             elsewhere = root / "elsewhere"
             elsewhere.mkdir()
-            with patch.dict("os.environ", {"LOCALAPPDATA": str(root)}):
-                with patch("os.getcwd", return_value=str(elsewhere)):
-                    cache_path = TeamsConnector().token_provider.cache_path
+            with (
+                patch.dict("os.environ", {"LOCALAPPDATA": str(root)}),
+                patch("os.getcwd", return_value=str(elsewhere)),
+            ):
+                cache_path = TeamsConnector().token_provider.cache_path
 
         self.assertEqual(cache_path, root / "scrape-teams-chat" / ".teams_token_cache.json")
         self.assertTrue(cache_path.is_absolute())
@@ -1394,7 +1450,10 @@ class TeamsConnectorTests(unittest.TestCase):
             client.token_provider.cache_path,
             (Path(__file__).parent.parent / ".local" / "teams-msal-debug-cache.json").resolve(),
         )
-        self.assertIn(str(client.token_provider.cache_path), TokenProvider.unsecure_warning(client.token_provider.cache_path))
+        self.assertIn(
+            str(client.token_provider.cache_path),
+            TokenProvider.unsecure_warning(client.token_provider.cache_path),
+        )
 
     def test_login_keeps_the_existing_scopes_and_uses_persisted_msal_cache(self):
         from msal_extensions import PersistedTokenCache
@@ -1417,7 +1476,9 @@ class TeamsConnectorTests(unittest.TestCase):
             }
             with (
                 patch("msal_extensions.build_encrypted_persistence", FakeEncryptedPersistence),
-                patch("teams_exporter.token_provider.msal.PublicClientApplication", return_value=app) as create_app,
+                patch(
+                    "teams_exporter.token_provider.msal.PublicClientApplication", return_value=app
+                ) as create_app,
                 patch.object(client.token_provider, "_acquire_resource_token", acquire),
                 patch.object(client, "_request_teams_authz", return_value=authz),
             ):
@@ -1439,12 +1500,14 @@ class TeamsConnectorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             cache_path = Path(directory) / "cache.json"
             client = TeamsConnector(cache_path=cache_path)
-            with patch(
-                "msal_extensions.build_encrypted_persistence",
-                side_effect=RuntimeError("fixture failure"),
+            with (
+                patch(
+                    "msal_extensions.build_encrypted_persistence",
+                    side_effect=RuntimeError("fixture failure"),
+                ),
+                self.assertRaisesRegex(RuntimeError, "No plaintext cache will be used") as raised,
             ):
-                with self.assertRaisesRegex(RuntimeError, "No plaintext cache will be used") as raised:
-                    client.token_provider.load_cache()
+                client.token_provider.load_cache()
 
             self.assertNotIn("fixture failure", str(raised.exception))
             self.assertFalse(cache_path.exists())
@@ -1457,15 +1520,11 @@ class TeamsConnectorTests(unittest.TestCase):
         app.get_accounts.return_value = [account]
         app.acquire_token_silent.return_value = {"access_token": "sanitized-renewed-token"}
 
-        result, source = provider._acquire_resource_token(
-            app, client.SPACES_SCOPE, interactive=False
-        )
+        result, source = provider._acquire_resource_token(app, client.SPACES_SCOPE, interactive=False)
 
         self.assertEqual(source, "cache")
         self.assertEqual(result["access_token"], "sanitized-renewed-token")
-        app.acquire_token_silent.assert_called_once_with(
-            scopes=[client.SPACES_SCOPE], account=account
-        )
+        app.acquire_token_silent.assert_called_once_with(scopes=[client.SPACES_SCOPE], account=account)
 
     def test_invalid_refresh_token_fails_fast_with_sign_in_guidance(self):
         client = TeamsConnector(cache_path="unused-cache.json")
@@ -1498,9 +1557,11 @@ class TeamsConnectorTests(unittest.TestCase):
         app = Mock()
         app.get_accounts.return_value = [{"home_account_id": "sanitized-account"}]
         app.acquire_token_silent.return_value = {"error": "unclassified_fixture_error"}
-        with patch("time.sleep") as sleep:
-            with self.assertRaisesRegex(RuntimeError, "service request failed after 3 attempts") as raised:
-                provider._acquire_resource_token(app, client.SPACES_SCOPE, interactive=False)
+        with (
+            patch("time.sleep") as sleep,
+            self.assertRaisesRegex(RuntimeError, "service request failed after 3 attempts") as raised,
+        ):
+            provider._acquire_resource_token(app, client.SPACES_SCOPE, interactive=False)
 
         self.assertNotIn("credentials are invalid", str(raised.exception).casefold())
         self.assertEqual(app.acquire_token_silent.call_count, 3)
@@ -1521,43 +1582,53 @@ class TeamsMessageFormatterTests(unittest.TestCase):
         self.formatter = TeamsMessageFormatter()
 
     def test_detects_rich_html_from_message_type_even_when_content_type_is_text(self):
-        text = self.formatter.format_message({
-            "messagetype": "RichText/Html",
-            "contenttype": "text",
-            "content": "<p>Hello <strong>world</strong></p>",
-        })
+        text = self.formatter.format_message(
+            {
+                "messagetype": "RichText/Html",
+                "contenttype": "text",
+                "content": "<p>Hello <strong>world</strong></p>",
+            }
+        )
         self.assertEqual(text, "Hello **world**")
 
     def test_semantic_mention_markup_is_delimited_without_duplicate_at(self):
-        for display_name in ("Rhode, Lucas", "@Rhode, Lucas"):
+        for display_name in ("Example, User", "@Example, User"):
             with self.subTest(display_name=display_name):
-                text = self.formatter.format_message({
-                    "messagetype": "RichText/Html",
-                    "content": (
-                        "<p><span itemtype='http://schema.skype.com/Mention' "
-                        "itemid='8:orgid:example'>"
-                        f"{display_name}</span>, Could you respond?</p>"
-                    ),
-                    "properties": {
-                        "mentions": json.dumps([{
-                            "id": "8:orgid:example",
-                            "displayName": "Rhode, Lucas",
-                        }])
-                    },
-                })
-                self.assertEqual(text, "@(Rhode, Lucas), Could you respond?")
+                text = self.formatter.format_message(
+                    {
+                        "messagetype": "RichText/Html",
+                        "content": (
+                            "<p><span itemtype='http://schema.skype.com/Mention' "
+                            "itemid='8:orgid:example'>"
+                            f"{display_name}</span>, Could you respond?</p>"
+                        ),
+                        "properties": {
+                            "mentions": json.dumps(
+                                [
+                                    {
+                                        "id": "8:orgid:example",
+                                        "displayName": "Example, User",
+                                    }
+                                ]
+                            )
+                        },
+                    }
+                )
+                self.assertEqual(text, "@(Example, User), Could you respond?")
 
     def test_adjacent_fragments_for_same_mention_share_one_delimiter(self):
-        text = self.formatter.format_message({
-            "messageType": "RichText/Html",
-            "content": (
-                "<p><span itemtype='http://schema.skype.com/Mention' "
-                "itemid='0'>Parker,</span> "
-                "<span itemtype='http://schema.skype.com/Mention' "
-                "itemid='1'>Juniper</span>"
-                " Please review the example plan.</p>"
-            ),
-        })
+        text = self.formatter.format_message(
+            {
+                "messageType": "RichText/Html",
+                "content": (
+                    "<p><span itemtype='http://schema.skype.com/Mention' "
+                    "itemid='0'>Parker,</span> "
+                    "<span itemtype='http://schema.skype.com/Mention' "
+                    "itemid='1'>Juniper</span>"
+                    " Please review the example plan.</p>"
+                ),
+            }
+        )
         self.assertEqual(
             text,
             "@(Parker, Juniper) Please review the example plan.",
@@ -1572,82 +1643,93 @@ class TeamsMessageFormatterTests(unittest.TestCase):
         }
         for label, separator in separators.items():
             with self.subTest(separator=label):
-                text = self.formatter.format_message({
-                    "messageType": "RichText/Html",
-                    "content": (
-                        "<span itemtype='http://schema.skype.com/Mention' "
-                        "itemid='0'>Rhode,</span>"
-                        f"{separator}"
-                        "<span itemtype='http://schema.skype.com/Mention' "
-                        "itemid='1'>Lucas</span>"
-                    ),
-                })
-                self.assertEqual(text, "@(Rhode, Lucas)")
+                text = self.formatter.format_message(
+                    {
+                        "messageType": "RichText/Html",
+                        "content": (
+                            "<span itemtype='http://schema.skype.com/Mention' "
+                            "itemid='0'>Example,</span>"
+                            f"{separator}"
+                            "<span itemtype='http://schema.skype.com/Mention' "
+                            "itemid='1'>User</span>"
+                        ),
+                    }
+                )
+                self.assertEqual(text, "@(Example, User)")
 
     def test_sequential_split_people_merge_without_merging_complete_mentions(self):
-        text = self.formatter.format_message({
-            "messageType": "RichText/Html",
-            "content": (
-                "<span itemtype='http://schema.skype.com/Mention' itemid='0'>Baxter,</span>"
-                "<span itemtype='http://schema.skype.com/Mention' itemid='1'>Jonah</span> "
-                "<span itemtype='http://schema.skype.com/Mention' itemid='2'>Reyes,</span>"
-                "<span itemtype='http://schema.skype.com/Mention' itemid='3'>Carla</span> "
-                "<span itemtype='http://schema.skype.com/Mention' itemid='4'>Parker, Juniper</span>"
-                "<span itemtype='http://schema.skype.com/Mention' itemid='5'>Rhode, Lucas</span>"
-            ),
-        })
+        text = self.formatter.format_message(
+            {
+                "messageType": "RichText/Html",
+                "content": (
+                    "<span itemtype='http://schema.skype.com/Mention' itemid='0'>Baxter,</span>"
+                    "<span itemtype='http://schema.skype.com/Mention' itemid='1'>Jonah</span> "
+                    "<span itemtype='http://schema.skype.com/Mention' itemid='2'>Reyes,</span>"
+                    "<span itemtype='http://schema.skype.com/Mention' itemid='3'>Carla</span> "
+                    "<span itemtype='http://schema.skype.com/Mention' itemid='4'>Parker, Juniper</span>"
+                    "<span itemtype='http://schema.skype.com/Mention' itemid='5'>Example, User</span>"
+                ),
+            }
+        )
         self.assertEqual(
             text,
-            "@(Baxter, Jonah) @(Reyes, Carla) "
-            "@(Parker, Juniper)@(Rhode, Lucas)",
+            "@(Baxter, Jonah) @(Reyes, Carla) @(Parker, Juniper)@(Example, User)",
         )
 
     def test_complete_mentions_do_not_merge_across_connective_text(self):
-        text = self.formatter.format_message({
-            "messageType": "RichText/Html",
-            "content": (
-                "<span itemtype='http://schema.skype.com/Mention'>"
-                "Baxter, Jonah</span> and "
-                "<span itemtype='http://schema.skype.com/Mention'>"
-                "Reyes, Carla</span>"
-            ),
-        })
+        text = self.formatter.format_message(
+            {
+                "messageType": "RichText/Html",
+                "content": (
+                    "<span itemtype='http://schema.skype.com/Mention'>"
+                    "Baxter, Jonah</span> and "
+                    "<span itemtype='http://schema.skype.com/Mention'>"
+                    "Reyes, Carla</span>"
+                ),
+            }
+        )
         self.assertEqual(text, "@(Baxter, Jonah) and @(Reyes, Carla)")
 
     def test_surname_fragment_is_not_merged_with_another_complete_mention(self):
-        text = self.formatter.format_message({
-            "messageType": "RichText/Html",
-            "content": (
-                "<span itemtype='http://schema.skype.com/Mention' itemid='0'>Baxter,</span>"
-                "<span itemtype='http://schema.skype.com/Mention' itemid='1'>"
-                "Reyes, Carla</span>"
-            ),
-        })
+        text = self.formatter.format_message(
+            {
+                "messageType": "RichText/Html",
+                "content": (
+                    "<span itemtype='http://schema.skype.com/Mention' itemid='0'>Baxter,</span>"
+                    "<span itemtype='http://schema.skype.com/Mention' itemid='1'>"
+                    "Reyes, Carla</span>"
+                ),
+            }
+        )
         self.assertEqual(text, "@(Baxter,)@(Reyes, Carla)")
 
     def test_adjacent_different_mentions_keep_separate_delimiters(self):
-        text = self.formatter.format_message({
-            "messageType": "RichText/Html",
-            "content": (
-                "<span itemtype='http://schema.skype.com/Mention' "
-                "itemid='8:orgid:one'>Parker</span> "
-                "<span itemtype='http://schema.skype.com/Mention' "
-                "itemid='8:orgid:two'>Juniper</span>"
-            ),
-        })
+        text = self.formatter.format_message(
+            {
+                "messageType": "RichText/Html",
+                "content": (
+                    "<span itemtype='http://schema.skype.com/Mention' "
+                    "itemid='8:orgid:one'>Parker</span> "
+                    "<span itemtype='http://schema.skype.com/Mention' "
+                    "itemid='8:orgid:two'>Juniper</span>"
+                ),
+            }
+        )
         self.assertEqual(text, "@(Parker) @(Juniper)")
 
     def test_lists_links_blockquotes_and_code_are_readable(self):
-        text = self.formatter.format_message({
-            "messageType": "RichText/Html",
-            "contentType": "text",
-            "content": (
-                "<p>See <a href='https://example.test'>docs</a></p>"
-                "<ul><li>first</li><li>second</li></ul>"
-                "<blockquote>quoted</blockquote>"
-                "<pre><code>value = 1</code></pre>"
-            ),
-        })
+        text = self.formatter.format_message(
+            {
+                "messageType": "RichText/Html",
+                "contentType": "text",
+                "content": (
+                    "<p>See <a href='https://example.test'>docs</a></p>"
+                    "<ul><li>first</li><li>second</li></ul>"
+                    "<blockquote>quoted</blockquote>"
+                    "<pre><code>value = 1</code></pre>"
+                ),
+            }
+        )
         self.assertIn("docs (https://example.test)", text)
         self.assertIn("- first", text)
         self.assertIn("- second", text)
@@ -1656,20 +1738,26 @@ class TeamsMessageFormatterTests(unittest.TestCase):
         self.assertIn("```", text)
 
     def test_attachment_and_ams_image_markers_are_preserved(self):
-        text = self.formatter.format_message({
-            "messageType": "RichText/Html",
-            "content": (
-                "<p>Review</p>"
-                "<div itemtype='http://schema.skype.com/AMSImage'>"
-                "<img src='https://images.example.test/one.png'></div>"
-            ),
-            "properties": {
-                "files": json.dumps([{
-                    "fileName": "report.xlsx",
-                    "fileInfo": {"shareUrl": "https://files.example.test/report"},
-                }])
-            },
-        })
+        text = self.formatter.format_message(
+            {
+                "messageType": "RichText/Html",
+                "content": (
+                    "<p>Review</p>"
+                    "<div itemtype='http://schema.skype.com/AMSImage'>"
+                    "<img src='https://images.example.test/one.png'></div>"
+                ),
+                "properties": {
+                    "files": json.dumps(
+                        [
+                            {
+                                "fileName": "report.xlsx",
+                                "fileInfo": {"shareUrl": "https://files.example.test/report"},
+                            }
+                        ]
+                    )
+                },
+            }
+        )
         self.assertIn("[Attachment: report.xlsx]", text)
         self.assertIn("https://files.example.test/report", text)
         self.assertIn("[Image: https://images.example.test/one.png]", text)
@@ -1678,49 +1766,64 @@ class TeamsMessageFormatterTests(unittest.TestCase):
         card = {
             "type": "message/card",
             "summary": "Approval required",
-            "attachments": [{
-                "contentType": "application/vnd.microsoft.card.adaptive",
-                "content": {
-                    "type": "AdaptiveCard",
-                    "version": "1.5",
-                    "body": [{
-                        "type": "Container",
-                        "spacing": "large",
-                        "items": [
-                            {"type": "TextBlock", "text": "Approval required", "weight": "bolder"},
-                            {"type": "TextBlock", "text": "Please review this request."},
-                            {"type": "FactSet", "facts": [
-                                {"title": "Case ID", "value": "CASE-2048"},
-                                {"title": "Status", "value": "Pending"},
-                            ]},
-                            {"type": "Image", "url": "https://images.example.test/layout.png", "altText": "Equipment diagram"},
+            "attachments": [
+                {
+                    "contentType": "application/vnd.microsoft.card.adaptive",
+                    "content": {
+                        "type": "AdaptiveCard",
+                        "version": "1.5",
+                        "body": [
+                            {
+                                "type": "Container",
+                                "spacing": "large",
+                                "items": [
+                                    {"type": "TextBlock", "text": "Approval required", "weight": "bolder"},
+                                    {"type": "TextBlock", "text": "Please review this request."},
+                                    {
+                                        "type": "FactSet",
+                                        "facts": [
+                                            {"title": "Case ID", "value": "CASE-2048"},
+                                            {"title": "Status", "value": "Pending"},
+                                        ],
+                                    },
+                                    {
+                                        "type": "Image",
+                                        "url": "https://images.example.test/layout.png",
+                                        "altText": "Equipment diagram",
+                                    },
+                                ],
+                            }
                         ],
-                    }],
-                    "actions": [{
-                        "type": "Action.OpenUrl",
-                        "title": "Open case",
-                        "url": "https://example.test/cases/CASE-2048",
-                    }],
-                    "padding": "large",
-                },
-            }],
+                        "actions": [
+                            {
+                                "type": "Action.OpenUrl",
+                                "title": "Open case",
+                                "url": "https://example.test/cases/CASE-2048",
+                            }
+                        ],
+                        "padding": "large",
+                    },
+                }
+            ],
             "entities": [{"type": "layout-only", "value": "discard this metadata"}],
         }
         encoded = base64.b64encode(json.dumps(card).encode("utf-8")).decode("ascii")
         content = (
-            '<p>Before card</p>'
+            "<p>Before card</p>"
             '<URIObject type="SWIFT.1" url_thumbnail="https://images.example.test/preview.png">'
             '<a href="https://cards.example.test">Card preview</a>'
-            '<Title>Approval required</Title>'
+            "<Title>Approval required</Title>"
             f'<Swift b64="{encoded}" />'
-            '<Description />'
-            '</URIObject><p>After card</p>'
+            "<Description />"
+            "</URIObject><p>After card</p>"
         )
 
-        text = self.formatter.format_message({
-            "messageType": "RichText/Html",
-            "content": content,
-        })
+        text = self.formatter.format_message(
+            {
+                "messageType": "RichText/Html",
+                "content": content,
+            }
+        )
 
         self.assertIn("Before card", text)
         self.assertIn("After card", text)
@@ -1739,14 +1842,16 @@ class TeamsMessageFormatterTests(unittest.TestCase):
         self.assertNotIn("url_thumbnail", text)
 
     def test_malformed_swift_payload_keeps_visible_uriobject_text_only(self):
-        text = self.formatter.format_message({
-            "messageType": "RichText/Html",
-            "content": (
-                '<URIObject type="SWIFT.1"><Title>Visible fallback</Title>'
-                '<Swift b64="not-valid-base64-%" /><Description />'
-                '</URIObject>'
-            ),
-        })
+        text = self.formatter.format_message(
+            {
+                "messageType": "RichText/Html",
+                "content": (
+                    '<URIObject type="SWIFT.1"><Title>Visible fallback</Title>'
+                    '<Swift b64="not-valid-base64-%" /><Description />'
+                    "</URIObject>"
+                ),
+            }
+        )
 
         self.assertIn("Visible fallback", text)
         self.assertNotIn("not-valid-base64", text)
@@ -1758,13 +1863,15 @@ class TeamsMessageFormatterTests(unittest.TestCase):
             "body": [{"type": "TextBlock", "text": "Decoded plain message"}],
         }
         encoded = base64.b64encode(json.dumps(card).encode("utf-8")).decode("ascii")
-        text = self.formatter.format_message({
-            "messageType": "Text",
-            "content": (
-                '<URIObject type="SWIFT.1"><Title>Visible plain text</Title>'
-                f'<Swift b64="{encoded}" /></URIObject>'
-            ),
-        })
+        text = self.formatter.format_message(
+            {
+                "messageType": "Text",
+                "content": (
+                    '<URIObject type="SWIFT.1"><Title>Visible plain text</Title>'
+                    f'<Swift b64="{encoded}" /></URIObject>'
+                ),
+            }
+        )
         self.assertIn("Visible plain text", text)
         self.assertIn("Decoded plain message", text)
         self.assertNotIn(encoded, text)
@@ -1794,14 +1901,16 @@ class TeamsExporterTests(unittest.TestCase):
                 progress_callback=None,
             ):
                 self.calls.append((conversation_id, limit, since, until))
-                page = [{
-                    "id": "one",
-                    "sequenceId": 1,
-                    "originalarrivaltime": "2026-09-28T13:00:00+03:00",
-                    "imdisplayname": "Taylor",
-                    "messagetype": "RichText/Html",
-                    "content": "<p>Hi <b>there</b></p>",
-                }]
+                page = [
+                    {
+                        "id": "one",
+                        "sequenceId": 1,
+                        "originalarrivaltime": "2026-09-28T13:00:00+03:00",
+                        "imdisplayname": "Taylor",
+                        "messagetype": "RichText/Html",
+                        "content": "<p>Hi <b>there</b></p>",
+                    }
+                ]
                 if progress_callback:
                     progress_callback(1, len(page), 0)
                 yield page
@@ -1809,8 +1918,8 @@ class TeamsExporterTests(unittest.TestCase):
         connector = FakeConnector()
         exporter = TeamsExporter(connector, TeamsMessageFormatter())
         chat = ChatSummary("19:fake", "Sample chat")
-        since = datetime(2026, 9, 28, 9, 0, tzinfo=timezone.utc)
-        until = datetime(2026, 9, 28, 11, 0, tzinfo=timezone.utc)
+        since = datetime(2026, 9, 28, 9, 0, tzinfo=UTC)
+        until = datetime(2026, 9, 28, 11, 0, tzinfo=UTC)
         destination = Path(self.id().replace(".", "_") + ".txt")
         try:
             output = exporter.export_chat(
@@ -1827,9 +1936,7 @@ class TeamsExporterTests(unittest.TestCase):
             self.assertIn("Hi **there**", content)
             self.assertIn(f"Since: {since.isoformat()}", content)
             self.assertIn(f"Until: {until.isoformat()}", content)
-            self.assertEqual(
-                connector.calls[0], ("19:fake", None, since, until)
-            )
+            self.assertEqual(connector.calls[0], ("19:fake", None, since, until))
         finally:
             destination.unlink(missing_ok=True)
 
@@ -1844,15 +1951,17 @@ class TeamsExporterTests(unittest.TestCase):
             last_message_read_coverage = {"retry_count": 0}
 
             def iter_message_pages(self, *_args, **_kwargs):
-                yield [{
-                    "id": "archived-card",
-                    "originalarrivaltime": "2026-09-28T10:00:00Z",
-                    "imdisplayname": "Taylor",
-                    "__formatted_body": (
-                        '<URIObject type="SWIFT.1"><Title>Visible archived text</Title>'
-                        f'<Swift b64="{encoded}" /></URIObject>'
-                    ),
-                }]
+                yield [
+                    {
+                        "id": "archived-card",
+                        "originalarrivaltime": "2026-09-28T10:00:00Z",
+                        "imdisplayname": "Taylor",
+                        "__formatted_body": (
+                            '<URIObject type="SWIFT.1"><Title>Visible archived text</Title>'
+                            f'<Swift b64="{encoded}" /></URIObject>'
+                        ),
+                    }
+                ]
 
         destination = Path(self.id().replace(".", "_") + ".txt")
         try:
@@ -1872,16 +1981,16 @@ class TeamsExporterTests(unittest.TestCase):
 
             def iter_message_pages(self, *_args, **_kwargs):
                 for index in reversed(range(80)):
-                    yield [{
-                        "id": f"message-{index}",
-                        "sequenceId": index,
-                        "originalarrivaltime": (
-                            f"2026-09-28T10:{index // 60:02d}:{index % 60:02d}Z"
-                        ),
-                        "imdisplayname": f"Author {index}",
-                        "messagetype": "Text",
-                        "content": "x" * 20_000,
-                    }]
+                    yield [
+                        {
+                            "id": f"message-{index}",
+                            "sequenceId": index,
+                            "originalarrivaltime": (f"2026-09-28T10:{index // 60:02d}:{index % 60:02d}Z"),
+                            "imdisplayname": f"Author {index}",
+                            "messagetype": "Text",
+                            "content": "x" * 20_000,
+                        }
+                    ]
 
         import teams_exporter.teams_exporter as exporter_module
 
@@ -1904,8 +2013,10 @@ class TeamsExporterTests(unittest.TestCase):
             content = destination.read_text(encoding="utf-8")
             self.assertTrue(spools[0]._rolled)
             self.assertGreater(destination.stat().st_size, 1_000_000)
-            self.assertLess(content.index("[2026-09-28T10:00:00Z] Author 0"),
-                            content.index("[2026-09-28T10:01:19Z] Author 79"))
+            self.assertLess(
+                content.index("[2026-09-28T10:00:00Z] Author 0"),
+                content.index("[2026-09-28T10:01:19Z] Author 79"),
+            )
         finally:
             destination.unlink(missing_ok=True)
 
@@ -1914,13 +2025,15 @@ class TeamsExporterTests(unittest.TestCase):
             last_message_read_coverage = {"retry_count": 0}
 
             def iter_message_pages(self, *_args, **kwargs):
-                yield [{
-                    "id": "finished-page",
-                    "originalarrivaltime": "2026-09-28T10:00:00Z",
-                    "imdisplayname": "Taylor",
-                    "messagetype": "Text",
-                    "content": "already fetched",
-                }]
+                yield [
+                    {
+                        "id": "finished-page",
+                        "originalarrivaltime": "2026-09-28T10:00:00Z",
+                        "imdisplayname": "Taylor",
+                        "messagetype": "Text",
+                        "content": "already fetched",
+                    }
+                ]
                 kwargs["cancel_event"].set()
                 raise ExtractionCancelled("cancelled")
 
@@ -1942,5 +2055,3 @@ class TeamsExporterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-

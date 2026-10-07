@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -31,7 +31,7 @@ def message(identifier: str, second: int, content: str, author: str = "A Sender"
 class ServiceConnector(TeamsConnector):
     def __init__(self):
         super().__init__()
-        latest = datetime(2026, 9, 28, 10, 0, 3, tzinfo=timezone.utc)
+        latest = datetime(2026, 9, 28, 10, 0, 3, tzinfo=UTC)
         self.chats = [
             ChatSummary(
                 "19:alpha@thread.v2",
@@ -93,9 +93,7 @@ class ServiceConnector(TeamsConnector):
     ):
         self.page_calls.append((conversation_id, page_size, since, until, continuation_url))
         self.message_page_sizes.append(page_size)
-        self.last_request_retry_count = (
-            self.retry_counts.pop(0) if self.retry_counts else 0
-        )
+        self.last_request_retry_count = self.retry_counts.pop(0) if self.retry_counts else 0
         pages = self.pages.get(conversation_id, [([], None)])
         index = 0 if continuation_url is None else int(continuation_url.rsplit(":", 1)[1])
         page, next_url = pages[index]
@@ -140,7 +138,9 @@ class ServiceConnector(TeamsConnector):
         for page_index, (page, next_url) in enumerate(pages):
             if cancel_event is not None and cancel_event.is_set():
                 return
-            self.page_calls.append((conversation_id, 100, since, until, None if page_index == 0 else f"page:{page_index}"))
+            self.page_calls.append(
+                (conversation_id, 100, since, until, None if page_index == 0 else f"page:{page_index}")
+            )
             selected = []
             for item in sorted(
                 page,
@@ -273,31 +273,31 @@ class TeamsServiceTests(unittest.TestCase):
             ChatSummary(
                 "19:empty-newest@thread.v2",
                 "Empty newest",
-                last_message_at=datetime(2026, 9, 28, 10, 0, 6, tzinfo=timezone.utc),
+                last_message_at=datetime(2026, 9, 28, 10, 0, 6, tzinfo=UTC),
                 is_empty_conversation=True,
             ),
             ChatSummary(
                 "19:visible-newest@thread.v2",
                 "Visible newest",
-                last_message_at=datetime(2026, 9, 28, 10, 0, 5, tzinfo=timezone.utc),
+                last_message_at=datetime(2026, 9, 28, 10, 0, 5, tzinfo=UTC),
                 is_empty_conversation=False,
             ),
             ChatSummary(
                 "19:empty-middle@thread.v2",
                 "Empty middle",
-                last_message_at=datetime(2026, 9, 28, 10, 0, 4, tzinfo=timezone.utc),
+                last_message_at=datetime(2026, 9, 28, 10, 0, 4, tzinfo=UTC),
                 is_empty_conversation=True,
             ),
             ChatSummary(
                 "19:visible-older@thread.v2",
                 "Visible older",
-                last_message_at=datetime(2026, 9, 28, 10, 0, 3, tzinfo=timezone.utc),
+                last_message_at=datetime(2026, 9, 28, 10, 0, 3, tzinfo=UTC),
                 is_empty_conversation=False,
             ),
             ChatSummary(
                 "19:unknown@thread.v2",
                 "Unknown empty state",
-                last_message_at=datetime(2026, 9, 28, 10, 0, 2, tzinfo=timezone.utc),
+                last_message_at=datetime(2026, 9, 28, 10, 0, 2, tzinfo=UTC),
             ),
         ]
 
@@ -413,29 +413,26 @@ class TeamsServiceTests(unittest.TestCase):
             ChatSummary(
                 "19:meeting@thread.v2",
                 "Meeting fixture",
-                last_message_at=datetime(2026, 9, 28, 10, 0, 5, tzinfo=timezone.utc),
+                last_message_at=datetime(2026, 9, 28, 10, 0, 5, tzinfo=UTC),
                 chat_type="meeting",
             ),
             ChatSummary(
                 "19:group@thread.v2",
                 "Grant, Fiona | Parker, Juniper +1",
-                last_message_at=datetime(2026, 9, 28, 10, 0, 4, tzinfo=timezone.utc),
+                last_message_at=datetime(2026, 9, 28, 10, 0, 4, tzinfo=UTC),
                 chat_type="group",
             ),
             ChatSummary(
                 "19:human@thread.v2",
                 "Fiona Grant",
-                last_message_at=datetime(2026, 9, 28, 10, 0, 3, tzinfo=timezone.utc),
+                last_message_at=datetime(2026, 9, 28, 10, 0, 3, tzinfo=UTC),
                 chat_type="oneOnOne",
             ),
         ]
 
         result = self.service.list_chats(page_size=10, refresh=True)
         reopened = TeamsSearchIndex(self.service.index.path)
-        catalog = {
-            record["conversation_id"]: record
-            for record in reopened.chat_catalog()
-        }
+        catalog = {record["conversation_id"]: record for record in reopened.chat_catalog()}
 
         self.assertEqual(
             [item["id"] for item in result["items"]],
@@ -483,7 +480,7 @@ class TeamsServiceTests(unittest.TestCase):
             ChatSummary(
                 "19:alpha@thread.v2",
                 "Alpha",
-                last_message_at=datetime(2026, 9, 28, 10, 0, 3, tzinfo=timezone.utc),
+                last_message_at=datetime(2026, 9, 28, 10, 0, 3, tzinfo=UTC),
                 chat_type="group",
             )
         ]
@@ -544,9 +541,7 @@ class TeamsServiceTests(unittest.TestCase):
         ]
 
         first = self.service.get_messages("19:alpha@thread.v2", page_size=2)
-        second = self.service.get_messages(
-            "19:alpha@thread.v2", page_size=2, cursor=first["next_cursor"]
-        )
+        second = self.service.get_messages("19:alpha@thread.v2", page_size=2, cursor=first["next_cursor"])
 
         self.assertEqual([row["id"] for row in first["items"]], ["m2", "m3"])
         self.assertEqual([row["id"] for row in second["items"]], ["m1"])
@@ -561,9 +556,7 @@ class TeamsServiceTests(unittest.TestCase):
         self.connector.retry_counts = [2, 1]
 
         first = self.service.get_messages("19:alpha@thread.v2")
-        second = self.service.get_messages(
-            "19:alpha@thread.v2", cursor=first["next_cursor"]
-        )
+        second = self.service.get_messages("19:alpha@thread.v2", cursor=first["next_cursor"])
 
         self.assertEqual(first["coverage"]["retry_count_this_call"], 2)
         self.assertEqual(second["coverage"]["retry_count_this_call"], 1)
@@ -573,8 +566,8 @@ class TeamsServiceTests(unittest.TestCase):
             ([message("m1", 1, "deployment start")], "page:1"),
             ([message("m2", 2, "deployment complete")], None),
         ]
-        since = datetime(2026, 9, 28, 10, 0, 0, tzinfo=timezone.utc)
-        until = datetime(2026, 9, 28, 10, 1, 0, tzinfo=timezone.utc)
+        since = datetime(2026, 9, 28, 10, 0, 0, tzinfo=UTC)
+        until = datetime(2026, 9, 28, 10, 1, 0, tzinfo=UTC)
 
         first = self.service.search_messages(
             "deployment",
@@ -604,8 +597,8 @@ class TeamsServiceTests(unittest.TestCase):
         self.connector.pages["19:alpha@thread.v2"] = [
             ([message("literal", 1, "The value is 100%_ready; São Paulo")], None)
         ]
-        since = datetime(2026, 9, 28, 10, 0, 0, tzinfo=timezone.utc)
-        until = datetime(2026, 9, 28, 10, 1, 0, tzinfo=timezone.utc)
+        since = datetime(2026, 9, 28, 10, 0, 0, tzinfo=UTC)
+        until = datetime(2026, 9, 28, 10, 1, 0, tzinfo=UTC)
 
         literal = self.service.search_messages(
             "100%_ready",
@@ -630,9 +623,7 @@ class TeamsServiceTests(unittest.TestCase):
             [message("local", 1, "older retained local message")],
             formatter=self.service.formatter,
         )
-        self.connector.pages[chat.id] = [
-            ([message("remote", 2, "new Teams message")], None)
-        ]
+        self.connector.pages[chat.id] = [([message("remote", 2, "new Teams message")], None)]
         destination = Path(self.temp.name) / "conversation.txt"
 
         TeamsExporter(
@@ -649,17 +640,20 @@ class TeamsServiceTests(unittest.TestCase):
     def test_local_ui_export_passes_limit_to_remote_retrieval_and_progress(self):
         chat = self.connector.chats[0]
         self.connector.pages[chat.id] = [
-            ([
-                message("outside-until", 4, "newer than upper bound"),
-                message("upper-bound", 3, "message at upper bound"),
-                message("lower-bound", 2, "message at lower bound"),
-                message("outside-since", 1, "older than lower bound"),
-            ], None)
+            (
+                [
+                    message("outside-until", 4, "newer than upper bound"),
+                    message("upper-bound", 3, "message at upper bound"),
+                    message("lower-bound", 2, "message at lower bound"),
+                    message("outside-since", 1, "older than lower bound"),
+                ],
+                None,
+            )
         ]
         destination = Path(self.temp.name) / "bounded-conversation.txt"
         progress = []
-        since = datetime(2026, 9, 28, 10, 0, 2, tzinfo=timezone.utc)
-        until = datetime(2026, 9, 28, 10, 0, 3, tzinfo=timezone.utc)
+        since = datetime(2026, 9, 28, 10, 0, 2, tzinfo=UTC)
+        until = datetime(2026, 9, 28, 10, 0, 3, tzinfo=UTC)
 
         TeamsExporter(
             self.connector,
@@ -696,9 +690,7 @@ class TeamsServiceTests(unittest.TestCase):
             ([message("m0", 0, "older excluded")], None),
         ]
 
-        first = self.service.export_chat(
-            chat.id, message_limit=3, max_pages_to_fetch=2
-        )
+        first = self.service.export_chat(chat.id, message_limit=3, max_pages_to_fetch=2)
         self.assertEqual(first["status"], "preparing")
         result = self.service.export_chat(export_id=first["export_id"])
 
@@ -717,18 +709,24 @@ class TeamsServiceTests(unittest.TestCase):
     def test_mcp_date_range_and_limit_count_only_qualifying_messages(self):
         chat = self.connector.chats[0]
         self.connector.pages[chat.id] = [
-            ([
-                message("outside-until", 5, "newer than upper bound"),
-                message("at-until", 4, "message at upper bound"),
-            ], "page:1"),
-            ([
-                message("next-in-range", 3, "next latest in range"),
-                message("also-in-range", 2, "older in range but beyond limit"),
-            ], "page:2"),
+            (
+                [
+                    message("outside-until", 5, "newer than upper bound"),
+                    message("at-until", 4, "message at upper bound"),
+                ],
+                "page:1",
+            ),
+            (
+                [
+                    message("next-in-range", 3, "next latest in range"),
+                    message("also-in-range", 2, "older in range but beyond limit"),
+                ],
+                "page:2",
+            ),
             ([message("outside-since", 1, "older than lower bound")], None),
         ]
-        since = datetime(2026, 9, 28, 10, 0, 2, tzinfo=timezone.utc)
-        until = datetime(2026, 9, 28, 10, 0, 4, tzinfo=timezone.utc)
+        since = datetime(2026, 9, 28, 10, 0, 2, tzinfo=UTC)
+        until = datetime(2026, 9, 28, 10, 0, 4, tzinfo=UTC)
 
         result = self.service.export_chat(
             chat.id,
@@ -752,9 +750,7 @@ class TeamsServiceTests(unittest.TestCase):
 
     def test_unbounded_mcp_export_does_not_duplicate_every_id_for_the_job(self):
         chat = self.connector.chats[0]
-        self.connector.pages[chat.id] = [
-            ([message("m2", 2, "newest"), message("m1", 1, "older")], None)
-        ]
+        self.connector.pages[chat.id] = [([message("m2", 2, "newest"), message("m1", 1, "older")], None)]
 
         result = self.service.export_chat(chat.id)
 
@@ -777,12 +773,10 @@ class TeamsServiceTests(unittest.TestCase):
             "content": "",
             "properties": {"deletetime": deleted_at},
         }
-        self.service.index.upsert_messages(
-            chat.id, [original], formatter=self.service.formatter
-        )
+        self.service.index.upsert_messages(chat.id, [original], formatter=self.service.formatter)
         self.connector.pages[chat.id] = [([delete_event], None)]
-        since = datetime(2026, 9, 28, 10, 0, 0, tzinfo=timezone.utc)
-        until = datetime(2026, 9, 28, 10, 1, 0, tzinfo=timezone.utc)
+        since = datetime(2026, 9, 28, 10, 0, 0, tzinfo=UTC)
+        until = datetime(2026, 9, 28, 10, 1, 0, tzinfo=UTC)
 
         search = self.service.search_messages(
             "searchable project detail",
@@ -823,13 +817,9 @@ class TeamsServiceTests(unittest.TestCase):
 
     def test_get_messages_bounds_output_and_continues_truncated_message_content(self):
         long_body = "x" * 8_000
-        self.connector.pages["19:alpha@thread.v2"] = [
-            ([message("long", 1, long_body)], None)
-        ]
+        self.connector.pages["19:alpha@thread.v2"] = [([message("long", 1, long_body)], None)]
 
-        result = self.service.get_messages(
-            "19:alpha@thread.v2", max_response_chars=4_096
-        )
+        result = self.service.get_messages("19:alpha@thread.v2", max_response_chars=4_096)
 
         item = result["items"][0]
         self.assertLessEqual(len(__import__("json").dumps(result, ensure_ascii=False)), 4_096)
@@ -857,7 +847,7 @@ class TeamsServiceTests(unittest.TestCase):
             ([message("m1", 1, "first")], "page:1"),
             ([message("m2", 2, "second")], None),
         ]
-        since = datetime(2026, 9, 28, 9, tzinfo=timezone.utc)
+        since = datetime(2026, 9, 28, 9, tzinfo=UTC)
         first = self.service.get_messages("19:alpha@thread.v2", since=since)
 
         with self.assertRaises(InvalidCursorError):
@@ -903,8 +893,8 @@ class TeamsServiceTests(unittest.TestCase):
         result = self.service.search_messages(
             "deployment update",
             conversation_ids=["19:alpha@thread.v2"],
-            since=datetime(2026, 9, 28, 10, 0, 0, tzinfo=timezone.utc),
-            until=datetime(2026, 9, 28, 10, 1, 0, tzinfo=timezone.utc),
+            since=datetime(2026, 9, 28, 10, 0, 0, tzinfo=UTC),
+            until=datetime(2026, 9, 28, 10, 1, 0, tzinfo=UTC),
         )
         self.assertEqual(result["returned_count"], 1)
         self.assertEqual(result["items"][0]["id"], "m2")
@@ -953,8 +943,8 @@ class TeamsServiceTests(unittest.TestCase):
         result = reopened_service.search_messages(
             "older retained deployment",
             conversation_ids=["19:alpha@thread.v2"],
-            since=datetime(2026, 9, 28, 10, 0, 0, tzinfo=timezone.utc),
-            until=datetime(2026, 9, 28, 10, 1, 0, tzinfo=timezone.utc),
+            since=datetime(2026, 9, 28, 10, 0, 0, tzinfo=UTC),
+            until=datetime(2026, 9, 28, 10, 1, 0, tzinfo=UTC),
         )
         self.assertEqual([item["id"] for item in result["items"]], ["m2"])
         self.assertTrue(result["coverage"]["complete_for_requested_scope"])
@@ -999,11 +989,9 @@ class TeamsServiceTests(unittest.TestCase):
         self.connector.pages["19:alpha@thread.v2"] = [
             ([message("m1", 1, "one"), message("m2", 2, "two"), message("m3", 3, "three")], None)
         ]
-        self.service.sync_search_index(
-            conversation_id="19:alpha@thread.v2", include_participants=False
-        )
-        since = datetime(2026, 9, 28, 10, 0, 2, tzinfo=timezone.utc)
-        until = datetime(2026, 9, 28, 10, 0, 3, tzinfo=timezone.utc)
+        self.service.sync_search_index(conversation_id="19:alpha@thread.v2", include_participants=False)
+        since = datetime(2026, 9, 28, 10, 0, 2, tzinfo=UTC)
+        until = datetime(2026, 9, 28, 10, 0, 3, tzinfo=UTC)
 
         result = self.service.get_search_index_status(
             conversation_id="19:alpha@thread.v2", since=since, until=until
@@ -1091,8 +1079,8 @@ class TeamsServiceTests(unittest.TestCase):
         first = self.service.search_messages(
             "deployment",
             conversation_ids=["19:alpha@thread.v2"],
-            since=datetime(2026, 9, 28, 10, 0, 0, tzinfo=timezone.utc),
-            until=datetime(2026, 9, 28, 10, 1, 0, tzinfo=timezone.utc),
+            since=datetime(2026, 9, 28, 10, 0, 0, tzinfo=UTC),
+            until=datetime(2026, 9, 28, 10, 1, 0, tzinfo=UTC),
             result_limit=1,
         )
         self.assertIsNotNone(first["next_cursor"])
@@ -1100,8 +1088,8 @@ class TeamsServiceTests(unittest.TestCase):
             self.service.search_messages(
                 "another query",
                 conversation_ids=["19:alpha@thread.v2"],
-                since=datetime(2026, 9, 28, 10, 0, 0, tzinfo=timezone.utc),
-                until=datetime(2026, 9, 28, 10, 1, 0, tzinfo=timezone.utc),
+                since=datetime(2026, 9, 28, 10, 0, 0, tzinfo=UTC),
+                until=datetime(2026, 9, 28, 10, 1, 0, tzinfo=UTC),
                 cursor=first["next_cursor"],
             )
 
