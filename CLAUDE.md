@@ -28,6 +28,15 @@ Never log or commit credentials, tokens, session cookies, private user content, 
 
 Treat persisted data as the current format. Do not add backward-compatibility shims, old-format readers, automatic migrations, schema-version frameworks, or fallback behavior for previous application versions unless asked. Keep safeguards that protect current user data and account ownership.
 
+### Research scope
+
+Research probes make explicitly authorized requests to configured endpoints and report
+responses. They do not consume browser captures. HARs, Resource Saver archives and downloaded
+source bundles are temporary inputs for ad hoc exploratory work outside the repository.
+Document useful URLs, request/response shapes, dated findings and limitations. Do not retain
+raw or anonymized captures, per-file/member manifests, source indexes, or capture-reading,
+regeneration and redaction machinery in the repository. Probes must work without captures.
+
 ## The project
 
 A local, single-user Microsoft Teams connector with an MCP server and a user-operated local export UI. This repository is the active Teams project; it is expected to migrate into `lrh-teams-connector` later. Keep work here until that migration is requested.

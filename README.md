@@ -30,6 +30,12 @@ The HTTP server writes formatted logs to stdout and to a daily-rotated file. The
 
 ## Portability and research
 
+Research probes call live endpoints with explicit authorization. Browser captures and
+downloaded bundles are temporary exploratory inputs kept outside the repository; the
+published research contains endpoint documentation and findings, not capture files or
+capture-processing tooling.
+
+
 The application has no fixed company account or tenant hostname. Public Microsoft client,
 resource and endpoint settings are editable, and regional service URLs come from sign-in.
 The [porting checklist](docs/project-architecture.md#porting-and-rechecking-an-environment)
