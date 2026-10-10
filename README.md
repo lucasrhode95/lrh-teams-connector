@@ -1,4 +1,4 @@
-# Teams Exporter
+# LRH Teams Connector
 
 This project provides two ways to retrieve Teams conversations: a local page for direct, user-operated exports and a standard MCP server for clients and AI agents. Both use the shared Teams connector and application-owned Microsoft sign-in.
 
@@ -6,7 +6,7 @@ The connector follows Teams Desktop client conventions and uses endpoint behavio
 
 ## Sign in
 
-Run `python -m teams_exporter auth` from the repository root to complete Microsoft's sign-in flow. Microsoft handles the password and any verification; this application never sees or stores the password. The shared connector stores opaque tokens in an OS-encrypted cache under `%LOCALAPPDATA%\scrape-teams-chat` on Windows (DPAPI), or the per-user data directory on other platforms, independent of the working directory. UI and MCP use the same MSAL cache; access tokens renew silently when Microsoft accepts the stored refresh token. If encrypted storage is unavailable, the connector fails closed and never writes a plaintext cache.
+Run `python -m teams_exporter auth` from the repository root to complete Microsoft's sign-in flow. Microsoft handles the password and any verification; this application never sees or stores the password. The shared connector stores opaque tokens in an OS-encrypted cache under `%LOCALAPPDATA%\lrh-teams-connector` on Windows (DPAPI), or the per-user data directory on other platforms, independent of the working directory. UI and MCP use the same MSAL cache; access tokens renew silently when Microsoft accepts the stored refresh token. If encrypted storage is unavailable, the connector fails closed and never writes a plaintext cache.
 
 For explicitly requested local development probes, `python -m teams_exporter auth --unsecure` stores a separate plaintext MSAL cache in the repository's ignored `.local` folder. Any process that can read it can reuse the signed-in session. Direct scripts can select the same cache with `TeamsConnector(unsecure=True)`. The normal UI, MCP server, and sign-in command stay encrypted by default; development mode must be selected explicitly and its cache should be deleted when no longer needed.
 
@@ -26,7 +26,7 @@ The local page uses Python's threaded standard-library HTTP server. It does not 
 
 ## Application logs
 
-The HTTP server writes formatted logs to stdout and to a daily-rotated file. The MCP server writes to the file only, keeping stdout available for MCP protocol messages. Logs are stored under `%LOCALAPPDATA%\scrape-teams-chat\logs` on Windows, or the standard per-user application data directory on other platforms. Each process uses its own log file so concurrent MCP and HTTP processes do not race while rotating files; seven daily backups are retained and older files are pruned at startup. Python warnings are redirected to the same logging system. The default level is `INFO`; set `TEAMS_EXPORTER_LOG_LEVEL=DEBUG` before starting a process for request and pagination detail. Operational logs record timings, statuses, and counts, not message bodies, search terms, chat names, identifiers, tokens, or authorization headers.
+The HTTP server writes formatted logs to stdout and to a daily-rotated file. The MCP server writes to the file only, keeping stdout available for MCP protocol messages. Logs are stored under `%LOCALAPPDATA%\lrh-teams-connector\logs` on Windows, or the standard per-user application data directory on other platforms. Each process uses its own log file so concurrent MCP and HTTP processes do not race while rotating files; seven daily backups are retained and older files are pruned at startup. Python warnings are redirected to the same logging system. The default level is `INFO`; set `TEAMS_EXPORTER_LOG_LEVEL=DEBUG` before starting a process for request and pagination detail. Operational logs record timings, statuses, and counts, not message bodies, search terms, chat names, identifiers, tokens, or authorization headers.
 
 ## Portability and research
 
@@ -47,5 +47,5 @@ not universal permission guarantees.
 
 - [Project architecture and module guide](docs/project-architecture.md)
 - [Teams API research](docs/teams-api-research.md)
-- [Product roadmap](docs/teams-exporter-roadmap.md)
+- [Product roadmap](docs/teams-connector-roadmap.md)
 - [MCP server guide](docs/teams-mcp-server.md)

@@ -134,9 +134,9 @@ class TeamsService:
         if configured_index:
             index_path = Path(configured_index)
         elif os.name == "nt" and os.environ.get("LOCALAPPDATA"):
-            index_path = Path(os.environ["LOCALAPPDATA"]) / "scrape-teams-chat" / "search-index.sqlite3"
+            index_path = Path(os.environ["LOCALAPPDATA"]) / "lrh-teams-connector" / "search-index.sqlite3"
         else:
-            index_path = Path.home() / ".local" / "share" / "scrape-teams-chat" / "search-index.sqlite3"
+            index_path = Path.home() / ".local" / "share" / "lrh-teams-connector" / "search-index.sqlite3"
         self._index_path = index_path
         self._index = index
         self._index_is_injected = index is not None

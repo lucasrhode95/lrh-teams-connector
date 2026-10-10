@@ -1410,7 +1410,7 @@ class TeamsConnectorTests(unittest.TestCase):
             ):
                 cache_path = TeamsConnector().token_provider.cache_path
 
-        self.assertEqual(cache_path, root / "scrape-teams-chat" / ".teams_token_cache.json")
+        self.assertEqual(cache_path, root / "lrh-teams-connector" / ".teams_token_cache.json")
         self.assertTrue(cache_path.is_absolute())
 
     def test_injected_cache_path_uses_encrypted_persistence(self):

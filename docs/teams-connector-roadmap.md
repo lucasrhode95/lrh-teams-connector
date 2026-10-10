@@ -1,4 +1,4 @@
-# Teams Exporter Roadmap
+# LRH Teams Connector Roadmap
 
 ## Scope and evidence
 

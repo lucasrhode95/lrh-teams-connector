@@ -84,11 +84,11 @@ class AppLoggingTests(unittest.TestCase):
             with patch.dict(os.environ, {"LOCALAPPDATA": "C:\\Users\\tester\\AppData\\Local"}):
                 self.assertEqual(
                     app_data_directory(),
-                    Path("C:\\Users\\tester\\AppData\\Local") / "scrape-teams-chat",
+                    Path("C:\\Users\\tester\\AppData\\Local") / "lrh-teams-connector",
                 )
         else:
             with patch.dict(os.environ, {"XDG_DATA_HOME": "/tmp/test-app-data"}):
-                self.assertEqual(app_data_directory(), Path("/tmp/test-app-data") / "scrape-teams-chat")
+                self.assertEqual(app_data_directory(), Path("/tmp/test-app-data") / "lrh-teams-connector")
 
 
 if __name__ == "__main__":

@@ -314,7 +314,7 @@ class TokenProvider:
         else:
             root = os.environ.get("XDG_DATA_HOME")
             base = Path(root) if root else Path.home() / ".local" / "share"
-        return base / "scrape-teams-chat" / ".teams_token_cache.json"
+        return base / "lrh-teams-connector" / ".teams_token_cache.json"
 
     @staticmethod
     def _default_debug_cache_path() -> Path:

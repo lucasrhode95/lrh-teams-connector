@@ -20,11 +20,11 @@ Microsoft handles the password and verification pages. The application uses the 
 
 The shared connector uses MSAL's silent acquisition for both Teams audiences. MSAL returns a still-valid cached access token or silently refreshes an expired one with the cached refresh token. Only explicit Microsoft credential rejection or access denial prompts for `python -m teams_exporter auth`; exhausted network retries report connectivity/service failure without blaming the credentials. Cache reads, refreshes and writes share an inter-process lock, and refreshed cache writes use an atomic replacement. No token, cookie or authorization header is returned or logged.
 
-On Windows, the encrypted cache path is the absolute `%LOCALAPPDATA%\scrape-teams-chat\.teams_token_cache.json`, regardless of the process working directory. It uses the OS encryption provider (DPAPI on Windows). The application does not import or migrate older plaintext token files; run the sign-in command if the current encrypted cache has no accepted session.
+On Windows, the encrypted cache path is the absolute `%LOCALAPPDATA%\lrh-teams-connector\.teams_token_cache.json`, regardless of the process working directory. It uses the OS encryption provider (DPAPI on Windows). The application does not import or migrate older plaintext token files; run the sign-in command if the current encrypted cache has no accepted session.
 
 For a direct development probe, opt in to a separate plaintext cache with `python -m teams_exporter auth --unsecure`, then run the probe using `TeamsConnector(unsecure=True)`. To run the MCP server or local UI against that cache, pass `--unsecure` to its startup command. The file is `.local/teams-msal-debug-cache.json`, which is Git-ignored. It contains reusable access and refresh tokens in plaintext: do not share or commit it, and delete it when development is finished. Secure encrypted storage remains the default.
 
-The archive is persistent across MCP and UI restarts. By default it lives under `%LOCALAPPDATA%\scrape-teams-chat` on Windows and `~/.local/share/scrape-teams-chat` on other platforms. The filename includes a short SHA-256 fingerprint derived from the Teams tenant and user IDs. The database stores that fingerprint for ownership checks; it does not store the account name, tokens, cookies, or authorization headers. Messages are retained indefinitely after they have been fetched; there is no expiry or automatic purge.
+The archive is persistent across MCP and UI restarts. By default it lives under `%LOCALAPPDATA%\lrh-teams-connector` on Windows and `~/.local/share/lrh-teams-connector` on other platforms. The filename includes a short SHA-256 fingerprint derived from the Teams tenant and user IDs. The database stores that fingerprint for ownership checks; it does not store the account name, tokens, cookies, or authorization headers. Messages are retained indefinitely after they have been fetched; there is no expiry or automatic purge.
 
 When `TEAMS_SEARCH_INDEX_PATH` points to a new file, the first signed-in account uses that path. If the file is already marked for another account, the existing file is preserved and the other account receives a separate account-specific file. Older indexes without ownership metadata are also preserved and reported as unverified; the application does not assume whose messages they contain. The local UI and MCP tool results include a warning when this happens.
 
@@ -89,9 +89,9 @@ Add this to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.lrh-teams]
-command = "C:\\path\\to\\scrape-teams-chat\\.venv\\Scripts\\python.exe"
+command = "C:\\path\\to\\lrh-teams-connector\\.venv\\Scripts\\python.exe"
 args = ["-m", "teams_exporter.mcp_server"]
-cwd = "C:\\path\\to\\scrape-teams-chat"
+cwd = "C:\\path\\to\\lrh-teams-connector"
 ```
 
 ### Claude Code
@@ -103,7 +103,7 @@ Create or update the project-root `.mcp.json`:
   "mcpServers": {
     "lrh-teams": {
       "type": "stdio",
-      "command": "C:\\path\\to\\scrape-teams-chat\\.venv\\Scripts\\python.exe",
+      "command": "C:\\path\\to\\lrh-teams-connector\\.venv\\Scripts\\python.exe",
       "args": ["-m", "teams_exporter.mcp_server"]
     }
   }

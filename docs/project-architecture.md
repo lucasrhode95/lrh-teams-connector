@@ -21,7 +21,6 @@ Both entry points call the same service layer and connector. MCP search and hist
 | `teams_exporter/__main__.py` | Command-line entry point for interactive sign-in, the local page, and archive backup. |
 | `teams_exporter/__init__.py` | Python package marker. The application imports concrete modules directly rather than re-exporting a combined public API. |
 | `teams_exporter/*.svg` | Local fallback icons for a person, group chat, and call when Teams does not provide a usable picture URI. |
-| `scrape_teams_chat.js` | Standalone browser-console scraper from the earlier workflow. It is separate from the Python application's connector, MCP server, and local page. |
 | `tests/` | Functional tests using sanitized fixtures for connector behavior, pagination, formatting, archive coverage, MCP contracts, and local HTTP behavior. |
 
 ## MCP capabilities
@@ -62,12 +61,12 @@ Browser -> local_server.py -> TeamsService -> TeamsConnector -> Microsoft Teams
 
 Authentication is completed separately with `python -m teams_exporter auth`. Microsoft handles the password and verification. The application keeps the resulting opaque tokens in its local token cache and does not return or log them. MCP startup and tool calls use silent authentication and return an actionable authentication-needed error when sign-in is required.
 
-On Windows, the absolute cache file is `%LOCALAPPDATA%\scrape-teams-chat\.teams_token_cache.json`, in the same per-user folder as SQLite. UI and MCP share it. MSAL silently refreshes expired access tokens; an inter-process lock protects refresh/write races and the cache is updated atomically. Credential rejection gives the separate sign-in command; transient failures report connectivity without claiming credentials were rejected.
+On Windows, the absolute cache file is `%LOCALAPPDATA%\lrh-teams-connector\.teams_token_cache.json`, in the same per-user folder as SQLite. UI and MCP share it. MSAL silently refreshes expired access tokens; an inter-process lock protects refresh/write races and the cache is updated atomically. Credential rejection gives the separate sign-in command; transient failures report connectivity without claiming credentials were rejected.
 
 ## Related documentation
 
 - [Teams API research](teams-api-research.md) records observed routes, payloads, and confidence limits.
-- [Product roadmap](teams-exporter-roadmap.md) records delivered work and remaining priorities.
+- [Product roadmap](teams-connector-roadmap.md) records delivered work and remaining priorities.
 - [MCP server guide](teams-mcp-server.md) covers install, sign-in, configuration, tools, and archive operations.
 
 ## Porting and rechecking an environment

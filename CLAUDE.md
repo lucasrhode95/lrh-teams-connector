@@ -39,13 +39,13 @@ regeneration and redaction machinery in the repository. Probes must work without
 
 ## The project
 
-A local, single-user Microsoft Teams connector with an MCP server and a user-operated local export UI. This repository is the active Teams project; it is expected to migrate into `lrh-teams-connector` later. Keep work here until that migration is requested.
+A local, single-user Microsoft Teams connector with an MCP server and a user-operated local export UI. This repository is `lrh-teams-connector`, the active Teams project. Its canonical remote is the private GitHub repository; keep it separate from the Outlook connector until a merge is requested.
 
 - User and operator guide: `README.md`
 - Architecture and module guide: `docs/project-architecture.md`
 - API evidence and limitations: `docs/teams-api-research.md`
 - MCP behavior: `docs/teams-mcp-server.md`
-- Work register: `docs/teams-exporter-roadmap.md`
+- Work register: `docs/teams-connector-roadmap.md`
 
 The connector uses application-owned Microsoft sign-in and an encrypted MSAL token cache by default. Microsoft handles the user's password and verification. MCP uses stdio; the local UI binds to loopback. Teams reads may use Microsoft Graph and documented-in-research Teams service routes. Treat reverse-engineered routes as private and undocumented, verify them feature by feature, and do not describe them as a stable public API.
 

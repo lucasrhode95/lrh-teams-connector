@@ -57,12 +57,12 @@ def app_data_directory() -> Path:
     if os.name == "nt":
         root = os.environ.get("LOCALAPPDATA")
         if root:
-            return Path(root) / "scrape-teams-chat"
-        return Path.home() / "AppData" / "Local" / "scrape-teams-chat"
+            return Path(root) / "lrh-teams-connector"
+        return Path.home() / "AppData" / "Local" / "lrh-teams-connector"
     root = os.environ.get("XDG_DATA_HOME")
     if root:
-        return Path(root) / "scrape-teams-chat"
-    return Path.home() / ".local" / "share" / "scrape-teams-chat"
+        return Path(root) / "lrh-teams-connector"
+    return Path.home() / ".local" / "share" / "lrh-teams-connector"
 
 
 def log_directory() -> Path:
