@@ -2,6 +2,20 @@
 
 ## Scope and evidence
 
+**Required prework — canonical connector terminology (2026-10-11):** use `lrh-teams-connector`
+for repository/MCP identity, `teams-connector` for the CLI, and `teams_connector` for the Python
+package. “Teams extractor”/“Teams exporter” must stop being application identities; export remains
+a connector operation. Before shared-auth integration, inventory required behavior and active
+launchers/MCP/UI consumers of `teams_exporter`, move them to the canonical package, verify the
+workflows, then remove the duplicate implementation and obsolete dependencies/entry points.
+
+The agent performs necessary one-time local configuration edits and transparent current-format
+file moves. Deliver only current names, paths and formats: no legacy aliases, forwarding wrappers,
+compatibility dependencies, old-format readers, automatic import/migration, dual-cache fallback or
+committed migration helpers. Preserve account ownership and current-format data safeguards. The
+README's temporary distinction between the installed package and original exporter describes the
+current checkout; it is not the intended final architecture.
+
 **Product ownership (2026-10-11):** Outlook owns Exchange calendar events, schedules, agenda,
 organizer/invitees, event attachments, and join links. Teams owns related Teams meeting chats,
 recordings, transcripts, recap, and meeting notes. Verified identifiers connect those resources;
