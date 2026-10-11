@@ -1260,6 +1260,24 @@ Do not build the canonical classifier from prefixes alone. Prefer explicit `chat
   and validation criteria are in Teams API research, “Connector code-path audit.” No product change
   or measured optimization has been established.
 
+### People/search/profile helper audit (2026-10-11)
+
+- A targeted read of the supplied Teams Web bundle establishes source-level request/response
+  construction for multiple People Picker and profile helpers, including the distinct
+  `peopleProfileService` working-set route. The route inventory, body/parameter shapes, response
+  transforms and unresolved boundaries are recorded in [Teams API research](teams-api-research.md#peoplesearchprofile-helpers).
+- The supplied HAR captures Substrate `scenario=powerbar` requests with a People entity and one
+  successful response containing a single People suggestion. That is a different surface from
+  Middle Tier `/beta/users/searchV2` and the full Search v2 result endpoint. Field names are
+  documented without retaining result values.
+- The HARs contain no live call/response for the source-only Middle Tier People Picker or People
+  Profile Service routes. Keep these as research leads until a browser request/response and a
+  bounded app-owned-auth capability check establish their behavior; do not add them to production
+  code based only on bundle source.
+- The Teams Web source also identifies separate chat-list GraphQL connections and a Teams/Channels
+  folder sorting helper, but does not connect that helper to recent-chat rendering. Exact sidebar
+  recent ordering remains open; see the [dated source audit](teams-api-research.md#teams-web-chat-list-and-people-helper-source-audit-2026-10-11).
+
 ### Exact-message search-result navigation (2026-10-10)
 
 Microsoft's documented Teams deep-link forms address chat/channel messages by identity and message ID. This accounts for exact-hit navigation without a page ordinal. The Teams Web click handler and its surrounding-window request remain uncaptured; see [API research](teams-api-research.md#message-identity-and-jump-to-hit-navigation-2026-10-10) and the [cross-product endpoint/workflow ledger](../../lrh-outlook-connector/docs/m365-search-findings-2026-10-10.md).

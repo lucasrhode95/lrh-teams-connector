@@ -622,7 +622,7 @@ unverified. See the route templates above and the confidence notes below.
 
 The Regional Chat Service is the most useful backend for **raw conversation/message access**.
 
-It should not currently be assumed to be the canonical source for the exact Teams sidebar/chat-picker ordering.
+Its conversation feed is not evidence of the exact Teams sidebar/chat-picker ordering. The CSA snapshot is also only a candidate input: the current Teams Web bundle declares a separate, sectioned chat-list GraphQL query, described under [Conversation catalog sources](#conversation-catalog-sources-raw-feed-vs-ui-state). The captured HAR did not include that query's live request or response, so its wire contract and end-to-end use by the visible sidebar remain unverified.
 
 The base URL should come from:
 
@@ -677,7 +677,15 @@ GET https://teams.microsoft.com/api/csa/api/v1/teams/users/me
 
 CSA includes UI-oriented fields such as `isRead`, `isSticky`, `hidden`, `consumptionHorizon`, `lastMessage`, and synchronization metadata. In one live comparison, the raw `chats[]` order differed from the sidebar, while descending `lastMessage.originalArrivalTime` matched the visible ordering. See [Live observations and confidence](#live-observations-and-confidence-2026-09-29) for the scope and limits of that comparison.
 
-### 3. Teams Web IndexedDB conversation state
+### 3. Teams Web chat-list GraphQL operation
+
+The supplied Teams Web bundle defines `DataResolversChatChatListWithCachedTitleQuery`. It asks for separate cursor connections for `recentsChats`, `pinnedChats`, `chatRequests`, `topFixedChats`, and other suggestion/contact groups. The recent-chat connection accepts `first`/`after`, filters, and `excludePinnedChats`; it returns edge cursors and `pageInfo`. Its selected recent-chat fields include the last message's `originalArrivalTime`. Separate connections establish that the data model has multiple lists, but do not tell us whether the client renders each edge sequence as returned or locally reorders it, or which comparator it uses.
+
+The same bundle's schema defines `PinnedChat` with `conversationId` and `order`, and a `reorderPinnedChats` mutation that accepts ordered `PinnedChatInput` entries. This establishes a client-side explicit ordering value for pinned chats in this build. It does not establish the recent-chat comparator, tie-breaking rules, visibility/folder composition, or every section rendered by the current sidebar.
+
+The source includes an explicit query call in a desktop experience warm-up path (`includePinnedChats: true`, `includeSuggestedContacts: false`). The supplied HARs contain no chat-list GraphQL request/response, and this source audit did not trace the full sidebar component-to-query-to-render path. Treat this as the strongest client-source lead for exact list behavior, not yet a verified endpoint contract or proof of final visible ordering. See [the dated source audit](#teams-web-chat-list-and-people-helper-source-audit-2026-10-11).
+
+### 4. Teams Web IndexedDB conversation state
 
 A current open-source Teams Web exporter reports that the web client stores conversation-manager state in IndexedDB stores such as:
 
@@ -1346,14 +1354,37 @@ These are reverse-engineered client patterns, not a supported public API contrac
 ## People/search/profile helpers
 
 ```text
-beta/users/searchExternalUsers
-beta/users/searchV2
-beta/workingSet/people
-beta/scd/searchability
-beta/users/{mri}/statementUrl
+Middle Tier / People Picker:
+  beta/users/search
+  beta/users/searchV2
+  beta/users/searchUsers
+  beta/users/searchExternalUsers
+  beta/scd/lookup
+  beta/users/me/lookup/phones
+  beta/users/{searchQuery}/externalsearch
+  beta/users/{searchQuery}/externalsearchv3
+  beta/scd/searchability
+Middle Tier / profile helper:
+  beta/users/{mri}/statementUrl
+People Profile Service:
+  beta/workingSet/people
 ```
 
-Contracts are not yet fully established.
+These names span more than one service and include lookup, sync, and mutation routes. The supplied production bundle establishes useful request and response transformations for several of them. The HARs contain no calls to these Middle Tier or People Profile Service routes, so those remain source-established contracts rather than captured server behavior. A separate Substrate Powerbar People-suggestions request and response were captured; see [the capture notes](#captured-powerbar-people-suggestions).
+
+| Client route | What the client source establishes | Evidence and boundary |
+|---|---|---|
+| `POST {middleTier}/beta/users/searchV2?{callerQuery}` or `POST {middleTier}/beta/users/search?{callerQuery}` | The People Picker selects `searchV2` when `enablePeopleSearchV2` is on, otherwise `search`. It sends the caller-provided body as JSON, parses a successful response as JSON, and turns `403` into a forbidden-search error. This model uses the Middle Tier discovery URL and `mtAuthResource` with source `peoplePhase2`. | **SOURCE.** The body and query-string schema are caller-owned and were not captured. No request to either route appears in the supplied HARs. |
+| `POST {middleTier}/beta/users/searchExternalUsers?edEnabled={bool}&tflUsersOnly={bool}` | `getExternalProfilesByAliases` POSTs its input as JSON. The two flags come from extended-directory and external-user-search settings. This profile-service model uses `mtAuthWithSkypeXTokenResource`. | **SOURCE.** No request/response captured; alias input and returned profile schema remain unverified. |
+| `POST {middleTier}/beta/users/searchUsers[?ggEnabled=true&resultCount={n}]` | The People Picker sends `{emails, phones, searchKeyWord?}`. The optional Golden Gate flag adds `ggEnabled=true`, and a supplied result limit adds `resultCount`. Its parser expects keyed result objects with `status` and `userProfiles`, then flattens the profiles and adds a local `searchKey`. This is batch resolution by email/phone, optionally with a keyword; it is distinct from the free-form `/search` and `/searchV2` picker route. | **SOURCE.** No request/response captured. The parser's local `searchKey` is not evidence of a wire response field. |
+| `POST {middleTier}/beta/scd/lookup` | Sends JSON `{emails, phones}` and returns the response's `value` member. | **SOURCE.** No request/response captured. |
+| `POST {middleTier}/beta/users/me/lookup/phones` | Sends JSON `{phones}` and returns the response's `results` member. | **SOURCE.** No request/response captured. |
+| `GET {middleTier}/beta/users/{searchQuery}/externalsearch` or `/externalsearchv3` | Selects v3 for the v3/XTap path. Depending on the call, it adds `xTap=true`, `includeTFLUsers=true`, or `edEnabled=true&tflUsersOnly=true`; it parses a JSON response and explicitly handles `403` and `404`. | **SOURCE.** No request/response captured; query encoding, result schema, and which UI flow chooses each variant remain unverified. |
+| `GET {peopleProfileService}/beta/workingSet/people?...` | Although its registry service name is Middle Tier, discovery uses the distinct `peopleProfileService` URL and `mtAuthWithSkypeXTokenResource`. It includes `maxSize` when positive (default 4,000), `maxPageSize` (default 1,000), and optional `skipToken`/`deltaToken`; the response body is passed through as JSON. This is working-set/contact synchronization, not an interactive search route. | **SOURCE** (worker module `66547`). No request/response captured; item schema, token semantics, and server limits are not established. |
+| `POST {middleTier}/beta/scd/searchability?ggEnabled={bool}` | Wired to `updateMSASearchabilityStamping` and sends a JSON body. It is a profile-searchability mutation, not a result-search endpoint. | **SOURCE.** Body and response semantics are not fully established; no live call captured. |
+| `GET {middleTier}/beta/users/{mri}/statementUrl` | The profile model extracts the response's `statementUrl` member for the tenant privacy-statement helper. | **SOURCE.** No request/response captured; this is a profile/privacy helper, not a search route. |
+
+The already documented live `POST {middleTier}/beta/users/fetch` profile lookup is a separate, observed route; it fills some missing chat-member display names but does not establish any search helper contract. The captured Substrate suggestions route is also separate from these Middle Tier routes and from full Search v2 `/searchservice/api/v2/query`.
 
 ---
 
@@ -2333,6 +2364,34 @@ entity categories `File`, `People`, `Message`, and `Event`. Search-box suggestio
 result provider. Do not infer a result category or standalone contract from either of those
 adjacent calls.
 
+#### Captured Powerbar People suggestions
+
+**CAPTURED, separate suggestion surface:** the supplied Teams HAR contains `POST
+/search/api/v1/suggestions?scenario=powerbar` requests to Substrate. Captured request bodies use
+`EntityRequests` inside a body that also includes `Scenario` (`Name`, `Dimensions`), `Cvid`,
+`AppName`, `LogicalId`, and `dataSource`; the People request asks for
+`QueryString`, `NormalizedQueryString`, and `DisplayQueryString`, plus `Size`, `From`, `Fields`,
+`Filter`, and `Provenances`. One observed request asked for
+five People suggestions and fields including `Id`, `MRI`, `DisplayName`, `EmailAddresses`,
+`PeopleType`, `PeopleSubtype`, `Phones`, `UserPrincipalName`, `GivenName`, `Surname`, `Cid`,
+`CompanyName`, `JobTitle`, `ImAddress`, `ExternalDirectoryObjectId`, `ConcatenatedId`, and
+`Department`. Those are the fields requested by that UI build, not a guaranteed response schema.
+
+Across the nine captured Powerbar HTTP 200 POST entries, one response contained a `Groups` entry
+with `Type: People` and one suggestion. The response envelope also included `LayoutHints` and
+`Instrumentation`. The suggestion had field names `Id`, `MRI`,
+`DisplayName`, `EmailAddresses`, `ExternalDirectoryObjectId`, `PeopleSubtype`, `PeopleType`,
+`PropertyHits`, `QueryText`, `ReferenceId`, `Text`, and `UserPrincipalName`; no values are retained.
+Two category-limited requests that asked for People and File returned a File group only. In these
+responses, an absent People group therefore cannot by itself distinguish an empty category from
+an unsupported or denied one. The capture establishes a concrete request and one successful People
+result envelope, but not matching semantics, paging behavior, completeness, or a stable schema.
+
+This `scenario=powerbar` flow differs from the separately documented
+`scenario=peoplepicker.newChat` suggestion request and from Middle Tier `/beta/users/searchV2`.
+Neither suggestion scenario is the full global-search result request at
+`/searchservice/api/v2/query`.
+
 **SOURCE:** the client maps `FILEDOMAIN` to `File` and `MEETINGDOMAIN` to `Event`. Search request
 builders expose fields including `EntityType`, `Fields`, `From`, `ContentSources`, `Query`, `Size`,
 `Sort`, `TopResultsCount`, `Filter`, `PropertySet`, `ResultsMerge`, `HitHighlight`, `IdFormat`,
@@ -2486,3 +2545,52 @@ Documented link forms:
 Keep the evidence levels separate: Search v2 discovers hits; the deep link identifies a destination message; Graph message listing can hydrate message history; the private request used by the Teams Web click-through remains uncaptured. The two Teams message-history transcript URI references documented above are also reference-only and do not establish a request contract.
 
 Primary references: [Teams deep links](https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/build-and-test/deep-link-teams), [Graph chat-message search](https://learn.microsoft.com/en-us/graph/search-concept-chat-messages), and [Graph get chatMessage](https://learn.microsoft.com/en-us/graph/api/chatmessage-get?view=graph-rest-1.0). Cross-product endpoint and workflow map: [Microsoft 365 search findings in the Outlook connector research](../../lrh-outlook-connector/docs/m365-search-findings-2026-10-10.md).
+
+## Teams Web chat-list and People helper source audit (2026-10-11)
+
+This targeted read used the supplied production Teams bundle captured on 2026-10-10. These
+source findings describe that client build; module IDs and private service routes can change.
+
+### People/search/profile source mapping
+
+- `precompiled-web-worker-innerservices_i-666682b126a641d0.worker.js`, module `49965`, defines
+  `PeoplePickerEndpoints`: Middle Tier `search`/`searchV2`, email/phone lookup helpers, and
+  external-search routes. The route table above records request methods, body construction,
+  feature-flag query parameters, response transforms, and the status handling found in that module.
+- The same worker's module `66547` defines `fetchWorkingSet` against
+  `regionGtm("peopleProfileService")`. It constructs the `maxSize`, `maxPageSize`, `skipToken`,
+  and `deltaToken` query parameters and passes the JSON response through. This is a distinct URL
+  family from `regionGtm("middleTier")`, despite sharing the Middle Tier service label in the
+  registry.
+- The captured `scenario=powerbar` request/response establishes one successful Substrate People
+  suggestion envelope, as documented under [Global Teams search](#captured-powerbar-people-suggestions).
+  It does not exercise any of the Middle Tier or People Profile Service helpers.
+- The capture set therefore establishes source-level request contracts for several People
+  helpers and one captured Substrate response shape. It does not establish server acceptance,
+  completeness, or use with the connector's app-owned authentication for the source-only routes.
+- The connector's current `GraphPeople` adapter uses Graph batching for `/users/{id}` display-name
+  lookups and Graph profile-photo reads; it does not call these private People Picker or working-set
+  routes. The source findings alone do not show that replacing the current Graph enrichment would
+  simplify code or improve latency/reliability.
+
+### Chat-list ordering source mapping
+
+- The GraphQL operation `DataResolversChatChatListWithCachedTitleQuery` has separate recent,
+  pinned, request, top-fixed, and suggestion/contact connections. Its recent-chat fields include
+  the last-message `originalArrivalTime`; the operation alone does not prove whether the rendered
+  edges preserve server order or are locally re-sorted.
+- The schema exposes `PinnedChat.order` and `reorderPinnedChats`. A desktop warm-up path calls the
+  query with pinned chats enabled and suggested contacts disabled, but the full visible-sidebar
+  component-to-query-to-render chain and a live GraphQL request/response are absent from the
+  supplied evidence.
+- `precompiled-web-worker-innerd-7237396a5e2cabdb.worker.js`, module `9919`, defines
+  `ACTIVITY` and `RECOMMENDED` comparator descriptors for the Teams/Channels folder connection.
+  `ACTIVITY` sorts `lastMessageTimeUtc` descending, then lower-case display name ascending, then
+  the `CT` timestamp ascending. `RECOMMENDED` sorts its favorite/recommended predicate descending,
+  then the same name and timestamp keys ascending. The nearby filter and channel-connection
+  context scopes these comparators to Teams/Channels; no source call ties them to `recentsChats`.
+
+The exact recent-chat comparator, pin/section composition in the rendered sidebar, and equivalence
+of any candidate backend to the visible UI order remain unverified. The source is enough to correct
+the assumption that CSA or the raw Chat Service feed alone defines the sidebar, but not enough to
+claim a canonical recent-chat ordering contract.
