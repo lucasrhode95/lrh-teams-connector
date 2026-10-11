@@ -547,6 +547,13 @@ returns a conservative, retrievable-or-pointer result. See the [dated API resear
 and `lrh-outlook-connector/docs/m365-search-investigation-plan.md`.
 **Live Recaps UI check (2026-10-10):** both known recaps opened with loaded Transcript tabs and one in-page search returned matches. A Download control was disabled by app permissions for one target. The HAR captures meeting-list, per-meeting resource, recap-content, and ODSP transcript retrieval paths. The supplied Teams bundle lacks the embedded viewer search code; it does not map the successful in-page query to a network route or prove app-owned authentication. Global Search v2 Transcript returned no hits in one structured response, while two other responses were uninterpretable. Keep P2.2 pending. See the [dated API research](teams-api-research.md#microsoft-365-search-capture-and-source-audit-2026-10-10).
 
+**Recaps route/source follow-up (2026-10-11):** four Graph DriveItem preview POSTs and two OPTIONS
+preflights covered three distinct drive/item pairs; all three pairs matched identifiers in MCPS
+meeting-resource metadata. Twenty SharePoint visual-frame GETs returned JPEG images, alongside
+their OPTIONS preflights. This gives the recap workflow a demonstrated metadata-to-storage-ID
+handoff for those artifacts, but does not map global Search v2 file hits to Graph items or reveal
+the in-pane transcript-search request. Keep P2.2 pending; see the [dated API research](teams-api-research.md#microsoft-365-search-capture-and-source-audit-2026-10-10).
+
 ## P2.3 — complete content through MCP
 
 **Status: Done.**
@@ -1270,14 +1277,32 @@ Do not build the canonical classifier from prefixes alone. Prefer explicit `chat
   successful response containing a single People suggestion. That is a different surface from
   Middle Tier `/beta/users/searchV2` and the full Search v2 result endpoint. Field names are
   documented without retaining result values.
-- The HARs contain no live call/response for the source-only Middle Tier People Picker or People
-  Profile Service routes. Keep these as research leads until a browser request/response and a
-  bounded app-owned-auth capability check establish their behavior; do not add them to production
-  code based only on bundle source.
+- The new Teams global-search HAR contains successful `fetch`, `fetchShortProfile`, and
+  `fetchfeaturesettings` calls, plus profile-image hydration. The first two return a `value` array
+  with observed profile fields; the feature-settings request/response shape is only partially
+  mapped. This raises those helpers from source-only to browser-captured evidence; it does not
+  establish free-form People Picker `search`/`searchV2`, `searchUsers`, external-user search, or
+  People Profile working-set behavior. Keep those uncaptured helpers as research leads and do not
+  add them to production code from source alone.
 - The Teams Web source also identifies separate chat-list GraphQL connections and a Teams/Channels
   folder sorting helper, but does not connect that helper to recent-chat rendering. Exact sidebar
   recent ordering remains open; see the [dated source audit](teams-api-research.md#teams-web-chat-list-and-people-helper-source-audit-2026-10-11).
 
-### Exact-message search-result navigation (2026-10-10)
+### Exact-message search-result navigation (2026-10-11 source audit)
 
-Microsoft's documented Teams deep-link forms address chat/channel messages by identity and message ID. This accounts for exact-hit navigation without a page ordinal. The Teams Web click handler and its surrounding-window request remain uncaptured; see [API research](teams-api-research.md#message-identity-and-jump-to-hit-navigation-2026-10-10) and the [cross-product endpoint/workflow ledger](../../lrh-outlook-connector/docs/m365-search-findings-2026-10-10.md).
+The parseable mixed Search v2 response returned Message `Source` fields including
+`InternetMessageId`, `ClientThreadId`, `ClientConversationId`, and `DateTimeSent`. The Web
+normalizer uses the internet message id for its UI result id and composes the navigation reference
+from reply-chain identity, client thread id, and timestamp. This identifies and dates the hit
+without a page ordinal; `ThreadSubType` and `ParentMessageId` used by the source normalizer were not
+top-level captured `Source` fields, so their extraction remains unclear. Matching the id to
+Graph/Chat Service history and capturing the follow-up history request remain open.
+
+The supplied Teams client bundle maps a Search result's primary navigation reference to a chat or
+channel command. The chat command receives `replyChainId`, `messageId`, `dateTimeSent`, a generated
+`searchSessionId`, and highlight text; the channel command receives channel/team identity,
+`replyChainId`, `deepLinkId`/message identity, and highlight options. This explains how the client
+can address an exact hit without a page ordinal. The HAR does not include a message-history request
+or the click-triggered wire sequence. Mapping `dateTimeSent` to the existing Chat Service
+`startTime` parameter remains an inference. See [API research](teams-api-research.md#search-result-activation-and-exact-message-navigation-source-2026-10-11-audit)
+and the [cross-product endpoint/workflow ledger](../../lrh-outlook-connector/docs/m365-search-findings-2026-10-10.md).
