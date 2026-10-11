@@ -45,7 +45,7 @@ Status terms:
 | P2.2a Conversation search — local HTTP UI | **Done** | The browser search box remains an offline in-memory JavaScript filter over the already loaded catalog. |
 | P2.2b Conversation search — MCP | **Partial** | `search_chats` should gain `refresh: bool = True` and default to refreshing catalog/roster state before searching. `refresh=False` remains an explicit offline/cache-only option. |
 | P2.2c Scoped content/message search | **Done** | Date/chat-scoped remote preparation plus SQLite message search and participant indexing provide the deep, auditable search path. |
-| P2.2d Broad Teams discovery via Substrate | **Pending** | Native Search v2 now has a concrete product use: heterogeneous broad discovery across messages/chats/files/teams/channels/etc. It should return pointers and honest limitations, not pretend every result is directly retrievable. |
+| P2.2d Broad Teams discovery via Substrate | **Pending** | Native Search v2 now has a concrete product use: heterogeneous broad discovery across messages/chats/files/teams/channels, meeting events/recaps, and transcript discovery where supported. It should return pointers and honest limitations, not pretend every result is directly retrievable or imply transcript-text search without evidence. |
 | P2.3 Complete MCP content and continuation | **Done** | Bounded tools, continuations, large-message continuation, export snapshots, resource reads and tool-based export reads are implemented and tested. |
 | P2.3a MCP history filter parity | **Pending** | Make `get_messages` and `export_chat` expose the same optional inclusive `since`/`until` plus latest-`N` `message_limit` semantics as the UI. `export_chat` already has these controls; `get_messages` still needs a total history limit distinct from response `page_size`. |
 | P2.3b Media-inclusive export bundles | **Pending** | UI and MCP exports should accept `include_assets=false|true`. When enabled, materialize only assets referenced by the selected messages, rewrite those message references to local bundle filenames, and return self-contained ZIP packages. |
@@ -205,6 +205,29 @@ Do not replace useful Teams-specific services with Graph merely because a vaguel
 - Favorites/conversation folders and CSA-style read/unread state remain Teams-private concerns.
 - Broad discovery should remain Substrate Search v2 unless a future Graph search path proves equal or better across the heterogeneous Teams result types. The current token can search `driveItem`, but Graph `chatMessage` search is denied even though direct channel-message reads work.
 - AMS and other Teams-specific media resources may still require their native service when no equivalent DriveItem exists.
+
+**Search review (2026-10-10):** a supplied Teams web capture confirms the global Substrate Search v2
+route is used for submitted searches, while targeted client source maps `FILEDOMAIN` to `File` and
+`MEETINGDOMAIN` to `Event`. The client also has a separate Meet-app Event builder and distinct
+meeting-recap/transcript retrieval paths. These are browser/source observations, not standalone
+connector proof. Graph `driveItem` success and `chatMessage` denial remain specific to the tested
+profile; reassess before choosing migration or unsupported status. Details are in
+[Teams API research](teams-api-research.md#microsoft-365-search-capture-and-source-audit-2026-10-10)
+and the Outlook investigation plan at
+`lrh-outlook-connector/docs/m365-search-investigation-plan.md`.
+
+**Local known-hit check (2026-10-10):** the connector fetched one scoped self-chat item and then
+returned it from local substring search; exact mode returned no match because the probe term was
+embedded in the message. Preparation and requested-scope coverage completed, and no server-side
+search was used. This validates local archive search only; P2.2d remains pending for broad online
+discovery through app-owned authentication.
+
+**Required Microsoft 365 coverage:** broad search must account for calendar events, meeting recap
+results, transcript discovery/retrieval, and transcript-text search where a supported provider
+exposes it. Captured Search v2 `Event` results and recap/transcript artifact routes are not
+standalone connector proof. Keep the Event, recap, transcript-list, transcript-content, and
+transcript-keyword capabilities distinct in implementation and report unsupported or blocked
+paths explicitly.
 
 #### Authentication / token integration
 
@@ -510,6 +533,20 @@ Requirements:
 - distinguish a pointer from a resource the connector can fetch;
 - bound result count/response size and support continuation if the backend does;
 - never replace scoped/local content search with this endpoint; it is an exploratory front door, not the durable archive/query engine.
+
+**Capture/source update (2026-10-10):** the global search capture carries File, People, Message
+and Event categories, but the separate Meet-app Event query has not been proven to back the global
+Meetings filter. The captured File-only request returned 25 SharePoint-inclusive hits, and the
+Event-only answer request returned 25 hits; all captured search offsets were zero, so no later-page
+request is proven. `MoreResultsAvailable=true` appeared for file search, but no continuation call
+was captured. Recap uses `MeetingInsights`; transcript routes retrieve separate per-artifact
+resources. Neither the recap parser's `PaginationSessionId` nor the transcript request's captured
+query keys proves usable continuation, and no global transcript-text search has been established.
+Keep P2.2 pending until a bounded known-hit request succeeds through app-owned authentication and
+returns a conservative, retrievable-or-pointer result. See the [dated API research](teams-api-research.md#microsoft-365-search-capture-and-source-audit-2026-10-10)
+and `lrh-outlook-connector/docs/m365-search-investigation-plan.md`.
+**Live Recaps UI check (2026-10-10):** both known recaps opened with loaded Transcript tabs and one in-page search returned matches. A Download control was disabled by app permissions for one target. The HAR captures meeting-list, per-meeting resource, recap-content, and ODSP transcript retrieval paths. The supplied Teams bundle lacks the embedded viewer search code; it does not map the successful in-page query to a network route or prove app-owned authentication. Global Search v2 Transcript returned no hits in one structured response, while two other responses were uninterpretable. Keep P2.2 pending. See the [dated API research](teams-api-research.md#microsoft-365-search-capture-and-source-audit-2026-10-10).
+
 ## P2.3 — complete content through MCP
 
 **Status: Done.**
@@ -1205,3 +1242,24 @@ Do not build the canonical classifier from prefixes alone. Prefer explicit `chat
 - Keep shared behavior in connector/service/formatter/archive layers so MCP and the local UI use one implementation.
 - No further work is needed merely to recreate already delivered MCP registration, backup, profile-picture caching, empty-chat filtering or bounded export behavior.
 - A separate Outlook client remains outside this application's completion scope; see [Outlook feasibility plan](outlook-client-feasibility-plan.md).
+
+## Microsoft 365 search follow-up (2026-10-10)
+
+- Complete message histories for the two known transcript-bearing meeting chats each expose one
+  embedded transcript URI reference with route shape `/drives/{drive}/items/{item}/{segment}/{segment}/media/transcripts/{transcript}/content`.
+  This is reference-only evidence; no request, authorization result, or transcript response was
+  observed. Next: compare it with a sanitized DevTools/Resource Saver capture from the loaded
+  transcript viewer and map the two extra path segments.
+- Secondary investigation work: review existing search/list/get paths for redundant calls,
+  over-fetch, paging/retry fragility, and latency opportunities. Keep code simplification distinct
+  from Graph migration and measure candidates before recommending implementation.
+- Initial static code-path review (2026-10-10; no benchmark): all-chat message search fetches
+  histories sequentially before local matching; bounded concurrency is a latency candidate that
+  needs throttle and coverage measurement. SQLite uses leading-wildcard `LIKE` over normalized
+  text, so FTS is only a synthetic-benchmark candidate. Keep repeated-continuation guards. Details
+  and validation criteria are in Teams API research, “Connector code-path audit.” No product change
+  or measured optimization has been established.
+
+### Exact-message search-result navigation (2026-10-10)
+
+Microsoft's documented Teams deep-link forms address chat/channel messages by identity and message ID. This accounts for exact-hit navigation without a page ordinal. The Teams Web click handler and its surrounding-window request remain uncaptured; see [API research](teams-api-research.md#message-identity-and-jump-to-hit-navigation-2026-10-10) and the [cross-product endpoint/workflow ledger](../../lrh-outlook-connector/docs/m365-search-findings-2026-10-10.md).

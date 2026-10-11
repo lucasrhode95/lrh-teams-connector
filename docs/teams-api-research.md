@@ -2288,3 +2288,201 @@ Primary sources used for these notes:
 7. [Microsoft Learn Azure Communication Services chat message examples](https://learn.microsoft.com/en-us/rest/api/communication/chat/list-chat-messages/list-chat-messages?view=rest-communication-chat-2020-09-21-preview), for corroborating Skype-style `addmember` and `topicupdate` payload envelopes.
 
 Third-party projects and captures are useful corroboration, not authoritative Microsoft API contracts. Routes and payload details can change without notice.
+
+## Microsoft 365 search capture and source audit (2026-10-10)
+
+**Evidence labels:** CAPTURED means the supplied Teams web HAR contains the request/response;
+SOURCE means a targeted read of the downloaded Teams web client bundle found a builder or parser.
+Neither label proves the browser routes are usable through this connector's app-owned
+authentication. No captured tokens, cookies, query values, result text, account/site identifiers,
+or raw capture data are retained here.
+
+### Standalone connector known-hit behavior (2026-10-10)
+
+One user-authorized synthetic self-chat message was used for a bounded local-search check. A
+four-minute scoped `search_messages` request in exact mode returned zero; after the scoped
+`get_messages` call fetched one item, substring mode returned one match. Preparation and coverage
+were complete for that requested scope, with one page and one remote item scanned. The connector
+reported `server_side_search_used=false`. This validates local substring matching over a fetched
+archive item. It does not validate Teams web Global Search, Substrate Search v2, or Graph
+`/search/query`; no message text or identifiers are retained.
+
+### Named meeting-chat lead check (2026-10-10)
+
+The user-provided prior walkthrough identifies two meeting chats containing transcript-related
+material, reached through the recap UI and the meeting chat UI. The current Teams catalog matched
+both named chats. Bounded `get_messages` reads returned complete remote history in one page per
+chat (18 and 9 items); seven items in each contained a transcript/recap-related text signal. Chat
+names, message bodies, and identifiers were not retained. No transcript URL was followed and no
+transcript content was requested. This establishes accessible message-history context for the
+known examples, not online transcript discovery, artifact access, or full-text transcript search.
+
+The sanitized message-envelope check found `RichText/Media_CallRecording` and
+`RichText/Media_CallTranscript` types in both histories. In each chat, five message items
+contained an `amsTranscript` XML reference and one contained an ODSP transcript-path signal;
+counts may overlap and are not distinct transcript objects. No URI was followed. This supports
+transcript-reference discovery through meeting chat history only and leaves the recap download
+permission boundary intact.
+
+### Global Teams search
+
+**CAPTURED:** submitted global-search requests use `POST /searchservice/api/v2/query`. The
+request shape has `AnswerEntityRequests` and/or `EntityRequests`; the observed flows include the
+entity categories `File`, `People`, `Message`, and `Event`. Search-box suggestions use a separate
+`/search/api/v1/suggestions` route, while `/search/api/v1/events` is telemetry and not a search
+result provider. Do not infer a result category or standalone contract from either of those
+adjacent calls.
+
+**SOURCE:** the client maps `FILEDOMAIN` to `File` and `MEETINGDOMAIN` to `Event`. Search request
+builders expose fields including `EntityType`, `Fields`, `From`, `ContentSources`, `Query`, `Size`,
+`Sort`, `TopResultsCount`, `Filter`, `PropertySet`, `ResultsMerge`, `HitHighlight`, `IdFormat`,
+and `RefiningQueries`. Client page-size constants observed for Files, Files grid and Meetings are
+25, 24 and 25 respectively; these are UI defaults, not a service guarantee. Exact request
+variants and response hydration remain tied to their individual UI actions.
+
+The global meeting-search default request body uses `Event`, `Exchange`, and
+`SupportedResultSourceFormats`/`PreferredResultSourceFormat` hints. Source file parsers use fields
+such as `FileName`, `Title`, `ReferenceId`, `FileType`, `FileExtension`, `AccessUrl`,
+`AlternateAccessUrl`, `SPWebUrl`, `SpoUniqueId` and `SpoDocId`; additional SharePoint and
+conversation-provenance fields are present. These names help identify result kinds and possible
+follow-up references, but do not prove that each reference is readable through Graph. The exact
+global Files content-source defaults remain unresolved.
+
+The app-owned Microsoft Search probe recorded earlier in this file returned a generic HTTP 400;
+this later browser capture does not change that standalone result. Graph `driveItem` search works
+in the tested profile, while Graph `chatMessage` search was denied there. Those outcomes are
+account-specific; see the dated G1 notes in `teams-connector-roadmap.md`.
+
+### Meet search and recap
+
+**SOURCE, separate Meet app builder:** `searchEvents` submits `POST /search/api/v2/query` with a
+lower-camel `entityRequests` body for `Event`, `Exchange`, start/end date bounds, a proximity time
+sort, and an initial `from=0`, `size=30`. Its parser reads
+`EntitySets[0].ResultSets[0].Results[].Source`. This source route has not been tied to the global
+Teams Meetings tab captured in the HAR and its page size must not be generalized to other flows.
+
+**CAPTURED + SOURCE, meeting recap:** recap calls return `EntitySets[].MeetingInsights`. The
+client's `getMeetingRecapCatchupItems` and `getMeetingRecapCallSummary` builders send
+`EntityRequests[].QueryParameters` with entity type, entity id and context; time-bounded variants
+also add start/end date, top count and a meeting-thread filter. The recap parser reads
+`Source.MeetingRecording`, `MeetingSummary`, `PointsOfInterest` and `Speakers`. Suggestions for
+meeting results link to chat plus recap for past meetings, or chat plus join for current/upcoming
+meetings. A returned `PaginationSessionId` has been observed, but a caller feeding it to a next
+request has not been found; continuation is unproven.
+
+### Transcript retrieval
+
+**CAPTURED + SOURCE:** the recap flow uses distinct retrieval families: legacy AMS transcript
+view/status, Meeting Intelligence storage/scope, and ODSP drive-item transcript/media content.
+The source route templates include `GET /v1/objects/{object}/views/transcript` and `/status`,
+`/MeetingIntelligence/TranscriptService/storage/{storage}/scope/{scope}/`, and
+`/drives/{drive}/items/{item}/media/transcripts/{transcript}/content`. The HAR recorded three HTTP 200 GETs to `/_api_cached/v2.1/drives/{drive}/items/{item}/cdnmedia/transcripts`. They are
+per-artifact retrieval routes, not evidence of a global transcript text-search provider. The
+storage/scope builder sets `isChannel=true` for channel meetings; this is an observed client
+branch, not proof that other transcript retrieval is limited to non-channel meetings.
+
+The captured ODSP transcript GET includes query keys `cTag`, `P1`–`P4`, `isformatjson`,
+`transcriptkey`, `applyhighlights`, `applymediaedits` and `kid`. Their full semantics and any
+continuation relationship remain unresolved. In the downloaded source, the ODSP media URL builder
+conditionally adds `applymediaedits=true`; this is a content-control flag, not a pagination token.
+No global transcript-text-search request or result attribution has been established in this captured path; the later Recaps UI observation is a separate in-page search surface.
+
+### Teams Meeting Recaps live replay (2026-10-10)
+
+**LIVE UI:** the Meeting Recaps app opened both user-provided known recaps directly. Each showed a loaded Transcript tab with an in-page search control. A generic query returned transcript matches in one target; no transcript text was copied into research notes. The Download control was disabled by the app permission boundary for one target, ; the viewer had already loaded transcript text, but no transcript file was exported or saved. This is evidence for a working signed-in web UI path, not an app-owned connector token or a global search contract.
+
+The global Teams Search page exposed visible filters All, Messages, Files, People, Channels, Group chats and Meetings; Meetings displayed 25 rows for a common query. No Transcript filter was visible. A “2 more items” control opened, but its entries were not exposed in the accessibility tree, so hidden filters remain unknown.
+
+**CAPTURED, meeting list:** `GET /api/mcps/{region}/user/meetings/contents` used `startDateTime`, `endDateTime`, `includeTypes` and `top`; observed category values were `MeetingChat`, `MeetingStage`, `Notes`, `Recording` and `TranscriptV2`. The response carried `value` and `paginationInfo`, including `hasNextPage`. A caller following that signal to a next page was not established.
+
+**CAPTURED, per-meeting resources:** `GET /api/mcps/{region}/contents/` selected resources using `threadId` and, in variants, `recapCallId`, `iCalUid`, `organizerId`, `isSeriesMeeting` or `organizerEmail`. The response wrapper included `resources`, `paginationInfo`, `changeKey`, `deletedResources`, `invalidResources` and filtered-count metadata. Resource types included `AISummary`, `MeetingStage`, `Recording`, `TranscriptV2` and `notes`. Resource records exposed `addedBy`, `additionDateTime`, `id`, `mcoResourceId`, `metadata`, `subType` and `type`.
+
+The observed resource metadata key names included `callId`, `containerId`, `correlationId`, `driveId`, `driveItemId`, `endTime`, `fileId`, `fileTitle`, `fileType`, `iCalUid`, `instanceICalUid`, `meetingJoinUrl`, `organizerId`, `organizerTenantId`, `ownerId`, `ownerTenantId`, `sharePointOnlineId`, `startTime`, `threadId`, `transcriptId`, `userId` and `webUrl`. Values are omitted; these are observed fields, not a complete schema or proof each pointer is retrievable.
+
+**CAPTURED, recap content:** `POST /api/mcps/{region}/meetingcatchup/multilingual/aicontent` accepted a body with `EntityRequests`, `Flights`, `Scenario` and `TargetLanguage`; its response used `EntitySets[].MeetingInsights`. This is a recap-content path, separate from global search.
+
+**SOURCE bundle boundary (2026-10-10):** the supplied Teams web bundle contains Search v2 and Meeting Recaps assets, but a targeted scan found no transcript-viewer search-control strings (`Search the transcript`, `transcriptSearchBox`, `TranscriptSearch` or `scrollbarMarkerContainerInternal`). The live page places the transcript viewer in a separate embedded SharePoint/Stream component whose source was not included. This bundle therefore does not show whether in-page search is client-side or server-side, or which request produced its matches.
+
+**CAPTURED, global Transcript category:** three Search v2 requests to `/search/api/v2/query` specified `EntityType=Transcript`, `ContentSources=Teams` and a query string; all returned HTTP 200. One parseable response had a result count of zero and `MoreResultsAvailable=false`. The other two bodies were not interpretable as structured results, so they do not establish zero hits. This does not contradict the in-page transcript search above: the UI request that produced its matches was not mapped to a network route.
+
+**CAPTURED, transcript artifact retrieval:** three HTTP 200 GETs used `/_api_cached/v2.1/drives/{drive}/items/{item}/cdnmedia/transcripts`. Query-key names included `cTag`, `P1`–`P4`, `isformatjson`, `transcriptkey`, `applyhighlights`, `applymediaedits` and `kid`; their semantics and continuation behavior remain unresolved. The Teams source bundle's separate ODSP media builder uses `/drives/{drive}/items/{item}/media/transcripts/{transcript}/content`. Neither route is a global text-search route.
+
+These browser-session routes and results are useful reverse-engineering evidence, but do not prove their use with this connector's sign-in. Keep P2.2 pending until a bounded known-hit operation succeeds through app-owned authentication and returns a useful pointer or resource.
+### Captured response and paging details
+
+**CAPTURED:** the Teams flow made four submitted Search v2 POSTs, all HTTP 200: two mixed searches,
+one File-only request, then one Event-only answer request. The File-only request used `From=0`,
+`Size=25`, and requested Exchange, OneDriveBusiness and SharePoint sources; its response contained
+25 File hits. The Event-only request used `AnswerEntityRequests`, returned 25 Event hits through
+`AnswerEntitySets`, and exposed `Subject`, `Start`, `End`, `OrganizerName`, `OrganizerAddress`,
+`Attendees`, `EventId`, `OnlineMeeting`, and sometimes `EventConversationId`. It also reported
+`Total=92` with `MoreResultsAvailable=false`; treat that total as a captured field, not a verified
+pageable count. Mixed-search responses can contain both `EntitySets` and `AnswerEntitySets`.
+
+Across the explicit search requests, every observed `From` was zero. Scope changes are captured,
+but there is no request advancing to a later page. `MoreResultsAvailable=true` appeared on other
+successful file-search responses, so continuation is signaled by the response but an actual
+continuation request has not been captured. Some successful responses contain only `ApiVersion`,
+`SearchTerms` and `Instrumentation`; those do not establish a zero-hit result.
+
+Other observed request fields include `EntityType`/`EntityTypes`, `ContentSources`, `QueryString`,
+`DisplayQueryString`, `QueryTemplate`, `From`, `Size`, `Fields`, `Sort`, `Filter`,
+`RefiningQueries`, `HitHighlight` and `ResultsMerge`. Captured request builders mix field naming
+conventions, so this is a field inventory, not a replayable request schema. A follow-up company-file
+GET under `/_api/v2.0/drives/{drive}/items/{item}/{operation}` selected item metadata and returned
+`value`; it establishes a metadata lookup after search, not a file-content download.
+
+**CAPTURED recap follow-up:** three Graph batch calls each contained four drive-item GETs with
+`$select` and returned an outer `responses` envelope. This is metadata follow-up evidence, not
+proof that every search result is retrievable or that file contents were downloaded. Transcript
+capture had three successful GETs with the same named query-key family; path values and keys
+`P1`, `P4`, `cTag`, `kid`, and `transcriptkey` varied. None had a `Range` header or explicit
+offset/page/cursor key, and only the first response body was retained. The response envelopes
+therefore cannot be compared to infer transcript paging. These calls establish neither scrolling
+pagination nor global transcript-text search.
+
+**Next:** finish the bounded source-to-capture mapping for the ODSP keys and the global Meetings
+filter, then compare only supported, app-owned Graph operations. Keep broad discovery, recap
+navigation and transcript retrieval as separate capabilities. Do not implement a browser-private
+route based on capture success alone.
+
+### Transcript URI reference in meeting chat history (2026-10-10)
+
+A bounded read-only revisit of the two user-provided transcript-bearing meeting chats found five
+`amsTranscript` marker occurrences in each complete message history. Each history also contained
+one embedded `URIObject` with the sanitized route shape
+`/drives/{drive}/items/{item}/{segment}/{segment}/media/transcripts/{transcript}/content`.
+The observed `URIObject` attribute names were `format_version`, `type`, `uri`, `url_thumbnail`,
+and `version`. The supplied Teams client bundle separately contains a builder for
+`/drives/{drive}/items/{item}/media/transcripts/{transcript}/content`; the two extra path segments
+in the message-embedded reference are not mapped.
+
+This is an embedded URI reference, not a captured outgoing request. No URI value was retained or
+followed, and no HTTP method, status, response shape, or standalone authentication behavior was
+observed. Compare the reference with a sanitized browser network capture from the loaded transcript
+viewer. Do not infer that the embedded URI can be fetched by the connector or use it to bypass the
+separate download-permission restriction observed in the UI.
+
+## Connector code-path audit (2026-10-10)
+
+This is a static review of the current implementation, not a latency benchmark or a product change.
+
+- `src/teams_connector/service/search.py` prepares remote history for each chat sequentially before searching locally. It shares a maximum page budget across the requested chats and reports per-chat coverage/errors. Bounded concurrency is a promising latency candidate, but it must preserve the shared budget, honest coverage and cancellation behavior, and must be measured against service throttling.
+- `src/teams_connector/store/db.py` builds a temporary scope table for each search and matches normalized message text with leading-wildcard `LIKE` patterns. At larger archive sizes, text matching may scan many in-scope rows. Benchmark the current path with synthetic archives before considering SQLite FTS; verify normalization, literal/substring behavior, accents, ordering and keyset pagination. Measure temporary-scope setup separately before replacing it.
+- `src/teams_connector/remote/chat_service.py` and the history service validate continuation and detect repeated links. Keep these reliability checks unless a measured alternative preserves the same loop and completeness protections.
+- Current `search_messages` remains local archive search after remote preparation; its response reports `server_side_search_used=false`. Faster local matching would not provide broad online Teams discovery or transcript search.
+
+No measured latency improvement, request reduction, or safe code removal has been established. Next, use synthetic fixtures to record elapsed time and request/page counts across chat counts, history sizes and archive sizes; compare bounded concurrency and local index strategies independently. Do not mix these results with Graph-migration parity decisions.
+
+## Message identity and jump-to-hit navigation (2026-10-10)
+
+The Teams Web search result click was observed to open the selected message in its conversation. Microsoft documents chat and channel message deep links keyed by the conversation/channel identity and message ID. This explains how a hit can be addressed without a history-page number, but does not reveal the Teams Web click handler or the internal request that loads the surrounding message window.
+
+Documented link forms:
+
+- Chat: `https://teams.microsoft.com/l/message/{chatId}/{messageId}?context={...}`
+- Channel: `https://teams.microsoft.com/l/message/{channelId}/{messageId}?tenantId=...&groupId=...&parentMessageId=...&teamName=...&channelName=...&createdTime=...`
+
+Keep the evidence levels separate: Search v2 discovers hits; the deep link identifies a destination message; Graph message listing can hydrate message history; the private request used by the Teams Web click-through remains uncaptured. The two Teams message-history transcript URI references documented above are also reference-only and do not establish a request contract.
+
+Primary references: [Teams deep links](https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/build-and-test/deep-link-teams), [Graph chat-message search](https://learn.microsoft.com/en-us/graph/search-concept-chat-messages), and [Graph get chatMessage](https://learn.microsoft.com/en-us/graph/api/chatmessage-get?view=graph-rest-1.0). Cross-product endpoint and workflow map: [Microsoft 365 search findings in the Outlook connector research](../../lrh-outlook-connector/docs/m365-search-findings-2026-10-10.md).
