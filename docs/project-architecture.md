@@ -7,7 +7,30 @@ The Python application has two entry points over one shared Teams service:
 
 Both entry points call the same service layer and connector. MCP search and history sync also use the persistent SQLite archive. The local export page is independent of AI, but it still connects to Microsoft Teams and requires a valid sign-in and network access.
 
-## Component map
+## Product ownership
+
+Teams owns message/chat/channel relationships and their attachments. Planned Teams meeting
+resources include meeting chat, recordings, transcripts, recap, and meeting notes. Outlook owns the
+related Exchange calendar event: schedule/recurrence, agenda, organizer, invitees, event attachments,
+and the join link. Verified references connect the two resources; another virtual-meeting platform
+does not make an Outlook event a Teams meeting. General OneDrive/SharePoint file discovery belongs
+to the planned SharePoint connector, even when its file results overlap a Teams message link.
+
+Ownership describes the target product boundary, not a claim that every meeting-resource tool is
+implemented. Current tools and outstanding work are listed below and in the roadmap.
+
+## Installed package and legacy exporter
+
+The installed `teams-connector` CLI uses `src/teams_connector`: `bootstrap.py` wires the service,
+remote adapters and store; `surfaces/` provides MCP and the loopback UI; `auth/tokens.py` manages
+encrypted MSAL profiles. Its current cache is `token-cache.bin` under the configured data directory.
+See [installed package setup](../README.md#installed-package-setup) for the actual CLI commands.
+
+The component map and capabilities below describe the original `teams_exporter` application, which
+is still present in this checkout. Its commands and cache are separate. Selecting the package CLI
+does not migrate the legacy application's cache or archive.
+
+## Legacy exporter component map
 
 | Module or file | Responsibility |
 |---|---|

@@ -2,6 +2,34 @@
 
 ## Scope and evidence
 
+**Product ownership (2026-10-11):** Outlook owns Exchange calendar events, schedules, agenda,
+organizer/invitees, event attachments, and join links. Teams owns related Teams meeting chats,
+recordings, transcripts, recap, and meeting notes. Verified identifiers connect those resources;
+general OneDrive/SharePoint file discovery belongs to the planned SharePoint connector. Calendar
+and meeting-resource ownership does not depend on which product hosted a shared search endpoint.
+
+**Standalone search update:** [Outlook research §3.14](../../lrh-outlook-connector/docs/outlook-api-research.md#314-owa-search-v2-calendar-and-teams-message-replay-2026-10-10)
+records successful app-owned OWA-host Search v2 Message/Teams requests with pagination. One known
+chat's result identities matched; a second target's identity bridge remains unresolved. The current
+product search is still fetch/archive/local matching. Broad-discovery work can use the successful
+shared Search profile while completing message identity and context checks; prior Graph denial
+does not establish that every remote route is inaccessible.
+
+**Small reliability follow-ups (synthetic checks, 2026-10-11):**
+
+- `src/teams_connector/remote/graph.py` collection accepted repeated empty continuation pages until
+  the synthetic harness stopped it after four reads. Add repeated-link detection to prevent an
+  indefinite loop or duplicate collection.
+- A Graph read batch returned a synthetic HTTP 503 sub-response without retrying it, even though
+  the outer response was 200 and a later attempt would succeed. Batch sub-response retries handle
+  only 429 today. Retry bounded transient read failures as well; keep sends separate and sent once.
+- `src/teams_connector/service/localfiles.py` raised `FileNotFoundError` when an output disappeared
+  between `is_file()` and `stat()`. Ignore disappearance during concurrent cleanup while preserving
+  other filesystem errors.
+
+These are code-review follow-ups, not implemented fixes or measured live-service improvements.
+Use focused synthetic regression coverage and all repository checks before a code PR.
+
 This is the consolidated register of gaps between the current application and the intended product. Endpoint facts and captured payloads live in [Teams API research](teams-api-research.md); module responsibilities are in [Project architecture](project-architecture.md); usage is in [MCP server guide](teams-mcp-server.md).
 
 This snapshot was refreshed on **2026-10-01** against the uploaded repository plus a complete downloaded Teams Web source bundle and a network capture taken around three controlled actions:
