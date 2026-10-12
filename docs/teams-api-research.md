@@ -2744,3 +2744,30 @@ The exact recent-chat comparator, pin/section composition in the rendered sideba
 of any candidate backend to the visible UI order remain unverified. The source is enough to correct
 the assumption that CSA or the raw Chat Service feed alone defines the sidebar, but not enough to
 claim a canonical recent-chat ordering contract.
+
+## Shared-auth live validation (2026-10-12)
+
+The encrypted shared-auth bootstrap was run through `teams-connector auth`. It reported all five
+profiles ready without issuing a device code or requesting MFA. `teams-connector status --check`
+then acquired tokens successfully for all five profiles; each Teams profile reported a cached
+resource token. In the offline status fields, `client_credential_cached=false` for the Teams
+profiles did not mean that resource-token acquisition had failed: the corresponding
+`access_token_expires_on` values were present and the explicit checks succeeded.
+
+Two bounded, read-only service checks succeeded:
+
+- **Graph team list:** `GET https://graph.microsoft.com/v1.0/me/joinedTeams?$select=id` returned
+  four rows on one page, with no continuation link. The optional `$top=1` variant was rejected with
+  HTTP 400 (`Query option 'Top' is not allowed`); removing `$top` succeeded. This is the same
+  joined-team route used by the connector's Graph channel adapter. The check emitted only the row
+  count, not team identifiers or names.
+- **CSA chat catalog:** after the normal Teams AuthZ session exchange, one
+  `GET https://teams.microsoft.com/api/csa/api/v1/teams/users/me/updates` using the shared
+  `teams.csa` bearer and session Skype token returned 958 chat rows and seven channel-activity rows.
+  The response contained a synchronization token, `isPartialData=false`, and `hasMoreChats=false`.
+  The payload was not saved or printed. CSA channel rows remain activity metadata; Graph is the
+  connector's channel catalog.
+
+These observations establish token acquisition and current service access for the sampled account,
+including a complete CSA snapshot. They do not validate a fresh device-code grant, Graph channel
+enumeration/history, Chat Service message history, message search, meeting recaps, or transcripts.
