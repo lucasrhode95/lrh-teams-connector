@@ -263,8 +263,7 @@ meeting-recap/transcript retrieval paths. These are browser/source observations,
 connector proof. Graph `driveItem` success and `chatMessage` denial remain specific to the tested
 profile; reassess before choosing migration or unsupported status. Details are in
 [Teams API research](teams-api-research.md#microsoft-365-search-capture-and-source-audit-2026-10-10)
-and the Outlook investigation plan at
-`lrh-outlook-connector/docs/m365-search-investigation-plan.md`.
+and the [cross-product search findings](../../lrh-outlook-connector/docs/m365-search-findings.md).
 
 **Local known-hit check (2026-10-10):** the connector fetched one scoped self-chat item and then
 returned it from local substring search; exact mode returned no match because the probe term was
@@ -940,22 +939,19 @@ Do not build the canonical classifier from prefixes alone. Prefer explicit `chat
 - No further work is needed merely to recreate already delivered MCP registration, backup, profile-picture caching, empty-chat filtering or bounded export behavior.
 - A separate Outlook client remains outside this application's completion scope; see [Outlook feasibility plan](outlook-client-feasibility-plan.md).
 
-## Microsoft 365 search follow-up (2026-10-10)
+## Microsoft 365 search follow-up (updated 2026-10-12)
 
 - Complete message histories for the two known transcript-bearing meeting chats each expose one
   embedded transcript URI reference with route shape `/drives/{drive}/items/{item}/{segment}/{segment}/media/transcripts/{transcript}/content`.
   This is reference-only evidence; no request, authorization result, or transcript response was
   observed. Next: compare it with a sanitized DevTools/Resource Saver capture from the loaded
   transcript viewer and map the two extra path segments.
-- Secondary investigation work: review existing search/list/get paths for redundant calls,
-  over-fetch, paging/retry fragility, and latency opportunities. Keep code simplification distinct
-  from Graph migration and measure candidates before recommending implementation.
-- Initial static code-path review (2026-10-10; no benchmark): all-chat message search fetches
-  histories sequentially before local matching; bounded concurrency is a latency candidate that
-  needs throttle and coverage measurement. SQLite uses leading-wildcard `LIKE` over normalized
-  text, so FTS is only a synthetic-benchmark candidate. Keep repeated-continuation guards. Details
-  and validation criteria are in Teams API research, “Connector code-path audit.” No product change
-  or measured optimization has been established.
+- The bounded code-path and performance review is recorded in Teams API research,
+  [Connector code-path audit and measurements](teams-api-research.md#connector-code-path-audit-and-measurements-2026-10-10).
+  Small tests found one modest concurrent-read timing difference and mixed FTS results, with large
+  common-query regressions and added database size. They do not justify a concurrency or indexing
+  change. Any future optimization should use representative workload and throttling measurements,
+  preserve coverage accounting, and remain separate from Graph-migration decisions.
 
 ### People/search/profile helper audit (2026-10-11)
 
@@ -995,6 +991,4 @@ channel command. The chat command receives `replyChainId`, `messageId`, `dateTim
 can address an exact hit without a page ordinal. The HAR does not include a message-history request
 or the click-triggered wire sequence. Mapping `dateTimeSent` to the existing Chat Service
 `startTime` parameter remains an inference. See [API research](teams-api-research.md#search-result-activation-and-exact-message-navigation-source-2026-10-11-audit)
-and the cross-product endpoint/workflow ledger in `lrh-outlook-connector`,
-`docs/m365-search-findings-2026-10-10.md`, pinned at commit
-`3c71bb1f3b517a4b28d6aa752b1ee4e9fc8b494e`.
+and the [cross-product endpoint/workflow ledger](../../lrh-outlook-connector/docs/m365-search-findings.md).

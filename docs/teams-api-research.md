@@ -686,9 +686,9 @@ The same bundle's schema defines `PinnedChat` with `conversationId` and `order`,
 The source includes an explicit query call in a desktop experience warm-up path (`includePinnedChats: true`, `includeSuggestedContacts: false`). The supplied HARs contain no chat-list GraphQL request/response, and this source audit did not trace the full sidebar component-to-query-to-render path. Treat this as the strongest client-source lead for exact list behavior, not yet a verified endpoint contract or proof of final visible ordering. See [the dated source audit](#teams-web-chat-list-and-people-helper-source-audit-2026-10-11).
 
 This absence is specifically about the Teams chat-list operation. The combined October captures do
-contain ten Outlook `/outlookgatewayb2/graphql` POSTs during Recaps. They are recorded in
-`lrh-outlook-connector`, `docs/m365-search-findings-2026-10-10.md`, at commit
-`3c71bb1f3b517a4b28d6aa752b1ee4e9fc8b494e`, and in Outlook's API research. Those operations
+contain ten Outlook `/outlookgatewayb2/graphql` POSTs during Recaps. They are summarized in the
+[cross-product search findings](../../lrh-outlook-connector/docs/m365-search-findings.md) and
+detailed in Outlook's API research. Those operations
 concern calendar groups, tabs/entitlements, working hours, auth settings and meeting response; they
 are not evidence of a Teams sidebar GraphQL call.
 
@@ -2664,16 +2664,47 @@ observed. Compare the reference with a sanitized browser network capture from th
 viewer. Do not infer that the embedded URI can be fetched by the connector or use it to bypass the
 separate download-permission restriction observed in the UI.
 
-## Connector code-path audit (2026-10-10)
+## Connector code-path audit and measurements (2026-10-10)
 
-This is a static review of the current implementation, not a latency benchmark or a product change.
+This audit combines source inspection with bounded measurements. Results describe the tested
+profile and synthetic workloads; they do not establish a general service-latency improvement.
 
-- `src/teams_connector/service/search.py` prepares remote history for each chat sequentially before searching locally. It shares a maximum page budget across the requested chats and reports per-chat coverage/errors. Bounded concurrency is a promising latency candidate, but it must preserve the shared budget, honest coverage and cancellation behavior, and must be measured against service throttling.
-- `src/teams_connector/store/db.py` builds a temporary scope table for each search and matches normalized message text with leading-wildcard `LIKE` patterns. At larger archive sizes, text matching may scan many in-scope rows. Benchmark the current path with synthetic archives before considering SQLite FTS; verify normalization, literal/substring behavior, accents, ordering and keyset pagination. Measure temporary-scope setup separately before replacing it.
-- `src/teams_connector/remote/chat_service.py` and the history service validate continuation and detect repeated links. Keep these reliability checks unless a measured alternative preserves the same loop and completeness protections.
-- Current `search_messages` remains local archive search after remote preparation; its response reports `server_side_search_used=false`. Faster local matching would not provide broad online Teams discovery or transcript search.
+- `src/teams_connector/service/search.py` prepares remote history for each chat sequentially before
+  searching locally, sharing a page budget and reporting per-chat coverage/errors. Four bounded
+  one-page history reads took 4,298 ms sequentially and 3,552 ms concurrently (about 17% lower),
+  with no retries or errors. Each response was incomplete at the one-page limit. This small sample
+  does not establish a safe concurrency setting or justify changing the shared page-budget and
+  cancellation behavior.
+- A fresh one-chat/one-day exact search fetched one history page in about one second. A five-page
+  all-catalog search covered five pages across 966 catalog IDs in 8.7 seconds and remained
+  incomplete with a continuation cursor. A local-store snapshot had 14,723 messages and 966 catalog
+  rows; a separate visible listing had 734 chats, including 232 empty chats. These scopes differ,
+  so the counts do not establish missing or redundant catalog coverage. These observations describe
+  the earlier fetch-and-local-match workflow; `search_remote_messages` is a separate bounded online
+  Search v2 discovery tool.
+- `src/teams_connector/store/db.py` builds a temporary scope table and matches normalized text with
+  leading-wildcard `LIKE`. In a synthetic SQLite FTS5 trigram comparison across 14,720 and 100,000
+  messages, rare-substring cases changed from 15.36 to 3.82 ms and 44.06 to 4.64 ms. Common
+  substring cases regressed from 3.97 to 29.28 ms and 4.02 to 153.09 ms; common all-terms cases
+  regressed from 4.01 to 31.80 ms and 3.87 to 185.98 ms. The index added 30.5% and 34.1% to
+  database size and took 77 ms and 717 ms to build. The three synthetic queries preserved first-page
+  IDs and the continuation flag, but are not enough to establish equivalence for short terms,
+  punctuation, Unicode edge cases, edits/deletes, or FTS write maintenance; retain `LIKE` absent
+  representative workload evidence.
+- Removing an empty temporary-scope `DELETE` measured roughly 1–3 microseconds per search for
+  scopes of 1–100 chats, within noise. `_tx` opens a fresh SQLite connection for each operation,
+  so the temporary table is new and empty; this is not a meaningful speed optimization.
+- `src/teams_connector/remote/chat_service.py` and the history service validate continuation and
+  detect repeated links. Keep these safeguards because no simpler alternative has demonstrated the
+  same loop and completeness protections.
+- `search_messages` remains local archive matching after remote history preparation and reports
+  `server_side_search_used=false`. The new `search_remote_messages` operation performs online
+  candidate discovery; faster local matching does not replace broad discovery or transcript search.
 
-No measured latency improvement, request reduction, or safe code removal has been established. Next, use synthetic fixtures to record elapsed time and request/page counts across chat counts, history sizes and archive sizes; compare bounded concurrency and local index strategies independently. Do not mix these results with Graph-migration parity decisions.
+These measurements did not justify a product-code optimization. Broader workload and throttling
+measurements remain necessary before changing concurrency or local indexing. Do not mix those
+decisions with Graph-migration parity. The cross-product summary and Outlook/file-search comparison
+are in [Microsoft 365 search findings](../../lrh-outlook-connector/docs/m365-search-findings.md).
 
 ## Message identity and jump-to-hit navigation (2026-10-10)
 
@@ -2695,7 +2726,7 @@ can hydrate history; the private request used by the Teams Web click-through rem
 The two Teams message-history transcript URI references documented above are also reference-only
 and do not establish a request contract.
 
-Primary references: [Teams deep links](https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/build-and-test/deep-link-teams), [Graph chat-message search](https://learn.microsoft.com/en-us/graph/search-concept-chat-messages), and [Graph get chatMessage](https://learn.microsoft.com/en-us/graph/api/chatmessage-get?view=graph-rest-1.0). The cross-product endpoint and workflow map is `lrh-outlook-connector`, `docs/m365-search-findings-2026-10-10.md`, at commit `3c71bb1f3b517a4b28d6aa752b1ee4e9fc8b494e`.
+Primary references: [Teams deep links](https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/build-and-test/deep-link-teams), [Graph chat-message search](https://learn.microsoft.com/en-us/graph/search-concept-chat-messages), and [Graph get chatMessage](https://learn.microsoft.com/en-us/graph/api/chatmessage-get?view=graph-rest-1.0). The cross-product endpoint and workflow map is [Microsoft 365 search findings](../../lrh-outlook-connector/docs/m365-search-findings.md).
 
 ## Teams Web chat-list and People helper source audit (2026-10-11)
 

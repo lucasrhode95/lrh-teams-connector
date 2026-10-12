@@ -3,10 +3,11 @@
 A local MCP server and browser UI for one user's Microsoft Teams chats and channels. Both surfaces
 use the same service layer, shared Microsoft sign-in, and account-bound local archive.
 
-The connector reads chats, channel posts, message history, and message attachments. Its keyword
-search currently prepares a requested history scope and matches the local archive; it does not
-claim to use Teams Web's global search. See the [roadmap](docs/teams-connector-roadmap.md) for the
-separately scoped remote-search and meeting-resource work.
+The connector reads chats, channel posts, message history, and message attachments. It provides
+local scoped search over prepared history and a separate bounded online Teams Search v2 tool for
+message discovery. Those tools have different coverage and continuation behavior; neither claims
+to search every message or meeting transcript. See the [roadmap](docs/teams-connector-roadmap.md)
+for scope and remaining live-validation work.
 
 ## Product ownership
 
@@ -16,8 +17,8 @@ their schedule, agenda, organizer, invitees, event attachments, and meeting join
 meeting may therefore have related records in both connectors; verified identifiers connect them.
 An event hosted by another meeting platform is not a Teams meeting.
 
-The planned `lrh-sharepoint-connector` owns general OneDrive and SharePoint file discovery and
-retrieval. A file linked from a Teams message remains discoverable through that message in this
+The separate read-only `lrh-sharepoint-connector` owns general OneDrive and SharePoint file discovery
+and retrieval. A file linked from a Teams message remains discoverable through that message in this
 connector; the general file itself belongs to SharePoint.
 
 ## Requirements and setup
