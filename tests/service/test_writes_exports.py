@@ -10,7 +10,7 @@ import pytest
 
 from teams_connector.bootstrap import Services
 from teams_connector.domain.errors import InvalidRequest, NotFound, WriteOutcomeUnknown
-from teams_connector.domain.models import ExportProgress, ExportRequest
+from teams_connector.domain.models import Attachment, ExportProgress, ExportRequest
 from teams_connector.service import localfiles
 from teams_connector.service.export import packaging
 from tests.fakes.teams_fake import FakeTeams, cs_message
@@ -111,6 +111,47 @@ async def test_unavailable_attachment_keeps_export_and_reports_failure(
             archive.read(name).decode("utf-8") for name in archive.namelist() if name.endswith(".txt")
         )
     assert "[Attachment unavailable: notes.txt]" in text
+
+
+async def test_jsonl_attachment_rewriting_preserves_valid_json_for_special_names(
+    services: Services, tmp_path: Path
+) -> None:
+    url_attachment = Attachment(name='quote"\nline.txt', url="https://files.example.invalid/synthetic")
+    marker_attachment = Attachment(name='image"\nline.png', kind="image")
+    url_replacement = f"[Attachment unavailable: {url_attachment.name}]"
+    marker_key = services.exports._attachment_marker(marker_attachment)
+    marker_replacement = f"[Attachment unavailable: {marker_attachment.name}]"
+    path = tmp_path / "synthetic.jsonl"
+    path.write_text(
+        json.dumps({"text": f"{url_attachment.url} {marker_key}"}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    services.exports._rewrite_asset_references(
+        path,
+        {url_attachment.url: url_attachment, marker_key: marker_attachment},
+        {url_attachment.url: url_replacement, marker_key: marker_replacement},
+    )
+
+    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert records == [{"text": f"{url_replacement} {marker_replacement}"}]
+
+
+async def test_attachment_name_cannot_overwrite_the_conversation_export(
+    services: Services, fake: FakeTeams
+) -> None:
+    chat = await services.catalog.get(ONE)
+    transcript_name = f"{packaging.filename_stem(chat)}.txt"
+    fake.files["https://tenant.sharepoint.com/s/notes"] = (transcript_name, b"attachment")
+
+    artifact = await services.exports.export(ExportRequest(conversation_ids=[ONE]))
+
+    with zipfile.ZipFile(artifact.path) as archive:
+        names = archive.namelist()
+        transcript_path = next(name for name in names if name.endswith(f"/{transcript_name}"))
+        asset_path = next(name for name in names if name.endswith(f"/{packaging.filename_stem(chat)}-2.txt"))
+        assert archive.read(transcript_path).startswith(b"Conversation:")
+        assert archive.read(asset_path) == b"attachment"
 
 
 async def test_latest_n_and_dates_and_deleted_marker(services: Services, fake: FakeTeams) -> None:

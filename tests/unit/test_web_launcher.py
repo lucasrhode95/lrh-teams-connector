@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from threading import Event, Timer
 
 import pytest
 
@@ -60,6 +61,38 @@ def test_ui_reports_chosen_address_when_startup_fails(monkeypatch, capsys) -> No
     output = capsys.readouterr().out
     assert "http://127.0.0.1:45679/" in output
     assert "did not start" in output
+
+
+def test_blocking_browser_controller_does_not_block_server_loop(monkeypatch) -> None:
+    instances = []
+    browser_released = Event()
+
+    class Server:
+        def __init__(self, _config) -> None:
+            self.started = False
+            self.should_exit = False
+            self.progressed = False
+            instances.append(self)
+
+        async def serve(self) -> None:
+            self.started = True
+            await asyncio.sleep(0.01)
+            self.progressed = True
+            self.should_exit = True
+
+    monkeypatch.setattr(web_main, "_free_port", lambda _port: 45680)
+    monkeypatch.setattr(web_main, "AppContext", lambda **_kwargs: _Context())
+    monkeypatch.setattr(web_main, "create_app", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(web_main.uvicorn, "Server", Server)
+
+    def open_browser(_url: str) -> bool:
+        Timer(0.05, browser_released.set).start()
+        assert browser_released.wait(timeout=1)
+        assert instances[0].progressed
+        return True
+
+    monkeypatch.setattr(web_main.webbrowser, "open", open_browser)
+    web_main.run(unsecure=False, open_browser=True)
 
 
 class _Context:

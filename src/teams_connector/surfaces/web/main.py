@@ -59,7 +59,7 @@ def run(
                     f"Teams connector UI did not start at {url}; check the startup error above.",
                     flush=True,
                 )
-            elif open_browser and not webbrowser.open(url):
+            elif open_browser and not await asyncio.to_thread(webbrowser.open, url):
                 print(f"Open this address in your browser: {url}", flush=True)
             await server_task
         finally:

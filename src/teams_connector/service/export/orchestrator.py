@@ -11,6 +11,7 @@ can be cancelled). A cancelled export leaves no partial file.
 
 from __future__ import annotations
 
+import json
 import shutil
 import tempfile
 from collections.abc import Callable
@@ -176,7 +177,7 @@ class Exports:
         report(phase="attachments", attachments_total=total_before + len(references))
         replacements: dict[str, str] = {}
         files: list[tuple[Path, str]] = []
-        names: set[str] = set()
+        names = {text_path.name.casefold()}
         downloaded = failed = total_bytes = 0
         for index, (reference, attachment) in enumerate(references.items(), start=1):
             marker = f"[Attachment unavailable: {attachment.name}]"
@@ -266,11 +267,24 @@ class Exports:
         replacements: dict[str, str],
     ) -> None:
         text = path.read_text(encoding="utf-8")
+        jsonl = path.suffix.casefold() == ".jsonl"
         for reference, attachment in sorted(references.items(), key=lambda item: len(item[0]), reverse=True):
-            text = text.replace(reference, replacements[reference])
+            text = cls._replace_asset_reference(text, reference, replacements[reference], jsonl=jsonl)
             if not attachment.url:
-                text = text.replace(cls._attachment_marker(attachment), replacements[reference])
+                text = cls._replace_asset_reference(
+                    text,
+                    cls._attachment_marker(attachment),
+                    replacements[reference],
+                    jsonl=jsonl,
+                )
         path.write_text(text, encoding="utf-8", newline="\n")
+
+    @staticmethod
+    def _replace_asset_reference(text: str, reference: str, replacement: str, *, jsonl: bool) -> str:
+        if jsonl:
+            reference = json.dumps(reference, ensure_ascii=False)[1:-1]
+            replacement = json.dumps(replacement, ensure_ascii=False)[1:-1]
+        return text.replace(reference, replacement)
 
     def _write_chat(
         self,
