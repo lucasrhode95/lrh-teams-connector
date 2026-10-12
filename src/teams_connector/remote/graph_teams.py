@@ -17,7 +17,7 @@ from typing import Any
 from teams_connector.domain.errors import InvalidRequest, NotFound
 from teams_connector.domain.models import Chat, Message, Participant
 from teams_connector.remote import graph_mapping
-from teams_connector.remote.graph import Graph, relative, segment
+from teams_connector.remote.graph import MAX_DOWNLOAD_BYTES, Graph, relative, segment
 from teams_connector.remote.ports import HistoryPage, RemoteFile, SendReceipt
 from teams_connector.remote.transport import operation
 
@@ -220,7 +220,7 @@ class GraphFiles:
     def __init__(self, graph: Graph) -> None:
         self._graph = graph
 
-    async def download(self, url: str, dest: Path) -> RemoteFile:
+    async def download(self, url: str, dest: Path, *, max_bytes: int | None = None) -> RemoteFile:
         if not url.lower().startswith("https://"):
             raise InvalidRequest("Only https sharing URLs can be downloaded.")
         share = "u!" + base64.urlsafe_b64encode(url.encode()).decode().rstrip("=")
@@ -228,7 +228,11 @@ class GraphFiles:
             item = await self._graph.get(f"/shares/{share}/driveItem", {"$select": "name,size,file,folder"})
             if item.get("folder") is not None:
                 raise InvalidRequest("The link points to a folder, not a file.")
-            content_type, size = await self._graph.download(f"/shares/{share}/driveItem/content", dest)
+            content_type, size = await self._graph.download(
+                f"/shares/{share}/driveItem/content",
+                dest,
+                max_bytes=MAX_DOWNLOAD_BYTES if max_bytes is None else max_bytes,
+            )
         mime = (item.get("file") or {}).get("mimeType") if isinstance(item.get("file"), dict) else None
         name = item.get("name")
         return RemoteFile(

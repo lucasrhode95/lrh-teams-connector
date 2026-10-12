@@ -144,10 +144,16 @@ def export_request(payload: Any) -> ExportRequest:
         limit = None
     elif isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_MESSAGE_LIMIT:
         raise InvalidRequest(f"message_limit must be between 1 and {MAX_MESSAGE_LIMIT:,}, or blank.")
-    combine = payload.get("combine", False)
-    if not isinstance(combine, bool):
-        raise InvalidRequest("combine must be true or false.")
-    return ExportRequest(conversation_ids=ids, since=since, until=until, message_limit=limit, combine=combine)
+    include_attachments = payload.get("include_attachments", True)
+    if not isinstance(include_attachments, bool):
+        raise InvalidRequest("include_attachments must be true or false.")
+    return ExportRequest(
+        conversation_ids=ids,
+        since=since,
+        until=until,
+        message_limit=limit,
+        include_attachments=include_attachments,
+    )
 
 
 def create_app(context: AppContext, *, session_token: str, port: int, activity: Activity) -> Starlette:

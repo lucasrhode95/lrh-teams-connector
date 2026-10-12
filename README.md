@@ -109,6 +109,12 @@ project does not expose a remote MCP service.
   freshness coverage. A catalog no more than ten minutes old may answer unless `refresh=true`.
 - `search_chats` matches conversation names and participant names indexed by `sync_archive`.
   Check roster coverage before treating participant results as complete.
+- `search_remote_messages` searches message content online through Microsoft Search v2. It returns
+  one bounded page with the service's message pointer, preview, timestamp, and conversation-ID
+  candidates. A `conversation_id` is included only when a candidate exactly matches the local chat
+  catalog. The Search v2 message pointer is not yet proven interchangeable with `get_messages`'s
+  `message_id`; use the matched conversation and timestamp to fetch surrounding history. Follow its
+  cursor only when additional hits are useful. It does not search meeting transcripts or recaps.
 - `get_messages` returns one bounded page of a conversation, newest pages first and oldest first
   within each page. Follow `cursor` for older history. Date bounds are inclusive; `message_limit`
   counts the latest matching messages. Long bodies can be continued with `get_message_content`.
@@ -120,8 +126,12 @@ project does not expose a remote MCP service.
 - `sync_archive` incrementally fetches history and participant rosters in bounded, resumable batches.
   `archive_status` reports which histories, date ranges, and rosters are covered.
 - `export_chats` writes a `.txt` or `.jsonl` file for one conversation or a `.zip` for several; set
-  `combine=true` for one combined file. It returns a local path for the client to read. Exports can
-  filter by date and per-chat message count.
+  `include_attachments=false` to omit linked message files. One conversation with selected
+  attachments returns a ZIP containing its text export and downloaded files; without attachments it
+  returns the plain text/JSONL file. Multiple conversations return an outer ZIP of per-conversation
+  artifacts, so chats with files have their own ZIP and chats without files remain plain files. The
+  client receives the single artifact directly or the outer ZIP. Exports can filter by date and
+  per-chat message count.
 - `download_attachment` saves a file linked from a message already in the local archive. Email
   attachments belong to `lrh-outlook-connector`; general OneDrive and SharePoint search belongs to
   `lrh-sharepoint-connector`.
@@ -146,7 +156,12 @@ It opens a browser on a loopback URL, normally `http://127.0.0.1:8765`, and stop
 minutes. Use `uv run teams-connector ui --help` for `--port`, `--no-browser`, and `--idle-minutes`.
 If the preferred port is busy, the connector selects another free loopback port. The page uses a
 per-run session token and rejects non-local hosts. It supports chat selection, an inclusive date
-range in the browser's time zone, a per-chat message limit, and separate or combined text downloads.
+range in the browser's time zone, a per-chat message limit, and text or attachment-inclusive
+downloads. The browser opens only after the server reports ready and prints the selected URL.
+One conversation with no selected attachments downloads as a plain file; with attachments, its text
+and available files are placed together in a conversation-named folder inside one ZIP. Multiple
+conversations download as one outer ZIP, with an inner ZIP for each conversation with attachments
+and a plain text file for each without them.
 
 The SQLite archive persists messages the connector has read, participant names, catalog state,
 and sync progress. It is separated by Microsoft account and checks its stored owner before use. The

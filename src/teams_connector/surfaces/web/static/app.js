@@ -13,7 +13,7 @@ const messageLimitInput = $("message-limit");
 const count = $("selection-count");
 const downloadButton = $("download");
 const cancelButton = $("cancel-export");
-const combineInput = $("combine");
+const includeAttachmentsInput = $("include-attachments");
 const statusText = $("status");
 const authHelp = $("auth-help");
 const accountInfo = $("account-info");
@@ -246,8 +246,7 @@ function updateControls() {
   downloadButton.disabled = selected.size === 0 || busy;
   cancelButton.hidden = !busy;
   cancelButton.disabled = !activeExportId;
-  combineInput.disabled = selected.size < 2 || busy;
-  if (selected.size < 2) combineInput.checked = false;
+  includeAttachmentsInput.disabled = busy;
 }
 
 function renderChats() {
@@ -380,7 +379,12 @@ function describeProgress(progress) {
   if (progress.pages_fetched) parts.push(progress.pages_fetched + " pages");
   if (progress.messages_retrieved) parts.push(progress.messages_retrieved + " messages retrieved");
   if (progress.phase === "writing" && progress.messages_written) parts.push(progress.messages_written + " messages written");
-  return (progress.phase === "writing" ? "Writing" : "Retrieving") + (parts.length ? " · " + parts.join(" · ") : "…");
+  if (progress.attachments_total) {
+    const done = (progress.attachments_downloaded || 0) + (progress.attachments_failed || 0);
+    parts.push(done + "/" + progress.attachments_total + " attachments processed");
+  }
+  const label = progress.phase === "writing" ? "Writing" : progress.phase === "attachments" ? "Downloading attachments" : "Retrieving";
+  return label + (parts.length ? " · " + parts.join(" · ") : "…");
 }
 
 async function saveFile(path, filename) {
@@ -421,7 +425,7 @@ async function downloadSelected() {
         from_utc_offset_minutes: fromDateInput.value ? browserUtcOffsetMinutes(fromDateInput.value, false) : null,
         to_utc_offset_minutes: toDateInput.value ? browserUtcOffsetMinutes(toDateInput.value, true) : null,
         message_limit: limit.value,
-        combine: selected.size > 1 && combineInput.checked,
+        include_attachments: includeAttachmentsInput.checked,
       }),
     });
     activeExportId = started.id;
@@ -495,5 +499,6 @@ document.addEventListener("keydown", (event) => {
 $("refresh").addEventListener("click", loadChats);
 downloadButton.addEventListener("click", downloadSelected);
 cancelButton.addEventListener("click", cancelExport);
+includeAttachmentsInput.addEventListener("change", updateControls);
 setInterval(() => api("/api/heartbeat", { method: "POST" }).catch(() => {}), 60_000);
 loadChats();

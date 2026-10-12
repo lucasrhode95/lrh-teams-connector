@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from teams_connector.bootstrap import Services
-from teams_connector.domain.errors import NotFound
+from teams_connector.domain.errors import InvalidRequest, NotFound
 from tests.fakes.teams_fake import ME, PEER, FakeChannel, FakeTeams, cs_message
 
 
@@ -120,6 +120,19 @@ async def test_search_matches_names_and_indexed_participants(services: Services)
     by_name = await services.catalog.search("sprint")
     assert by_name.items[0].name_matched and by_name.items[0].chat.id == "19:meeting_abc@thread.v2"
     assert found.coverage.rosters_indexed >= 4
+
+
+async def test_search_chats_refresh_false_is_cache_only(services: Services, fake: FakeTeams) -> None:
+    with pytest.raises(InvalidRequest, match="No cached chat catalog"):
+        await services.catalog.search("sprint", refresh=False)
+    assert fake.calls == []
+
+    await services.catalog.list(refresh=True)
+    services.store.set_meta(catalog_at="0")
+    fake.calls.clear()
+    found = await services.catalog.search("sprint", refresh=False)
+    assert found.items and found.items[0].name_matched
+    assert fake.calls == []
 
 
 async def test_chat_search_reports_missing_and_unresolved_rosters(

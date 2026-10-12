@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import zipfile
 
 import httpx
 import pytest
@@ -66,7 +68,7 @@ async def test_ui_lists_chats_and_exports_to_a_downloadable_file(
     started = await web_client.post(
         "/api/exports",
         headers=headers,
-        json={"conversation_ids": ["19:one@unq.gbl.spaces"], "combine": False},
+        json={"conversation_ids": ["19:one@unq.gbl.spaces"]},
     )
     assert started.status_code == 202
     job_id = started.json()["id"]
@@ -79,7 +81,9 @@ async def test_ui_lists_chats_and_exports_to_a_downloadable_file(
     assert status.json()["status"] == "complete"
     downloaded = await web_client.get(f"/api/exports/{job_id}/file", headers=headers)
     assert downloaded.status_code == 200
-    assert "First hello" in downloaded.text
+    with zipfile.ZipFile(io.BytesIO(downloaded.content)) as archive:
+        text_file = next(name for name in archive.namelist() if name.endswith(".txt"))
+        assert "First hello" in archive.read(text_file).decode("utf-8")
 
 
 async def test_ui_rejects_invalid_export_and_unknown_job(web_client: httpx.AsyncClient) -> None:

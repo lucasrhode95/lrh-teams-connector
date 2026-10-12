@@ -10,7 +10,7 @@ import pytest
 
 from teams_connector.bootstrap import Services
 from teams_connector.domain.errors import InvalidRequest, NotFound, WriteOutcomeUnknown
-from teams_connector.domain.models import ExportProgress, ExportRequest
+from teams_connector.domain.models import Attachment, ExportProgress, ExportRequest
 from teams_connector.service import localfiles
 from teams_connector.service.export import packaging
 from tests.fakes.teams_fake import FakeTeams, cs_message
@@ -64,7 +64,9 @@ async def test_ambiguous_send_is_reported_and_not_retried(
 
 async def test_single_chat_export_is_one_txt(services: Services) -> None:
     progress: list[ExportProgress] = []
-    artifact = await services.exports.export(ExportRequest(conversation_ids=[ONE]), progress=progress.append)
+    artifact = await services.exports.export(
+        ExportRequest(conversation_ids=[ONE], include_attachments=False), progress=progress.append
+    )
     text = Path(artifact.path).read_text(encoding="utf-8")
     assert artifact.filename.endswith(".txt") and artifact.message_count == 3
     assert "Conversation: Pat Peer" in text and "Time zone: UTC" in text
@@ -73,26 +75,119 @@ async def test_single_chat_export_is_one_txt(services: Services) -> None:
     assert progress[-1].phase == "done" and progress[0].phase == "retrieving"
 
 
+async def test_single_chat_with_attachment_is_a_zip_with_text_and_attachment_together(
+    services: Services,
+) -> None:
+    artifact = await services.exports.export(ExportRequest(conversation_ids=[ONE]))
+    assert artifact.filename.endswith(".zip")
+    assert artifact.chats[0].attachments_downloaded == 1
+    with zipfile.ZipFile(artifact.path) as archive:
+        names = archive.namelist()
+        text_name = next(name for name in names if name.endswith(".txt"))
+        text_folder = text_name.rpartition("/")[0]
+        assert text_folder and f"{text_folder}/notes.txt" in names
+        assert all(name.startswith(f"{text_folder}/") for name in names)
+        text = archive.read(text_name).decode("utf-8")
+    assert "First hello" in text and "notes.txt" in text
+    assert "https://tenant.sharepoint.com/s/notes" not in text
+
+
+async def test_selected_messages_without_attachments_remain_a_plain_file(services: Services) -> None:
+    when = datetime(2026, 9, 2, 10, tzinfo=UTC)
+    artifact = await services.exports.export(ExportRequest(conversation_ids=[ONE], since=when, until=when))
+    assert artifact.filename.endswith(".txt")
+    assert "Second, about the budget review" in Path(artifact.path).read_text(encoding="utf-8")
+
+
+async def test_unavailable_attachment_keeps_export_and_reports_failure(
+    services: Services, fake: FakeTeams
+) -> None:
+    fake.files.clear()
+    artifact = await services.exports.export(ExportRequest(conversation_ids=[ONE]))
+    assert artifact.filename.endswith(".zip")
+    assert artifact.chats[0].attachments_failed == 1
+    with zipfile.ZipFile(artifact.path) as archive:
+        text = next(
+            archive.read(name).decode("utf-8") for name in archive.namelist() if name.endswith(".txt")
+        )
+    assert "[Attachment unavailable: notes.txt]" in text
+
+
+async def test_jsonl_attachment_rewriting_preserves_valid_json_for_special_names(
+    services: Services, tmp_path: Path
+) -> None:
+    url_attachment = Attachment(name='quote"\nline.txt', url="https://files.example.invalid/synthetic")
+    marker_attachment = Attachment(name='image"\nline.png', kind="image")
+    url_replacement = f"[Attachment unavailable: {url_attachment.name}]"
+    marker_key = services.exports._attachment_marker(marker_attachment)
+    marker_replacement = f"[Attachment unavailable: {marker_attachment.name}]"
+    path = tmp_path / "synthetic.jsonl"
+    path.write_text(
+        json.dumps({"text": f"{url_attachment.url} {marker_key}"}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    services.exports._rewrite_asset_references(
+        path,
+        {url_attachment.url: url_attachment, marker_key: marker_attachment},
+        {url_attachment.url: url_replacement, marker_key: marker_replacement},
+    )
+
+    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert records == [{"text": f"{url_replacement} {marker_replacement}"}]
+
+
+async def test_attachment_name_cannot_overwrite_the_conversation_export(
+    services: Services, fake: FakeTeams
+) -> None:
+    chat = await services.catalog.get(ONE)
+    transcript_name = f"{packaging.filename_stem(chat)}.txt"
+    fake.files["https://tenant.sharepoint.com/s/notes"] = (transcript_name, b"attachment")
+
+    artifact = await services.exports.export(ExportRequest(conversation_ids=[ONE]))
+
+    with zipfile.ZipFile(artifact.path) as archive:
+        names = archive.namelist()
+        transcript_path = next(name for name in names if name.endswith(f"/{transcript_name}"))
+        asset_path = next(name for name in names if name.endswith(f"/{packaging.filename_stem(chat)}-2.txt"))
+        assert archive.read(transcript_path).startswith(b"Conversation:")
+        assert archive.read(asset_path) == b"attachment"
+
+
 async def test_latest_n_and_dates_and_deleted_marker(services: Services, fake: FakeTeams) -> None:
     await services.exports.export(ExportRequest(conversation_ids=[ONE]))
     fake.chats[ONE].messages[2] = cs_message("1003", "2026-09-03T10:00:00.000Z", kind="MessageDelete",
                                              deleted="2026-09-04T00:00:00.000Z")  # fmt: skip
     artifact = await services.exports.export(
-        ExportRequest(conversation_ids=[ONE], message_limit=2, until=datetime(2026, 9, 30, tzinfo=UTC))
+        ExportRequest(
+            conversation_ids=[ONE],
+            message_limit=2,
+            until=datetime(2026, 9, 30, tzinfo=UTC),
+            include_attachments=False,
+        )
     )
     text = Path(artifact.path).read_text(encoding="utf-8")
     assert "First hello" not in text and artifact.message_count == 2
     assert "[Soft deleted at 2026-09-04T00:00:00.000Z]" in text and "notes.txt" in text  # retained text
 
 
-async def test_several_chats_zip_or_combine_and_jsonl(services: Services) -> None:
+async def test_several_chats_always_return_outer_zip_and_jsonl(services: Services) -> None:
     ids = [ONE, CHANNEL]
     zipped = await services.exports.export(ExportRequest(conversation_ids=ids))
     with zipfile.ZipFile(zipped.path) as archive:
-        assert len(archive.namelist()) == 2
-    combined = await services.exports.export(ExportRequest(conversation_ids=ids, combine=True))
-    text = Path(combined.path).read_text(encoding="utf-8")
-    assert text.count("Conversation ID:") == 2 and "(reply)" in text and "Subject: Launch" in text
+        names = archive.namelist()
+        assert len(names) == 2
+        chat_archive_name = next(name for name in names if name.endswith(".zip"))
+        assert any(name.endswith(".txt") for name in names)
+        with zipfile.ZipFile(archive.open(chat_archive_name)) as chat_archive:
+            chat_names = chat_archive.namelist()
+            text_name = next(name for name in chat_names if name.endswith(".txt"))
+            text_folder = text_name.rpartition("/")[0]
+            assert text_folder and f"{text_folder}/notes.txt" in chat_names
+    text_only = await services.exports.export(ExportRequest(conversation_ids=ids, include_attachments=False))
+    with zipfile.ZipFile(text_only.path) as archive:
+        names = archive.namelist()
+        assert len(names) == 2 and all(name.endswith(".txt") for name in names)
     records = await services.exports.export(ExportRequest(conversation_ids=[CHANNEL], format="jsonl"))
     lines = [json.loads(line) for line in Path(records.path).read_text(encoding="utf-8").splitlines()]
     assert [r["id"] for r in lines] == ["5003", "5001", "5002"] and lines[2]["reply_to_id"] == "5001"

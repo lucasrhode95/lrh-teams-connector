@@ -26,6 +26,7 @@ async def test_mcp_exposes_current_contract_and_reads_synthetic_chats(context: A
             "auth_status",
             "list_chats",
             "search_chats",
+            "search_remote_messages",
             "get_messages",
             "get_message_content",
             "search_messages",
@@ -40,6 +41,7 @@ async def test_mcp_exposes_current_contract_and_reads_synthetic_chats(context: A
         assert all(tool.outputSchema is not None for tool in tools.values())
         assert tools["send_message"].annotations.readOnlyHint is False
         assert tools["send_message"].annotations.destructiveHint is True
+        assert tools["search_remote_messages"].annotations.readOnlyHint is True
 
         auth_status = await client.call_tool("auth_status", {})
         assert not auth_status.isError and auth_status.structuredContent is not None

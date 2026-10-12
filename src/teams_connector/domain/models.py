@@ -188,6 +188,35 @@ class SearchResult(Compact):
     coverage: SearchCoverage
 
 
+class RemoteMessageHit(Compact):
+    """A Teams Search v2 pointer, with a local conversation only when ids match exactly."""
+
+    search_message_id: str | None = None
+    message_id_kind: str | None = None
+    conversation_id: str | None = None  # set only for an exact local catalog-id match
+    conversation_name: str | None = None
+    conversation_id_candidates: list[str] = Field(default_factory=list)
+    sent_at: datetime | None = None
+    sender: str | None = None
+    subject: str | None = None
+    preview: str | None = None
+
+
+class RemoteSearchCoverage(Compact):
+    complete: bool
+    offset: int
+    page_size: int
+    more_results_available: bool | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
+class RemoteMessageSearchResult(Compact):
+    query: str
+    items: list[RemoteMessageHit]
+    cursor: str | None = None
+    coverage: RemoteSearchCoverage
+
+
 # ---------------------------------------------------------------------------------------------- archive
 
 
@@ -251,14 +280,14 @@ class SavedFile(Compact):
 
 
 class ExportRequest(BaseModel):
-    """Chats to export, with optional inclusive dates and a per-chat latest-N limit."""
+    """Chats to export, with optional inclusive dates, latest-N limit, and selected attachments."""
 
     conversation_ids: list[str] = Field(min_length=1, max_length=500)
     since: datetime | None = None
     until: datetime | None = None
     message_limit: int | None = Field(default=None, ge=1, le=1_000_000)  # latest N per chat
-    combine: bool = False  # one file for all chats (otherwise one file per chat, zipped when several)
     format: ExportFormat = "txt"
+    include_attachments: bool = True
 
 
 class ExportedChat(Compact):
@@ -266,6 +295,8 @@ class ExportedChat(Compact):
     name: str
     messages: int
     remote_complete: bool
+    attachments_downloaded: int = 0
+    attachments_failed: int = 0
 
 
 class ExportArtifact(Compact):
@@ -278,9 +309,12 @@ class ExportArtifact(Compact):
 
 
 class ExportProgress(Compact):
-    phase: Literal["retrieving", "writing", "done"]
+    phase: Literal["retrieving", "attachments", "writing", "done"]
     chat_index: int = 0
     chats_total: int = 0
     pages_fetched: int = 0
     messages_retrieved: int = 0
     messages_written: int = 0
+    attachments_total: int = 0
+    attachments_downloaded: int = 0
+    attachments_failed: int = 0

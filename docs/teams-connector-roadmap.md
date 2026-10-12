@@ -51,6 +51,9 @@ been measured.
 
 This is the consolidated register of gaps between the current application and the intended product. Endpoint facts and captured payloads live in [Teams API research](teams-api-research.md); module responsibilities are in [Project architecture](project-architecture.md); usage is in [MCP server guide](teams-mcp-server.md).
 
+Implementation status in this register was reviewed on **2026-10-12**. Earlier capture dates below
+remain the dates of that evidence, not the date of the current code review.
+
 This snapshot was refreshed on **2026-10-01** against the uploaded repository plus a complete downloaded Teams Web source bundle and a network capture taken around three controlled actions:
 
 1. top-bar search for `SEARCH CODEX $123 ABC`;
@@ -90,12 +93,12 @@ Status terms:
 | P1.5 Attachment upload/access/delivery | **Pending** | Implementation waits for a controlled Teams Web attachment-send capture. SharePoint/OneDrive authentication is likely part of the path and should be added to the app-owned auth model if required. |
 | P2.1 Lazy indefinite message storage and delete/edit semantics | **Partial** | Durable storage is implemented. Finish-line work is to verify live edit/delete behavior and enforce the chosen retention rule: edits overwrite; soft-deleted message text is retained whenever known and exports/search must flag deletion explicitly. |
 | P2.2a Conversation search — local HTTP UI | **Done** | The browser search box remains an offline in-memory JavaScript filter over the already loaded catalog. |
-| P2.2b Conversation search — MCP | **Partial** | `search_chats` should gain `refresh: bool = True` and default to refreshing catalog/roster state before searching. `refresh=False` remains an explicit offline/cache-only option. |
+| P2.2b Conversation search — MCP | **Partial** | `search_chats` defaults to refreshing the catalog; `refresh=false` is cache-only. Participant names still depend on previously indexed rosters, so freshness coverage is reported rather than triggering unbounded roster synchronization. |
 | P2.2c Scoped content/message search | **Done** | Date/chat-scoped remote preparation plus SQLite message search and participant indexing provide the deep, auditable search path. |
-| P2.2d Broad Teams discovery via Substrate | **Pending** | Native Search v2 now has a concrete product use: heterogeneous broad discovery across messages/chats/files/teams/channels, meeting events/recaps, and transcript discovery where supported. It should return pointers and honest limitations, not pretend every result is directly retrievable or imply transcript-text search without evidence. |
+| P2.2d Broad Teams discovery via Substrate | **Partial** | `search_remote_messages` performs bounded online Teams-message discovery and returns pointers, timestamps, and conservative conversation matches. Heterogeneous result categories, recap discovery, transcript discovery/search, and direct hit-id hydration remain separate open work. |
 | P2.3 Complete MCP content and continuation | **Done** | Bounded tools, continuations, large-message continuation, export snapshots, resource reads and tool-based export reads are implemented and tested. |
-| P2.3a MCP history filter parity | **Pending** | Make `get_messages` and `export_chat` expose the same optional inclusive `since`/`until` plus latest-`N` `message_limit` semantics as the UI. `export_chat` already has these controls; `get_messages` still needs a total history limit distinct from response `page_size`. |
-| P2.3b Media-inclusive export bundles | **Pending** | UI and MCP exports should accept `include_assets=false|true`. When enabled, materialize only assets referenced by the selected messages, rewrite those message references to local bundle filenames, and return self-contained ZIP packages. |
+| P2.3a MCP history filter parity | **Done** | `get_messages` and exports expose inclusive `since`/`until` and a total latest-`N` `message_limit`, separately from response `page_size`. |
+| P2.3b Media-inclusive export bundles | **Done** | UI and MCP exports include selected message attachments by default, rewrite references to local names, and return one artifact per conversation; one artifact is returned directly and multiple artifacts are always wrapped in an outer ZIP. |
 | P2.4 AI topic research through MCP | **Done** | The server exposes the retrieval/search/context primitives an external AI client needs. Scheduling/summarization/delivery is an external use case, not a requirement of this repository. |
 | D1 Cross-surface DRY / shared domain boundaries | **Partial** | The repository already centralizes substantial behavior in `TeamsService`, but HTTP and MCP still duplicate or re-own some domain behavior. Do a targeted quality pass: shared chat resolution, export request/job/artifact contracts, history selection semantics, authenticated resource fetching, and domain errors. Keep HTTP/MCP transport concerns separate; this is not a broad architecture rewrite. |
 ## Finish-line priorities
@@ -266,15 +269,18 @@ and the Outlook investigation plan at
 **Local known-hit check (2026-10-10):** the connector fetched one scoped self-chat item and then
 returned it from local substring search; exact mode returned no match because the probe term was
 embedded in the message. Preparation and requested-scope coverage completed, and no server-side
-search was used. This validates local archive search only; P2.2d remains pending for broad online
-discovery through app-owned authentication.
+search was used. This validates local archive search only; it did not validate online discovery. The
+bounded `search_remote_messages` implementation now covers one Search v2 Message/Teams page per call
+through the shared `m365.search` profile. Its response mapping and continuation have synthetic tests,
+while a live call through this connector and direct hit-id hydration remain unverified; see the
+current P2.2d status above and [API research](teams-api-research.md#teams-online-message-search-adapter-2026-10-12).
 
-**Required Microsoft 365 coverage:** broad search must account for calendar events, meeting recap
-results, transcript discovery/retrieval, and transcript-text search where a supported provider
-exposes it. Captured Search v2 `Event` results and recap/transcript artifact routes are not
-standalone connector proof. Keep the Event, recap, transcript-list, transcript-content, and
-transcript-keyword capabilities distinct in implementation and report unsupported or blocked
-paths explicitly.
+**Required Microsoft 365 coverage:** a complete cross-product search workflow also needs calendar
+events, meeting recap results, transcript discovery/retrieval, and transcript-text search where a
+supported provider exposes it. Those remain separate from this Teams message-search tool. Captured
+Search v2 `Event` results and browser recap/transcript routes are not proof of Teams-connector
+access. Keep Event, recap, transcript-list, transcript-content, and transcript-keyword capabilities
+distinct, and report unverified or blocked paths explicitly.
 
 #### Authentication / token integration
 
@@ -548,59 +554,31 @@ This is the right tool once the caller knows which conversations/scope it wants 
 
 ### Broad Teams discovery via Substrate Search v2
 
-**Status: Pending. This is no longer considered redundant.**
+**Status: Partial (message category implemented 2026-10-12).**
 
-The 2026-10-01 capture establishes a useful separate capability: Teams' top-bar/powerbar search can return heterogeneous pointers across categories such as messages, chats, files, teams/channels, people, events and apps.
+The standalone-proven endpoint is `POST https://outlook.office.com/searchservice/api/v2/query`,
+authenticated with the shared `m365.search` profile. `search_remote_messages` sends
+`EntityType=Message` and `ContentSources=[Teams]`, one bounded page at a time. It preserves the
+Search v2 message reference, preview, sender, subject, timestamp, and returned conversation-ID
+candidates. A local `conversation_id` is attached only when a candidate exactly matches a known
+catalog ID. The tool does not populate or search the local archive.
 
-That makes it valuable as a **broad-spectrum discovery channel** for difficult investigations. An agent could use it to learn that some potentially relevant artifact exists even when that artifact is outside the connector's directly retrievable content.
+Continuation reuses the same Cvid and LogicalId and advances From by the rows returned. The result
+coverage stays incomplete if Search v2 omits its result set or paging flag. Agents can use a matched
+conversation and timestamp with `get_messages` to inspect surrounding history, then decide whether
+to request another search page. Search result IDs have not yet been verified as history message IDs;
+no exact history page number is returned.
 
-Example desired behavior:
+Live standalone behavior, known-hit identity results, and failure cases are recorded in
+`lrh-outlook-connector/docs/outlook-api-research.md` §3.14. This connector branch has synthetic
+request and mapping coverage; it has not yet run an account-backed search through the new MCP tool.
 
-> "I found a file / channel / meeting / chat that looks relevant to this issue. I can retrieve some of these result types directly; for this one I only have a pointer, but it may be worth opening manually."
-
-Implement this as a distinct MCP capability rather than changing scoped SQLite message search. A name such as `search_teams` or `broad_search` is preferable to overloading `search_messages`.
-
-The result model should be heterogeneous but conservative, for example:
-
-```text
-kind
-name/title
-preview/snippet when supplied by Teams
-conversation/thread/message/file identifiers when supplied
-URL/deep-link when supplied
-source/search category
-whether this application knows how to retrieve/follow it directly
-```
-
-Requirements:
-
-- acquire the needed Office/Substrate token through the app-owned auth flow;
-- replay a controlled **known-hit** query to settle request body, pagination/refiners and result schema;
-- return only fields the service actually supplied; do not invent accessibility;
-- distinguish a pointer from a resource the connector can fetch;
-- bound result count/response size and support continuation if the backend does;
-- never replace scoped/local content search with this endpoint; it is an exploratory front door, not the durable archive/query engine.
-
-**Capture/source update (2026-10-10):** the global search capture carries File, People, Message
-and Event categories, but the separate Meet-app Event query has not been proven to back the global
-Meetings filter. The captured File-only request returned 25 SharePoint-inclusive hits, and the
-Event-only answer request returned 25 hits; all captured search offsets were zero, so no later-page
-request is proven. `MoreResultsAvailable=true` appeared for file search, but no continuation call
-was captured. Recap uses `MeetingInsights`; transcript routes retrieve separate per-artifact
-resources. Neither the recap parser's `PaginationSessionId` nor the transcript request's captured
-query keys proves usable continuation, and no global transcript-text search has been established.
-Keep P2.2 pending until a bounded known-hit request succeeds through app-owned authentication and
-returns a conservative, retrievable-or-pointer result. See the [dated API research](teams-api-research.md#microsoft-365-search-capture-and-source-audit-2026-10-10)
-and `lrh-outlook-connector/docs/m365-search-investigation-plan.md`.
-**Live Recaps UI check (2026-10-10):** both known recaps opened with loaded Transcript tabs and one in-page search returned matches. A Download control was disabled by app permissions for one target. The HAR captures meeting-list, per-meeting resource, recap-content, and ODSP transcript retrieval paths. The supplied Teams bundle lacks the embedded viewer search code; it does not map the successful in-page query to a network route or prove app-owned authentication. Global Search v2 Transcript returned no hits in one structured response, while two other responses were uninterpretable. Keep P2.2 pending. See the [dated API research](teams-api-research.md#microsoft-365-search-capture-and-source-audit-2026-10-10).
-
-**Recaps route/source follow-up (2026-10-11):** four Graph DriveItem preview POSTs and two OPTIONS
-preflights covered three distinct drive/item pairs; all three pairs matched identifiers in MCPS
-meeting-resource metadata. Twenty SharePoint visual-frame GETs returned JPEG images, alongside
-their OPTIONS preflights. This gives the recap workflow a demonstrated metadata-to-storage-ID
-handoff for those artifacts, but does not map global Search v2 file hits to Graph items or reveal
-the in-pane transcript-search request. Keep P2.2 pending; see the [dated API research](teams-api-research.md#microsoft-365-search-capture-and-source-audit-2026-10-10).
-
+Still open: heterogeneous Search v2 results for chats, files, teams/channels and events; global
+recap discovery; transcript discovery and transcript-text search; app-owned transcript retrieval;
+and reliable mappings from other result categories to connector resources. Transcript requests that
+returned empty or uninterpretable envelopes do not prove transcript search unsupported. Outlook
+owns calendar events and their join links; Teams owns related meeting chats, recaps, recordings,
+notes and transcripts; SharePoint owns general file discovery.
 ## P2.3 — complete content through MCP
 
 **Status: Done.**
@@ -611,338 +589,30 @@ Client-specific presentation of Resources can vary; that does not make the serve
 
 ### P2.3a — MCP history filter parity
 
-**Status: Pending. New change request.**
-
-Both MCP history-reading paths should expose the same optional selection controls as the local export UI:
-
-```text
-since / start date    optional, inclusive
-until / end date      optional, inclusive
-message_limit         optional total latest-N bound
-```
-
-Keep the existing API naming (`since` / `until`) unless there is a strong reason to add aliases. All three filters are independent and optional.
-
-`export_chat` already exposes `since`, `until`, and `message_limit`; preserve that behavior and add parity tests/documentation rather than redesigning it.
-
-`get_messages` currently has `since` / `until` plus `page_size`. Add an optional **`message_limit` distinct from `page_size`**:
-
-- `page_size` controls only how many messages can be returned in one MCP response;
-- `message_limit` controls the total selected history window across all continuation pages;
-- `message_limit=None` means no total count limit;
-- a positive `message_limit=N` means select the **latest N messages that satisfy the date bounds**, counting backward from the newest qualifying message;
-- with `until` set, count backward from the latest qualifying message at or before `until`;
-- with both `since` and `until`, select only the inclusive range first, then apply latest-N semantics within that range;
-- with only `message_limit`, return/traverse the latest N messages in the conversation;
-- with no filters, preserve the current unbounded-history-with-continuation behavior.
-
-Continuation must preserve the original selection window. For example, `message_limit=100` with `page_size=25` should allow at most four 25-message pages (subject to response-size constraints), never continue into the 101st older qualifying message. The cursor/state should therefore retain the chosen `since`, `until`, total limit, and how much of that bounded window has already been returned/fetched.
-
-Continue returning each response page in the established chronological order. The **selection** is newest-backward; presentation order within a returned page can remain oldest-to-newest.
-
-The count limit should apply after the normal conversation/date filtering and deduplication rules, so duplicates or out-of-range records do not consume the user's requested N messages. Deleted/tombstoned messages follow the normal retained-history policy and count as messages when included in the selected history.
-
-Required tests:
-
-- no filters;
-- since only;
-- until only;
-- since + until;
-- message limit only;
-- since + message limit;
-- until + message limit;
-- since + until + message limit;
-- `message_limit` larger than available history;
-- `message_limit` spanning multiple MCP response pages;
-- response-size truncation plus continuation without violating the total limit;
-- dedupe/out-of-range rows not consuming the total limit;
-- parity between `get_messages` selection and `export_chat` for the same conversation/filter tuple.
-
+**Status: Done.** get_messages and exports use inclusive since/until bounds and a total
+latest-N message_limit, separate from response page_size. Continuations retain the original
+selection. Synthetic tests cover date/count selection, paging, response truncation, and export
+parity. No additional history-limit redesign is planned.
 
 ### P2.3b — media-inclusive self-contained export bundles
 
-**Status: Pending. New change request.**
-
-Both export surfaces — the local HTTP UI and MCP — should support an optional:
-
-```text
-include_assets = false | true
-```
-
-Default: `false`, preserving today's lightweight text-export behavior.
-
-When `include_assets=true`, first apply the normal message-selection rules (`since`, `until`, `message_limit`, conversation selection). **Only assets referenced by those selected messages belong in the export.** Do not fetch unrelated chat media, avatars, old attachments outside the selected history window, or other account resources.
-
-The export should then materialize each fetchable message asset using the authenticated resource-fetch layer and rewrite the corresponding reference in the TXT export from its protected/remote URL to the **local sibling filename** stored in the bundle.
-
-Example:
-
-```text
-Remote/source representation:
-https://tenant.sharepoint.com/.../architecture.png
-
-Exported conversation reference:
-architecture.png
-```
-
-The resulting TXT should not require Microsoft authentication to understand which local file belongs to the message.
-
-#### Bundle layout
-
-With assets disabled, preserve the current output rules.
-
-With assets enabled, use this structure:
-
-```text
-1 conversation:
-conversation.zip
-├── conversation.txt
-├── architecture.png
-├── screenshot.jpg
-└── report.pdf
-```
-
-For multiple conversations:
-
-```text
-teams-export.zip
-├── conversation-a.zip
-│   ├── conversation-a.txt
-│   ├── image-a.png
-│   └── report-a.pdf
-├── conversation-b.zip
-│   ├── conversation-b.txt
-│   └── screenshot-b.jpg
-└── conversation-c.zip
-    └── conversation-c.txt
-```
-
-In other words:
-
-```text
-1 conversation + assets => ZIP containing TXT + sibling assets
-N conversations + assets => outer ZIP containing one self-contained ZIP per conversation
-```
-
-Even if a selected conversation has no fetchable assets, when `include_assets=true` its per-conversation package should remain structurally consistent and contain at least the TXT.
-
-The existing "concatenate conversations into one text file" option is incompatible with this media-bundle layout. When `include_assets=true`, disable or reject concatenate mode with a clear validation error rather than inventing ambiguous cross-conversation asset paths.
-
-#### Asset naming and reference rewriting
-
-- Prefer the human filename supplied by Teams/SharePoint/message metadata.
-- Sanitize filenames for the local filesystem and ZIP format.
-- Resolve collisions deterministically, for example `image.png`, `image-2.png`, `image-3.png`.
-- The TXT must reference the **final collision-resolved local filename**, not the original remote URL.
-- If the same upstream asset is referenced repeatedly in the selected history, fetch/store it once and reuse the same local filename.
-- Never use an upstream URL as a ZIP path.
-- Prevent `../`, absolute paths, reserved names, or other archive/path traversal.
-- Do not include authentication tokens, signed URLs, cookies, or request headers in the TXT or ZIP metadata.
-
-If an asset cannot be fetched, do not fail the entire conversation export by default. Keep the message and replace the unusable protected URL with an explicit local textual marker such as:
-
-```text
-[Asset unavailable: architecture.png]
-```
-
-The exact wording can be centralized in the formatter. The export should report failed/successful asset counts in its completion metadata.
-
-#### Which resources count as assets
-
-Initially treat resources explicitly attached/embedded by the **selected messages** as candidates, including where supported:
-
-- ordinary Teams/SharePoint/OneDrive file attachments;
-- inline images/media referenced by the message;
-- AMS-backed message media.
-
-Sender avatars/profile pictures are presentation metadata, not message assets, and should remain under N3 unless a later flag explicitly asks to package them.
-
-#### Reuse the authenticated resource layer
-
-Do not build a second downloading stack just for exports.
-
-The N1/N3 authenticated resource layer should expose a common operation conceptually like:
-
-```text
-fetch_registered_resource(resource_descriptor) -> bytes/stream + content metadata
-```
-
-Normal UI/viewing can use that layer lazily through localhost/MCP resource routes.
-
-A media-inclusive export uses the **same authenticated fetch adapters** but materializes the returned bytes directly into the export ZIP during export construction. No intermediate temp download directory is required beyond whatever bounded staging the ZIP writer itself needs.
-
-#### Shared export architecture — one orchestrator for UI and MCP
-
-Keep this DRY. The HTTP UI and MCP must **not** implement separate single/multi-chat or media/no-media export trees.
-
-Both surfaces should adapt their inputs into the same application/service-level request, conceptually:
-
-```text
-ExportRequest(
-    conversation_ids=[...],
-    since=None,
-    until=None,
-    message_limit=None,
-    include_assets=False,
-    concatenate=False,
-)
-```
-
-Then one shared orchestrator owns all branching:
-
-```text
-UI ------\
-           -> export(request)
-MCP -----/       |
-                 +-- one conversation
-                 |      -> export_single_chat(...)
-                 |            +-- include_assets=false -> TXT artifact
-                 |            +-- include_assets=true  -> ZIP(TXT + selected assets)
-                 |
-                 +-- multiple conversations
-                        -> for each conversation:
-                               export_single_chat(...)
-                               -> TXT or per-chat ZIP
-                        -> bundle returned per-chat artifacts in one outer ZIP
-                        -> return outer ZIP
-```
-
-The important invariant is that **`export_single_chat(...)` is the only implementation of conversation extraction**. Multi-chat export is only orchestration around that primitive. Asset fetching, filename rewriting, message filtering, deletion markers, formatting, and selection semantics must not be duplicated in the UI path, MCP path, or batch path.
-
-The shared result should be an artifact descriptor rather than UI/MCP-specific output, for example conceptually:
-
-```text
-ExportArtifact(
-    path / stream handle,
-    filename,
-    content_type,
-    byte_size,
-    message_count,
-    asset_counts,
-)
-```
-
-The surface adapter decides only **how to deliver that artifact**:
-
-- HTTP UI -> normal HTTP file download response;
-- MCP -> MCP Resource/file artifact/reference suitable for text or binary content.
-
-Do not make the shared export service know about HTTP handlers, browser response objects, MCP tool schemas, or MCP protocol details.
-
-##### Single-chat primitive
-
-The single-chat builder receives one conversation plus the already-agreed optional filters:
-
-```text
-since
-until
-message_limit
-include_assets
-```
-
-It returns:
-
-```text
-include_assets=false -> conversation.txt
-include_assets=true  -> conversation.zip
-                         conversation.txt
-                         selected asset files...
-```
-
-The same primitive must be used when the request contains one conversation and when it is called repeatedly by the multi-chat orchestrator.
-
-##### Multi-chat orchestration
-
-For N > 1 conversations, call the single-chat primitive once per conversation and bundle its returned artifacts as-is:
-
-```text
-include_assets=false:
-    teams-export.zip
-        chat-a.txt
-        chat-b.txt
-        ...
-
-include_assets=true:
-    teams-export.zip
-        chat-a.zip
-            chat-a.txt
-            assets...
-        chat-b.zip
-            chat-b.txt
-            assets...
-```
-
-This preserves your desired rule:
-
-```text
-1 conversation + media -> ZIP -> files
-N conversations + media -> outer ZIP -> one ZIP per conversation -> files
-```
-
-For N conversations with assets disabled, retain the simple current outer ZIP of TXT files rather than pointlessly wrapping each TXT in another ZIP.
-
-##### UI adapter
-
-Add an export checkbox such as:
-
-```text
-Include attachments/media
-```
-
-mapped to `include_assets=true` on the shared request.
-
-The UI should submit one export request regardless of selected chat count. It must not loop over conversations in JavaScript or assemble archives in the browser. Progress should include asset discovery/fetch counts in addition to message progress, and the changed output type should be obvious before download.
-
-##### MCP adapter
-
-Expose the same export request semantics through MCP. Prefer a single export tool shape capable of one or many conversation IDs rather than maintaining a separate implementation of `export_chat` and `export_chats`. If backward-compatible tool naming is not desired for this actively developed project, the MCP API may be reshaped around the shared multi-ID request.
-
-The MCP layer must not loop through public MCP calls to emulate batch export; it should call the same in-process orchestrator as the HTTP UI.
-
-Do **not** require the MCP client to manually download each attachment or construct ZIPs.
-
-For media-inclusive exports, expose the completed artifact as a binary/file MCP Resource or equivalent downloadable artifact reference. Avoid base64-encoding an entire potentially large ZIP inside ordinary tool JSON. Text-only exports may continue to support bounded text reads, but the canonical export artifact should still come from the shared export service.
-
-#### Selection parity
-
-Asset collection must respect exactly the same selected message set as the textual export.
-
-For example:
-
-```text
-since = 2026-09-01
-until = 2026-09-30
-message_limit = 100
-include_assets = true
-```
-
-means:
-
-1. select the latest 100 messages within the inclusive September range;
-2. render only those messages;
-3. discover/fetch only assets referenced by those 100 messages;
-4. rewrite those references to the filenames bundled beside that conversation's TXT.
-
-Do not let asset discovery expand the message/history scope.
-
-#### Tests
-
-Cover at least:
-
-- one chat, assets disabled -> existing TXT behavior;
-- one chat, assets enabled -> ZIP with TXT + assets;
-- one chat, assets enabled but no assets -> ZIP with TXT only;
-- multiple chats with assets -> outer ZIP containing one inner ZIP per chat;
-- filters + `message_limit` selecting assets only from included messages;
-- protected remote URL rewritten to local sibling filename;
-- duplicate asset references downloaded once;
-- duplicate filenames deconflicted and TXT references rewritten to the final names;
-- unavailable asset leaves the message/export intact with an explicit marker;
-- unsafe/path-traversal filenames sanitized;
-- concatenate + assets rejected/disabled;
-- no bearer token, signed URL, cookie, or authentication header leaks into export contents;
-- MCP and HTTP UI use the same underlying bundle-builder/resource-fetch logic.
-
+**Status: Done (2026-10-12).** Both UI and MCP pass the same ExportRequest to the shared export
+orchestrator. include_attachments defaults to true. Only references in the selected messages are
+considered; one-chat extraction returns a plain TXT/JSONL artifact when there are no selected
+attachments, or a ZIP with one conversation-named folder containing the text export and retrieved
+files when references exist. Failed downloads retain the text and replace the remote reference with
+an unavailable marker.
+
+For multiple conversations, the orchestrator calls the same per-chat builder and packages those
+artifacts in one outer ZIP. Chats with attachments are inner ZIPs; chats without attachments remain
+plain files. Every conversation remains a separate artifact; the export has no combined-text option.
+Filenames are sanitized and deconflicted. Fetch limits are 200 references per conversation, 100 MiB
+per file, and 250 MiB aggregate per conversation. Progress includes attachment totals, success and
+failure counts. Browser and MCP surfaces do not implement separate packaging loops.
+
+Synthetic regression coverage includes single-chat plain/ZIP output, reference rewriting, selected
+range isolation, unavailable attachments, mixed multi-chat artifacts, multiple attachment-free chats
+in an outer ZIP, and progress reporting. This is local artifact generation and does not change Teams.
 
 ## P2.4 — AI research workflows
 
@@ -992,43 +662,16 @@ Goals:
 
 Do not introduce a repository or abstraction layer merely for its own sake; a few well-named methods on `TeamsService` are enough.
 
-### D1.2 — shared export request, job, progress and artifact contracts
+### D1.2 — shared export request, progress and artifact contracts
 
-P2.3b already defines the canonical export control flow and remains authoritative for packaging rules.
+**Status: Done for UI/MCP export packaging (2026-10-12).** Both surfaces call the same
+`Exports.export(ExportRequest)` implementation and receive the protocol-neutral `ExportArtifact`.
+The UI may run that call as a cancellable background job with progress polling; MCP runs it inside
+the tool call. The service owns selection, per-conversation extraction and packaging, so there is no
+second HTTP-only single-versus-multiple-conversation package builder. Continue to keep job polling,
+cancellation, HTTP download headers and MCP artifact delivery in their respective adapters.
 
-Make the surrounding export types reusable across HTTP and MCP as well, conceptually:
-
-```text
-ExportRequest
-HistorySelection
-ExportJob / ExportStatus
-ExportProgress
-ExportArtifact
-```
-
-The shared `ExportArtifact` should carry protocol-neutral information such as:
-
-```text
-filename
-content_type
-path / stream / artifact handle
-byte_size
-message_count
-asset counts
-```
-
-Do **not** require HTTP and MCP to execute jobs identically.
-
-It is acceptable for:
-
-```text
-HTTP -> background worker thread + polling/cancel endpoint
-MCP  -> bounded/resumable tool calls
-```
-
-as long as both execution models ultimately drive the same shared export orchestration/single-chat builder and produce the same artifact contract.
-
-The current HTTP `_build_download()` logic should not remain a second implementation of the business-level single-vs-multi export tree once P2.3b is implemented.
+The exact packaging contract is recorded under [P2.3b](#p23b--media-inclusive-self-contained-export-bundles).
 
 ### D1.3 — one `HistorySelection` semantic contract
 
@@ -1096,7 +739,7 @@ AuthenticatedResourceFetcher
 provider-specific fetch adapters
 ```
 
-The resource descriptor should identify a validated known resource and the required fetch strategy without exposing reusable credentials.
+The resource descriptor should identify a validated known resource and the required fetch strategy without exposing reusable credentials. P2.3b now materializes selected export attachments through the shared `Files` service; a general registered-resource gateway for lazy UI/MCP viewing is still not implemented.
 
 Consumers then become:
 
@@ -1186,7 +829,7 @@ If completing another roadmap item naturally exposes one of these duplications, 
 
 | Item | Status | Direction |
 |---|---|---|
-| N1. Authenticated attachment/resource access | **Partial** | Build one authenticated resource-fetch layer. Normal viewing can use it lazily through localhost/MCP resource routes; P2.3b media-inclusive exports should reuse the same adapters to materialize selected assets into self-contained ZIP bundles. |
+| N1. Authenticated attachment/resource access | **Partial** | P2.3b exports materialize selected attachments through the shared `Files` service. A general registered-resource gateway for lazy localhost/MCP viewing, shared across resource sources, remains future work. |
 | N2. Remote read/unread indicators | **Partial** | Likely a small quality-of-life feature: validate CSA read-state freshness/semantics and expose a read-only indicator without marking anything read. |
 | N3. Message sender pictures/resources | **Partial** | Reuse the same authenticated-resource plumbing as N1 where practical; only the upstream source/auth strategy differs (for example Middle Tier/AMS vs SharePoint). |
 | N4. Conversation viewer/rendering fidelity | **Partial / ongoing** | Current exports look very good in real use so far. Continue improving only from actual problematic exports; a richer viewer can reuse the same formatter later. |
