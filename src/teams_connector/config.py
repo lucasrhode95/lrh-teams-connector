@@ -10,6 +10,7 @@ CLI_NAME = "teams-connector"
 
 # Public-cloud endpoint settings. Regional Chat Service URLs still come from AuthZ.
 GRAPH_ROOT = "https://graph.microsoft.com/v1.0"
+SEARCH_URL = "https://outlook.office.com/searchservice/api/v2/query"
 AUTHZ_URL = "https://authsvc.teams.microsoft.com/v1.0/authz"
 CSA_UPDATES_URL = "https://teams.microsoft.com/api/csa/api/v1/teams/users/me/updates"
 

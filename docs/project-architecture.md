@@ -119,11 +119,17 @@ does not receive a Microsoft token.
 
 ## Search behavior and boundaries
 
-`search_messages` is a local archive workflow. The caller chooses the conversation scope, inclusive
-date range, and matching mode. The connector retrieves that range in bounded page requests, stores
-it, matches messages locally, and returns explicit preparation and per-conversation coverage. The
-agent decides whether to request more pages or broader context. No claim is made that this route is
-equivalent to Teams Web's cross-conversation search or its jump-to-message navigation.
+`search_remote_messages` uses the shared Microsoft Search profile and the standalone Search v2
+endpoint for online Teams message discovery. It returns bounded message pointers, previews, timestamps,
+and conversation candidates; a conversation ID is attached only on an exact local-catalog match. The
+pointer is not yet proven equal to the history API's message ID. Agents decide whether to fetch
+surrounding history with `get_messages` or request another search page.
+
+`search_messages` remains a separate local archive workflow. The caller chooses the conversation
+scope, inclusive date range, and matching mode. The connector retrieves that range in bounded page
+requests, stores it, matches messages locally, and returns explicit preparation and per-conversation
+coverage. Neither message search discovers transcript or recap text, and there is no stable history
+page number for a search hit.
 
 Reverse-engineered endpoint shapes, source audits, and dated confidence notes are maintained in
 [Teams API research](teams-api-research.md). Treat successful browser behavior as evidence, not a

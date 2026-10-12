@@ -1,12 +1,13 @@
-"""Scoped message search: fetch the requested chats and dates into the archive, then match locally.
+"""Online message discovery and scoped local archive search.
 
-Microsoft Graph's message search is denied for this client and no private Teams search route has a
-verified contract, so search delegates the fetching to Teams (date-bounded history reads) and does the
-matching in the archive: exact, substring or all-terms literal matching after NFKC normalization and
-case folding (accents stay significant). Retained messages the server no longer returns are searched
-too, and deleted ones are flagged.
+``search_remote_messages`` returns a bounded page of Search v2 message pointers. It neither downloads
+history nor writes to the local archive. ``search_messages`` is the deep, scoped workflow: fetch the
+requested chats and dates, then match locally using exact, substring or all-terms literal matching
+after NFKC normalization and case folding (accents stay significant). Retained messages the server
+no longer returns are searched too, and deleted ones are flagged.
 
-Preparation is bounded per call; the cursor continues it and then pages through the matches.
+Local-search preparation is bounded per call; its cursor continues preparation and then pages through
+the matches. Remote-search continuation is one independent Search v2 page at a time.
 """
 
 from __future__ import annotations
@@ -15,29 +16,131 @@ import hashlib
 import json
 import re
 from datetime import datetime
+from uuid import UUID, uuid4
 
 from teams_connector.domain.errors import AuthenticationRequired, ConnectorError, InvalidRequest
 from teams_connector.domain.models import (
+    Chat,
     ChatPreparation,
     MatchMode,
     Message,
+    RemoteMessageHit,
+    RemoteMessageSearchResult,
+    RemoteSearchCoverage,
     SearchCoverage,
     SearchHit,
     SearchResult,
 )
+from teams_connector.remote.ports import MessageSearchReader
 from teams_connector.service import cursors
 from teams_connector.service.catalog import Catalog
 from teams_connector.service.history import History, check_range
 from teams_connector.store.db import Store, from_iso, iso
 
 MAX_SCOPE_CHATS = 100
+REMOTE_SEARCH_MAX_PAGE_SIZE = 25
+REMOTE_SEARCH_MAX_OFFSET = 100_000
+REMOTE_SEARCH_MAX_QUERY_CHARS = 512
 
 
 class Search:
-    def __init__(self, store: Store, catalog: Catalog, history: History) -> None:
+    def __init__(
+        self,
+        store: Store,
+        catalog: Catalog,
+        history: History,
+        remote_messages: MessageSearchReader,
+    ) -> None:
         self._store = store
         self._catalog = catalog
         self._history = history
+        self._remote_messages = remote_messages
+
+    async def search_remote_messages(
+        self,
+        query: str,
+        *,
+        limit: int = 20,
+        cursor: str | None = None,
+    ) -> RemoteMessageSearchResult:
+        """Validate public inputs and return one online Search v2 page without hydrating history."""
+        if not isinstance(query, str) or not query.strip():
+            raise InvalidRequest("query must be a non-empty string.")
+        query = query.strip()
+        if len(query) > REMOTE_SEARCH_MAX_QUERY_CHARS:
+            raise InvalidRequest(f"query must be no longer than {REMOTE_SEARCH_MAX_QUERY_CHARS} characters.")
+        if type(limit) is not int or not 1 <= limit <= REMOTE_SEARCH_MAX_PAGE_SIZE:
+            raise InvalidRequest(f"limit must be between 1 and {REMOTE_SEARCH_MAX_PAGE_SIZE}.")
+
+        if cursor:
+            state = cursors.decode(cursor, "search_remote_messages")
+            if state.get("query") != query:
+                raise InvalidRequest("The query does not match this search cursor; start the search again.")
+            offset = state.get("offset")
+            cvid = _cursor_uuid(state.get("cvid"), "Cvid")
+            logical_id = _cursor_uuid(state.get("logical_id"), "LogicalId")
+            page_size = state.get("page_size")
+            if type(offset) is not int or not 0 <= offset <= REMOTE_SEARCH_MAX_OFFSET:
+                raise InvalidRequest("The search cursor has an invalid offset.")
+            if type(page_size) is not int or not 1 <= page_size <= REMOTE_SEARCH_MAX_PAGE_SIZE:
+                raise InvalidRequest("The search cursor has an invalid page size.")
+        else:
+            offset = 0
+            page_size = limit
+            cvid, logical_id = str(uuid4()), str(uuid4())
+
+        page = await self._remote_messages.search_messages(
+            query,
+            offset=offset,
+            page_size=page_size,
+            cvid=cvid,
+            logical_id=logical_id,
+        )
+        chats = {chat.id: chat for chat in self._store.chats()}
+        items = [_attach_known_conversation(hit, chats) for hit in page.items]
+        notes: list[str] = []
+        next_offset = offset + len(page.items)
+        next_cursor: str | None = None
+        complete = page.result_set_found and page.more_results_available is False
+        if not page.result_set_found:
+            notes.append("Search returned no interpretable Message result set; zero hits are not confirmed.")
+        elif page.more_results_available is None:
+            notes.append("Search did not report whether more results are available.")
+        elif page.more_results_available and not page.items:
+            notes.append("Search reported more results but returned no rows to advance the offset.")
+        elif page.more_results_available:
+            if next_offset <= REMOTE_SEARCH_MAX_OFFSET:
+                next_cursor = cursors.encode(
+                    "search_remote_messages",
+                    query=query,
+                    page_size=page_size,
+                    offset=next_offset,
+                    cvid=cvid,
+                    logical_id=logical_id,
+                )
+            else:
+                notes.append(
+                    f"The maximum message-search offset ({REMOTE_SEARCH_MAX_OFFSET}) was reached; "
+                    "no cursor is available."
+                )
+        if page.more_results_available and next_cursor is not None:
+            notes.append("Follow the cursor only if more online matches are useful.")
+        notes.append(
+            "A search message id is a Search v2 pointer; direct reuse as get_messages message_id "
+            "has not been verified. Use a matched conversation_id and sent_at to request nearby history."
+        )
+        return RemoteMessageSearchResult(
+            query=query,
+            items=items,
+            cursor=next_cursor,
+            coverage=RemoteSearchCoverage(
+                complete=complete,
+                offset=offset,
+                page_size=page_size,
+                more_results_available=page.more_results_available,
+                notes=notes,
+            ),
+        )
 
     async def search_messages(
         self,
@@ -187,6 +290,30 @@ class Search:
 
 def _scope_hash(ids: list[str]) -> str:
     return hashlib.sha256(json.dumps(ids).encode()).hexdigest()[:16]
+
+
+def _cursor_uuid(value: object, label: str) -> str:
+    if not isinstance(value, str):
+        raise InvalidRequest(f"The search cursor has an invalid {label}.")
+    try:
+        return str(UUID(value))
+    except ValueError:
+        raise InvalidRequest(f"The search cursor has an invalid {label}.") from None
+
+
+def _attach_known_conversation(hit: RemoteMessageHit, chats: dict[str, Chat]) -> RemoteMessageHit:
+    matches = list(
+        dict.fromkeys(candidate for candidate in hit.conversation_id_candidates if candidate in chats)
+    )
+    if len(matches) != 1:
+        return hit
+    chat = chats[matches[0]]
+    return hit.model_copy(
+        update={
+            "conversation_id": matches[0],
+            "conversation_name": chat.name,
+        }
+    )
 
 
 def _excerpt(message: Message, query: str, max_chars: int = 600) -> Message:

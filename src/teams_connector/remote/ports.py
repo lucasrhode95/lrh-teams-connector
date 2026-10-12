@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
-from teams_connector.domain.models import Chat, Message, Participant
+from teams_connector.domain.models import Chat, Message, Participant, RemoteMessageHit
 
 
 @dataclass
@@ -57,6 +57,15 @@ class RemoteFile:
     name: str | None
     content_type: str | None
     size: int
+
+
+@dataclass
+class RemoteMessageSearchPage:
+    """Normalized result of one Search v2 page."""
+
+    items: list[RemoteMessageHit]
+    more_results_available: bool | None
+    result_set_found: bool
 
 
 class ChatCatalog(Protocol):
@@ -110,6 +119,20 @@ class ChatWriter(Protocol):
 
 
 class FileReader(Protocol):
-    async def download(self, url: str, dest: Path) -> RemoteFile:
+    async def download(self, url: str, dest: Path, *, max_bytes: int | None = None) -> RemoteFile:
         """Download a shared file (SharePoint/OneDrive sharing or web URL) into ``dest``."""
+        ...
+
+
+class MessageSearchReader(Protocol):
+    async def search_messages(
+        self,
+        query: str,
+        *,
+        offset: int,
+        page_size: int,
+        cvid: str,
+        logical_id: str,
+    ) -> RemoteMessageSearchPage:
+        """Search Teams message content via the standalone Microsoft Search v2 route."""
         ...

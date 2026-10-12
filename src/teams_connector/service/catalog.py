@@ -208,7 +208,12 @@ class Catalog:
             if not query or not query.strip():
                 raise InvalidRequest("query must be a non-empty string.")
             query, offset = query.strip(), 0
-            await self.ensure(refresh=refresh)
+            if refresh:
+                await self.ensure(refresh=True)
+            elif self.age() is None:
+                raise InvalidRequest(
+                    "No cached chat catalog is available; repeat with refresh=true to search Teams."
+                )
         folded = fold(query)
         participants = self._store.participant_matches(query)
         matches = [

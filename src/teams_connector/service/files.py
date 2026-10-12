@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import re
 import time
+from pathlib import Path
 
 from teams_connector.domain.errors import InvalidRequest, NotFound
-from teams_connector.domain.models import SavedFile
-from teams_connector.remote.ports import FileReader, People
+from teams_connector.domain.models import Attachment, SavedFile
+from teams_connector.remote.ports import FileReader, People, RemoteFile
 from teams_connector.service import localfiles
 from teams_connector.store.db import Store
 
@@ -59,6 +60,14 @@ class Files:
         return SavedFile(
             path=str(target), name=target.name, content_type=remote.content_type, size=remote.size
         )
+
+    async def download_selected_attachment(
+        self, attachment: Attachment, destination: Path, *, max_bytes: int
+    ) -> RemoteFile:
+        """Fetch a selected message attachment into caller-owned temporary storage."""
+        if not attachment.url or not attachment.url.lower().startswith("https://"):
+            raise InvalidRequest("Only HTTPS message attachments can be included in an export.")
+        return await self._reader.download(attachment.url, destination, max_bytes=max_bytes)
 
 
 class Photos:

@@ -2748,12 +2748,14 @@ claim a canonical recent-chat ordering contract.
 
 ## Shared-auth live validation (2026-10-12)
 
-The encrypted shared-auth bootstrap was run through `teams-connector auth`. It reported all five
-profiles ready without issuing a device code or requesting MFA. `teams-connector status --check`
-then acquired tokens successfully for all five profiles; each Teams profile reported a cached
-resource token. In the offline status fields, `client_credential_cached=false` for the Teams
-profiles did not mean that resource-token acquisition had failed: the corresponding
-`access_token_expires_on` values were present and the explicit checks succeeded.
+The encrypted shared-auth bootstrap was run through `teams-connector auth`. At the time of this
+validation, it reported all five catalog profiles ready without issuing a device code or requesting
+MFA. `teams-connector status --check` then acquired tokens successfully for those five profiles;
+each Teams profile reported a cached resource token. In the offline status fields,
+`client_credential_cached=false` for the Teams profiles did not mean that resource-token acquisition
+had failed: the corresponding `access_token_expires_on` values were present and the explicit checks
+succeeded. The shared catalog now also includes `m365.search`; this earlier five-profile check does
+not establish its token state or a live Teams search call.
 
 Two bounded, read-only service checks succeeded:
 
@@ -2772,3 +2774,33 @@ Two bounded, read-only service checks succeeded:
 These observations establish token acquisition and current service access for the sampled account,
 including a complete CSA snapshot. They do not validate a fresh device-code grant, Graph channel
 enumeration/history, Chat Service message history, message search, meeting recaps, or transcripts.
+
+## Teams online message search adapter (2026-10-12)
+
+The connector now exposes `search_remote_messages`, implemented against the standalone-proven
+Search v2 route documented in `lrh-outlook-connector/docs/outlook-api-research.md` §3.14:
+`POST https://outlook.office.com/searchservice/api/v2/query`. It uses the shared `m365.search`
+profile and the account anchor header; it does not reuse browser cookies or Teams web session state.
+
+The message request uses `EntityType=Message`, `ContentSources=[Teams]`, the caller query, `From`,
+`Size`, `Sort=[]`, and `PropertySet=Optimized` inside the OWA Search envelope. Each call returns one
+bounded result page (connector limit: 25 hits; query length: 512 characters; maximum offset: 100,000).
+These are application safety bounds, not claimed server limits. A cursor retains the query, page
+size, offset, Cvid and LogicalId; page calls reuse the same Cvid/LogicalId and advance From by the
+number of rows returned. The adapter reads only
+the Message `EntitySets[].ResultSets[].Results[]` envelope and normalizes observed fields including
+`InternetMessageId`, `Id`, `ClientConversationId`, `ClientThreadId`, `DateTimeSent`, `Sender`,
+`Subject`, `Preview`, and `HitHighlightedSummary` when present.
+
+The local service compares returned conversation identity candidates against exact IDs in the local
+catalog. It exposes `conversation_id` only on one exact known-ID match and never infers a match from
+display names. The Search v2 message reference is explicitly not treated as a `get_messages`
+`message_id`; that equivalence remains unverified. A matched conversation plus `DateTimeSent` can
+anchor a bounded history read, but history does not expose a stable page number for the hit. The
+agent chooses whether to fetch that context or continue Search v2 paging.
+
+Synthetic tests cover the outgoing request contract, identity/preview/timestamp mapping, explicit
+continuation values, and a response without a Message result set. This documents the code path and
+the previous standalone evidence; the new MCP method has not been live-invoked from this connector
+branch. This is message discovery only. Transcript requests with empty or uninterpretable envelopes
+remain inconclusive; global transcript-text search and recap discovery/retrieval are not implemented.

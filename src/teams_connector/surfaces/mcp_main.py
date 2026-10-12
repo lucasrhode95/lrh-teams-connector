@@ -31,6 +31,7 @@ from teams_connector.domain.models import (
     MatchMode,
     MessageContent,
     MessagePage,
+    RemoteMessageSearchResult,
     SavedFile,
     SearchResult,
     SendResult,
@@ -55,9 +56,21 @@ is_self marks the user's own messages: use it rather than matching names.
 (bounded per call: follow the cursor while preparation_complete is false), then matches literally \
 (exact, substring or all_terms; case-insensitive, accents significant). Read coverage before treating \
 results as complete.
-- Exporting: export_chats writes one local .txt (people) or .jsonl (agents) file, or a .zip for several \
-chats, and returns its path; read it with your own file tools. It accepts since/until and a per-chat \
-latest-N message_limit, and fetches the whole selection, so a long history takes a while.
+- Online message discovery: search_remote_messages queries Teams message content through Microsoft \
+Search v2 (at most 25 hits, query length up to 512 characters) and returns one bounded page of \
+message pointers, previews, timestamps, and conversation identity candidates. It sets \
+conversation_id only when a candidate exactly matches the local catalog. The \
+catalog. The Search v2 message id is not yet proven interchangeable with get_messages message_id. \
+For a matched conversation, use sent_at with get_messages since/until to inspect surrounding history; \
+follow the returned search cursor only when more hits are useful. This tool does not discover \
+transcripts or meeting recaps.
+- Exporting: export_chats returns a local artifact path. One conversation without selected \
+attachments returns a plain .txt/.jsonl file; with attachments it returns a .zip containing one \
+conversation-named folder with the text export and retrieved files. Several conversations return one \
+outer .zip, with an inner .zip for each conversation with attachments and a plain file for each \
+without them. Attachments are included by default; set include_attachments=false to omit them. Date \
+bounds and latest-N message_limit apply per conversation; export fetches the selected history, \
+so a long selection takes a while. Read the returned file path with your file tools.
 - Attachments: download_attachment saves a message's shared file (from get_messages) and returns its \
 local path.
 - The archive retains every message the connector has read, indefinitely. Messages with is_deleted=true \
@@ -166,6 +179,20 @@ def build_server(context: AppContext) -> FastMCP:
 
     @mcp.tool(annotations=READ_ONLY)
     @_logged
+    async def search_remote_messages(
+        query: Annotated[
+            str,
+            Field(max_length=512, description="Text to search online in Teams messages."),
+        ],
+        limit: Annotated[int, Field(ge=1, le=25, description="Hits returned in this online page.")] = 20,
+        cursor: str | None = None,
+    ) -> RemoteMessageSearchResult:
+        """Search Teams messages online through Microsoft Search v2. Returns pointers and one page;
+        it does not download or search the local archive. Follow the cursor only when more hits help."""
+        return await (await services()).search.search_remote_messages(query, limit=limit, cursor=cursor)
+
+    @mcp.tool(annotations=READ_ONLY)
+    @_logged
     async def get_messages(
         conversation_id: ConversationId,
         since: Since = None,
@@ -246,43 +273,58 @@ def build_server(context: AppContext) -> FastMCP:
         since: Since = None,
         until: Until = None,
         message_limit: Annotated[int | None, Field(ge=1, description="Latest N messages per chat.")] = None,
-        combine: Annotated[
-            bool, Field(description="One file for all chats instead of a zip of one per chat.")
-        ] = False,
+        include_attachments: Annotated[
+            bool,
+            Field(description="Include selected message files and images beside the conversation export."),
+        ] = True,
         format: Annotated[
             ExportFormat, Field(description="txt (for people) or jsonl (one JSON record per message).")
         ] = "txt",
     ) -> ExportArtifact:
-        """Export conversations to one local file (a .zip for several chats unless combined); returns
-        its path. Fetches each selection from Teams first, so long histories take a while."""
+        """Export selected conversations and return the local artifact path.
+
+        A single conversation without selected attachments returns a plain text/JSONL file; with
+        attachments it returns a ZIP containing a folder with the text and retrieved files. Several
+        conversations return one outer ZIP of each conversation artifact. Selected history is
+        fetched from Teams first.
+        """
         request = ExportRequest(
             conversation_ids=conversation_ids,
             since=_utc(since),
             until=_utc(until),
             message_limit=message_limit,
-            combine=combine,
             format=format,
+            include_attachments=include_attachments,
         )
         loop = asyncio.get_running_loop()
         pending: set[asyncio.Task[None]] = set()
-        last = {"step": -1}
+        last: dict[str, tuple[str, int, int, int]] = {"step": ("", -1, -1, -1)}
 
         def progress(state: ExportProgress) -> None:
             step = (
-                state.messages_retrieved // 500 + state.chat_index * 1000 + (state.phase == "writing") * 10**6
+                state.phase,
+                state.chat_index,
+                state.messages_retrieved // 500,
+                state.attachments_downloaded + state.attachments_failed,
             )
             if step == last["step"]:
                 return
             last["step"] = step
             text = (
                 f"{state.phase}: chat {state.chat_index}/{state.chats_total}, "
-                f"{state.messages_retrieved} messages"
+                f"{state.messages_retrieved} messages, "
+                f"{state.attachments_downloaded} attachments downloaded, "
+                f"{state.attachments_failed} unavailable"
             )
             task = loop.create_task(ctx.report_progress(state.chat_index, state.chats_total, text))
             pending.add(task)
             task.add_done_callback(pending.discard)
 
-        return await (await services()).exports.export(request, progress=progress)
+        try:
+            return await (await services()).exports.export(request, progress=progress)
+        finally:
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
 
     @mcp.tool(annotations=LOCAL_FILE)
     @_logged

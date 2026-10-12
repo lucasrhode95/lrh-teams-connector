@@ -13,7 +13,7 @@
     <div>
       <p class="eyebrow">Teams connector</p>
       <h1>Download conversations</h1>
-      <p>Choose one or more chats or channels, set optional filters, and download a text export.</p>
+      <p>Choose conversations and filters. Message attachments are included when available.</p>
     </div>
     <div id="account-info" class="account-info" aria-label="Signed-in account" hidden>
       <span id="account-avatar" class="avatar account-avatar" aria-hidden="true"></span>
@@ -48,7 +48,7 @@
       <input id="to-date" type="hidden">
     </div>
     <label for="message-limit">Maximum messages per chat <input id="message-limit" type="number" min="1" max="1000000" step="1" placeholder="Unlimited"></label>
-    <label class="combine"><input id="combine" type="checkbox" disabled><span>Combine selected conversations into one text file</span></label>
+    <label><input id="include-attachments" type="checkbox" checked><span>Include message attachments</span></label>
   </section>
   <section aria-label="Conversation selection">
     <div class="list-heading">

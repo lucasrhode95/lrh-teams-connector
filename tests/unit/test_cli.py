@@ -25,6 +25,7 @@ def test_status_reports_the_shared_profile_catalog_without_connecting(capsys) ->
     assert {profile["profile"] for profile in status["profiles"]} == {
         "outlook.graph",
         "outlook.api",
+        "m365.search",
         "teams.spaces",
         "teams.csa",
         "teams.graph",

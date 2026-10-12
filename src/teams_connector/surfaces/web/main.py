@@ -9,7 +9,6 @@ import asyncio
 import contextlib
 import secrets
 import socket
-import threading
 import webbrowser
 
 import uvicorn
@@ -51,16 +50,29 @@ def run(
                     server.should_exit = True
 
         watcher = asyncio.create_task(watch_idle())
+        server_task = asyncio.create_task(server.serve())
         try:
-            await server.serve()
+            while not server.started and not server_task.done():
+                await asyncio.sleep(0.05)
+            if not server.started:
+                print(
+                    f"Teams connector UI did not start at {url}; check the startup error above.",
+                    flush=True,
+                )
+            elif open_browser and not webbrowser.open(url):
+                print(f"Open this address in your browser: {url}", flush=True)
+            await server_task
         finally:
             watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watcher
+            if not server_task.done():
+                server.should_exit = True
+                await server_task
             await context.aclose()
 
     print(
         f"Teams connector UI: {url}  (Ctrl+C to stop; stops after {idle_minutes:g} idle minutes)",
         flush=True,
     )
-    if open_browser:
-        threading.Timer(1.0, webbrowser.open, args=(url,)).start()
     asyncio.run(serve())

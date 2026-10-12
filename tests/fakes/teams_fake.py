@@ -372,7 +372,14 @@ class FakeTokens:
     def status(self) -> CacheStatus:
         rows = tuple(
             ProfileStatus(profile, "c", (), profile, True, None)
-            for profile in ("outlook.graph", "outlook.api", "teams.spaces", "teams.csa", "teams.graph")
+            for profile in (
+                "outlook.graph",
+                "outlook.api",
+                "m365.search",
+                "teams.spaces",
+                "teams.csa",
+                "teams.graph",
+            )
         )
         return CacheStatus("encrypted", Path("x"), True, (), rows)
 

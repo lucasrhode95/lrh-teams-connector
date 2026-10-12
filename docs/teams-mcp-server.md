@@ -117,9 +117,25 @@ Example arguments for a bounded history read:
 }
 ```
 
-### Search message text
+### Online Teams message discovery
 
-`search_messages` currently performs local matching. Choose exactly one scope: a list of
+`search_remote_messages` calls Microsoft Search v2 for Teams messages and returns one bounded page
+(up to 25 hits; query text is limited to 512 characters).
+It does not fill or scan the local archive. Each hit preserves the Search v2 message reference,
+preview, sender, subject, timestamp, and conversation identity candidates supplied by the service.
+The connector sets `conversation_id` only when a candidate exactly equals a known local catalog ID.
+The search message reference has not been proven interchangeable with the `message_id` used by
+`get_messages`.
+
+When a hit has a `conversation_id` and `sent_at`, use `get_messages` with a bounded `since`/`until`
+window around that timestamp to inspect surrounding context. History paging has no stable page number
+for a search result. The agent decides whether to expand context or follow the search `cursor`; each
+cursor requests only the next bounded Search v2 page. This operation does not discover recap or
+transcript text. Those capabilities remain separate and unresolved.
+
+### Search message text in a chosen scope
+
+`search_messages` performs local matching. Choose exactly one scope: a list of
 `conversation_ids` or `all_chats=true`, and provide both `since` and `until`. Each call fetches a
 bounded number of remote pages into the archive before matching. If `coverage.preparation_complete`
 is false, repeat with the returned `cursor`. The response distinguishes incomplete retrieval from
@@ -151,10 +167,15 @@ batches. It does not run in the background. Repeated calls rotate fairly across 
 each chat's saved continuation. `archive_status` reports total messages and the history, date-range,
 and roster coverage for the selected conversations.
 
-`export_chats` writes a `.txt` file by default or `.jsonl` when requested. Multiple chats become a
-ZIP unless `combine=true`. You can apply inclusive date bounds and a latest-message limit per chat.
-The result contains a local path; use the MCP client's local file-reading capability to inspect it.
-Exporting fetches the selected remote history first and can take time for a large selection.
+`export_chats` writes `.txt` by default or `.jsonl` when requested. Set `include_attachments=false`
+to omit linked files. A single conversation with selected attachments returns a ZIP containing a
+folder with the text export and files; without selected attachments it returns the plain text/JSONL
+file. Multiple conversations always return an outer ZIP of each conversation's artifact, so chats
+with attachments have an inner ZIP and chats without them have a plain file. Apply inclusive date
+bounds and a latest-
+message limit per chat. The result contains a local path; use the MCP client's local file-reading
+capability to inspect it. Exporting fetches the selected remote history first and can take time for a
+large selection.
 
 `download_attachment` saves a file linked from a message already in the archive. Pass `name` when
 the message has multiple downloadable files. Downloads stream to an exclusive local file and have
