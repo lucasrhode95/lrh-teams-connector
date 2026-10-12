@@ -16,8 +16,8 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 import httpx
+from m365_auth import AccessToken, CacheStatus, ProfileStatus
 
-from teams_connector.auth.tokens import AccessToken, CacheStatus, ProfileStatus
 from tests.fakes.msal_fakes import TENANT, USER_OID, jwt
 
 CHAT_SERVICE = "https://emea.ng.msg.teams.microsoft.com"
@@ -353,15 +353,27 @@ def _share_key(name: str) -> str:
 class FakeTokens:
     """Token provider stand-in: every profile yields a token for the synthetic account."""
 
+    def __init__(self) -> None:
+        self.object_id = ME
+
     def get_token(self, profile: str, **_: object) -> AccessToken:
-        claims = {"tid": TENANT, "oid": ME, "upn": "mia@example.com", "name": ME_NAME, "aud": profile}
+        claims = {
+            "tid": TENANT,
+            "oid": self.object_id,
+            "upn": "mia@example.com",
+            "name": ME_NAME,
+            "aud": profile,
+        }
         return AccessToken(profile=profile, value=jwt(claims), source="cache", expires_on=None)
 
-    def sign_in_command(self, profile: str = "teams") -> str:
+    def sign_in_command(self, profile: str = "teams.spaces") -> str:
         return "teams-connector auth"
 
     def status(self) -> CacheStatus:
-        rows = tuple(ProfileStatus(p, "c", (), p, True, None) for p in ("teams", "csa", "graph"))
+        rows = tuple(
+            ProfileStatus(profile, "c", (), profile, True, None)
+            for profile in ("outlook.graph", "outlook.api", "teams.spaces", "teams.csa", "teams.graph")
+        )
         return CacheStatus("encrypted", Path("x"), True, (), rows)
 
 

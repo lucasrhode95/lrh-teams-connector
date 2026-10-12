@@ -10,13 +10,11 @@ import contextlib
 import json
 import sys
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+
+from m365_auth import AccessToken, AuthenticationRequired, CacheStatus, TokenProvider
 
 from teams_connector import config
-from teams_connector.domain.errors import AuthenticationRequired, ConnectorError
-
-if TYPE_CHECKING:
-    from teams_connector.auth.tokens import AccessToken, CacheStatus, TokenProvider
+from teams_connector.domain.errors import ConnectorError
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -41,8 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     auth = sub.add_parser("auth", help="Sign in with a device code (the only command that ever prompts).")
-    auth.add_argument("--force", action="store_true", help="Sign in again even if a silent token works.")
-    auth.add_argument("--sign-out", action="store_true", help="Delete the token cache.")
+    auth.add_argument("--sign-out", action="store_true", help="Sign out of the shared Microsoft account.")
     _add_unsecure(auth)
 
     status = sub.add_parser("status", help="Show the signed-in account and profiles (offline by default).")
@@ -72,7 +69,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _add_unsecure(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--unsecure", action="store_true", help="Development only: use a separate PLAINTEXT token cache."
+        "--unsecure",
+        action="store_true",
+        help="Development only: use a separate PLAINTEXT shared-auth cache.",
     )
 
 
@@ -80,8 +79,8 @@ def main(argv: list[str] | None = None, *, provider_factory: type[TokenProvider]
     args = build_parser().parse_args(argv)
     if args.unsecure:
         print(
-            "WARNING: --unsecure stores reusable Microsoft tokens as PLAINTEXT at "
-            f"{config.token_cache_path(unsecure=True)}. Do not share it; delete it when done.",
+            "WARNING: --unsecure stores reusable Microsoft tokens in a separate PLAINTEXT shared-auth cache. "
+            "Do not share it; delete it when done.",
             file=sys.stderr,
         )
     if args.command == "mcp":
@@ -106,8 +105,8 @@ def main(argv: list[str] | None = None, *, provider_factory: type[TokenProvider]
         return EXIT_OK
     try:
         if provider_factory is None:
-            from teams_connector.auth.tokens import TokenProvider as provider_factory
-        provider = provider_factory(unsecure=args.unsecure)
+            provider_factory = TokenProvider
+        provider = provider_factory(unsecure=args.unsecure, login_command=f"{config.CLI_NAME} auth")
         if args.command == "auth":
             return _auth(provider, args)
         if args.command == "backup":
@@ -129,27 +128,18 @@ def _auth(provider: TokenProvider, args: argparse.Namespace) -> int:
         existed = provider.sign_out()
         print("Signed out: token cache deleted." if existed else "No token cache to delete.")
         return EXIT_OK
-    first = config.SIGN_IN_PROFILE
-    signed_in = False
-    if not args.force:
-        try:
-            provider.get_token(first)
-            signed_in = True
-        except AuthenticationRequired:
-            pass
-    if not signed_in:
-        print("Signing in to Microsoft Teams.")
-        provider.sign_in(first, show=lambda message: print(f"\n{message}\n", flush=True))
-    # One sign-in normally serves every profile (same client); prompt again only if a profile needs it.
-    for name in config.PROFILES:
-        try:
-            token = provider.get_token(name)
-        except AuthenticationRequired:
-            print(f"'{name}' needs its own consent: {config.PROFILES[name].purpose}.")
-            token = provider.sign_in(name, show=lambda message: print(f"\n{message}\n", flush=True))
-        _print_token_summary(name, token)
-    print("Signed in. MCP and the UI will use this sign-in silently.")
-    return EXIT_OK
+    results = provider.bootstrap(show=lambda message: print(f"\n{message}\n", flush=True))
+    for result in results:
+        purpose = provider.profiles[result.profile].purpose
+        if result.ready and result.token is not None:
+            print(f"[{result.profile}] Ready: {purpose}.")
+            _print_token_summary(result.profile, result.token)
+        else:
+            print(f"[{result.profile}] Not ready: {purpose}. {result.error}", file=sys.stderr)
+    if all(result.ready for result in results):
+        return EXIT_OK
+    first_error = next((result.error for result in results if result.error is not None), None)
+    return EXIT_AUTH_REQUIRED if isinstance(first_error, AuthenticationRequired) else EXIT_ERROR
 
 
 def _backup(provider: TokenProvider, args: argparse.Namespace) -> int:
@@ -171,7 +161,7 @@ def _status(provider: TokenProvider, args: argparse.Namespace) -> int:
     status = provider.status()
     checks: dict[str, dict[str, object]] = {}
     if args.check:
-        for name in config.PROFILES:
+        for name in provider.profile_names:
             try:
                 checks[name] = {"ok": True, **_token_facts(provider.get_token(name))}
             except ConnectorError as exc:

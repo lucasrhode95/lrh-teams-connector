@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import zipfile
 from datetime import UTC, datetime
@@ -10,6 +11,8 @@ import pytest
 from teams_connector.bootstrap import Services
 from teams_connector.domain.errors import InvalidRequest, NotFound, WriteOutcomeUnknown
 from teams_connector.domain.models import ExportProgress, ExportRequest
+from teams_connector.service import localfiles
+from teams_connector.service.export import packaging
 from tests.fakes.teams_fake import FakeTeams, cs_message
 
 ONE = "19:one@unq.gbl.spaces"
@@ -101,3 +104,40 @@ async def test_download_attachment_of_an_archived_message(services: Services) ->
     assert Path(saved.path).read_bytes() == b"shared notes" and saved.name == "notes.txt"
     with pytest.raises(NotFound):
         await services.files.download_attachment(ONE, "1001")
+
+
+async def test_cancelled_export_during_fetch_publishes_no_file(
+    services: Services, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entered = asyncio.Event()
+    export_dir = tmp_path / "exports"
+    monkeypatch.setattr(localfiles, "kept_dir", lambda _: export_dir)
+
+    async def wait_for_cancel(*_: object, **__: object) -> None:
+        entered.set()
+        await asyncio.Future()
+
+    monkeypatch.setattr(services.history, "fetch_range", wait_for_cancel)
+    task = asyncio.create_task(services.exports.export(ExportRequest(conversation_ids=[ONE])))
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not export_dir.exists()
+
+
+def test_failed_zip_packaging_removes_the_partial_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_paths = [tmp_path / "first.txt", tmp_path / "second.txt"]
+    for path in source_paths:
+        path.write_text("synthetic", encoding="utf-8")
+    monkeypatch.setattr(packaging.localfiles, "kept_dir", lambda _: tmp_path)
+
+    def fail_to_open_zip(*_: object, **__: object) -> None:
+        raise OSError("synthetic archive failure")
+
+    monkeypatch.setattr(packaging.zipfile, "ZipFile", fail_to_open_zip)
+    with pytest.raises(OSError, match="synthetic archive failure"):
+        packaging.package(source_paths, zip_name="synthetic.zip")
+    assert not list(tmp_path.glob("synthetic*.zip"))

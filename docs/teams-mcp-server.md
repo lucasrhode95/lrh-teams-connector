@@ -1,130 +1,230 @@
 # Teams MCP server
 
-This repository provides a client-independent MCP server over standard input/output (`stdio`). MCP clients launch the process when they connect, so no always-on HTTP listener is needed. The MCP server and the existing local export page share `TeamsService` and `TeamsConnector`; formatting and retrieval behavior therefore stay in application code instead of being duplicated in either interface. Read tools do not change Teams state; the `send_message` tool is the only write operation. See the [project architecture guide](project-architecture.md) for the module map and local export workflow.
+`teams-connector mcp` runs a local MCP server over standard input/output. The client starts it when
+needed; it is not an HTTP service. The MCP and web surfaces use the same service layer and archive.
 
 ## Install and sign in
 
-From the repository root, install the Python dependencies:
+The project requires Python 3.12 or later and [uv](https://docs.astral.sh/uv/). Its shared auth
+dependency is a private GitHub repository pinned to an immutable commit, so the developer or user
+installing the connector needs GitHub SSH access to `lrh-m365-auth`.
+
+From the connector root:
 
 ```powershell
-python -m pip install -r requirements.txt
+uv sync --locked
+uv run teams-connector auth
+uv run teams-connector status
 ```
 
-Complete Microsoft sign-in separately:
+The explicit `auth` command bootstraps the shared profile set for Outlook, Teams, and SharePoint.
+It silently reuses accepted credentials and requests Microsoft's device-code approval only for
+profiles that still need it. Microsoft controls the password and MFA flow. Normal MCP startup and
+tool calls never prompt for sign-in.
+
+All three connectors use one encrypted MSAL cache for the active Microsoft account. By default it
+lives under the current user's `~/.lrh-m365-auth`; set `M365_AUTH_HOME` before the process starts to
+change the shared location. To change accounts, run:
 
 ```powershell
-python -m teams_exporter auth
+uv run teams-connector auth --sign-out
+uv run teams-connector auth
 ```
 
-Microsoft handles the password and verification pages. The application uses the resulting app-owned token cache. MCP startup and tool calls only attempt silent authentication; when the cache needs attention, the client receives an authentication-needed error. Run the sign-in command above, then reconnect to the MCP server.
+Sign-out applies across Outlook, Teams, and SharePoint. Already-running connector processes discard
+their remembered tokens on the next acquisition. Encrypted storage is required by default. The
+explicit `--unsecure` option selects a separate plaintext development cache and must not be used for
+normal MCP connections.
 
-The shared connector uses MSAL's silent acquisition for both Teams audiences. MSAL returns a still-valid cached access token or silently refreshes an expired one with the cached refresh token. Only explicit Microsoft credential rejection or access denial prompts for `python -m teams_exporter auth`; exhausted network retries report connectivity/service failure without blaming the credentials. Cache reads, refreshes and writes share an inter-process lock, and refreshed cache writes use an atomic replacement. No token, cookie or authorization header is returned or logged.
-
-On Windows, the encrypted cache path is the absolute `%LOCALAPPDATA%\lrh-teams-connector\.teams_token_cache.json`, regardless of the process working directory. It uses the OS encryption provider (DPAPI on Windows). The application does not import or migrate older plaintext token files; run the sign-in command if the current encrypted cache has no accepted session.
-
-For a direct development probe, opt in to a separate plaintext cache with `python -m teams_exporter auth --unsecure`, then run the probe using `TeamsConnector(unsecure=True)`. To run the MCP server or local UI against that cache, pass `--unsecure` to its startup command. The file is `.local/teams-msal-debug-cache.json`, which is Git-ignored. It contains reusable access and refresh tokens in plaintext: do not share or commit it, and delete it when development is finished. Secure encrypted storage remains the default.
-
-The archive is persistent across MCP and UI restarts. By default it lives under `%LOCALAPPDATA%\lrh-teams-connector` on Windows and `~/.local/share/lrh-teams-connector` on other platforms. The filename includes a short SHA-256 fingerprint derived from the Teams tenant and user IDs. The database stores that fingerprint for ownership checks; it does not store the account name, tokens, cookies, or authorization headers. Messages are retained indefinitely after they have been fetched; there is no expiry or automatic purge.
-
-When `TEAMS_SEARCH_INDEX_PATH` points to a new file, the first signed-in account uses that path. If the file is already marked for another account, the existing file is preserved and the other account receives a separate account-specific file. Older indexes without ownership metadata are also preserved and reported as unverified; the application does not assume whose messages they contain. The local UI and MCP tool results include a warning when this happens.
-
-Create a consistent backup while the app is running with:
+`status` displays local cache and per-profile status without network requests. `status --check`
+attempts token acquisition for every profile. A successful check proves that a token was acquired;
+it does not prove access to all Teams endpoints, chats, channels, or files. For example:
 
 ```powershell
-python -m teams_exporter backup C:\Backups\teams-archive.sqlite3
+uv run teams-connector status --check --json
 ```
-
-The backup uses SQLite's online backup API, so it includes committed data even while the archive is open. Copy that `.sqlite3` file to the other machine, then point `TEAMS_SEARCH_INDEX_PATH` at it before starting the app. The same Teams account fingerprint will allow it to open the archive; a different account will get a separate file while the copied backup stays intact. Add `--overwrite` only when you intend to replace an existing backup destination. Database files and common SQLite sidecars are Git-ignored.
-
-## Laptop follow-through
-
-The live read-only smoke test succeeded with the existing cached Microsoft session. If that cache expires, run the separate sign-in command above on the laptop and complete Microsoft's device-code flow. Then add the stdio configuration for the MCP client you want to use, pointing it at this repository's `.venv` Python executable.
-
-The SQLite archive can support long retention after a full backfill, but this repository does not yet install a recurring sync schedule or provide a standalone scheduled-sync command. Reaching the 1+ year goal will need an initial backfill and a recurring run configured on the laptop; the desired cadence and Windows Task Scheduler setup can be decided then.
-
-## Tools
-
-The MCP input and output schemas are typed. Message and export responses are bounded and provide continuation details. All tools except `send_message` are read-only.
-
-- `list_chats`: page through the live chat catalog, ordered by activity. Its
-  `coverage` object identifies the source and scope, CSA's reported partial
-  state, raw-feed counts, excluded non-chat/unclassified rows, and unresolved
-  fallback names. `catalog_complete` applies only to `catalog_scope`; it is not
-  a guarantee that every hidden or tenant-specific Teams object is exposed.
-- `search_chats`: find chats by participant-name substring in locally indexed rosters. Use `sync_search_index` first; coverage reports missing rosters and unresolved names.
-- `get_messages`: fetch and archive one page for a conversation ID with optional inclusive timestamp bounds, then return the corresponding merged archive page. `max_response_chars` bounds the serialized result; individual `content_truncated` bodies include `content_next_offset` and can be continued with `get_message_content`. Coverage includes remote/archive composition and `retry_count_this_call`; follow `next_cursor` for older messages.
-- `get_message_content`: read a bounded character segment of a message already in SQLite. Continue with the returned `next_offset` until it is null. Soft-deleted messages are represented as `[Message deleted]`; retained pre-deletion text is not returned as current content.
-- `search_messages`: search one or more explicit conversation IDs, or `all_catalog=true`, across a required inclusive `since`/`until` range. The service fetches and upserts every remote page in that scope before returning hits, then matches against the merged local SQLite records. Modes are normalized full-body `exact`, literal `substring`, and `all_terms`; text uses Unicode NFKC and case folding, with accents remaining significant. SQL wildcard characters are escaped. `max_matches` is a client-controlled total cap (default 1,000, with no application upper bound); `results_truncated` reports when more matches existed than the chosen cap. The smaller `result_limit` only controls one response page. Follow `next_cursor` during bounded fetch preparation and then through results. Preparation responses contain no hits until all requested chats/ranges were scanned; `coverage.chat_coverage` lists each chat, bounds, pages, and any failure. Teams' native search route is not verified or used.
-- `export_chat`: create or resume a bounded, restart-safe export job. Repeat the call with `export_id` and the exact `next_call_arguments` until `status=complete`. `message_limit` selects the latest matching messages from the merged archive and bounds remote fetching to that many distinct qualifying message IDs. For limited exports, coverage reports `remote_messages_retrieved_total`, whether the remote limit was reached, pages fetched, and raw items scanned. For unbounded exports, `remote_messages_retrieved_total` is null; per-job message-ID tracking is unnecessary. Full-history archive/search synchronization remains a separate operation. The completed result includes an actual MCP `resource_link`, export ID, MIME type, size, message count and remote/archive coverage. Completed snapshots are stored next to the SQLite file under a `.exports` directory; the indefinite message archive remains the source of retained history.
-- `read_export`: read a bounded UTF-8-safe section of the same completed snapshot inline. Continue with `next_offset_bytes` until `complete=true`.
-- `sync_search_index`: fetch bounded history and participant rosters into the persistent local archive. Calls continue saved history links and rotate fairly across chats. Completed histories refresh their newest page while preserving older messages. Each chat result reports `message_retries_this_call`.
-- `get_search_index_status`: inspect per-chat history and roster progress and requested-range coverage.
-- `send_message`: send plain text to an existing chat ID. The tool verifies the live chat ID and expected chat name before making one POST attempt. Its required `user_confirmation` argument records the user's authorization for the recipient and content.
-
-The send tool can target only conversations present in the live API catalog. A row shown in the Teams interface without a stable ID in that catalog cannot be selected by this tool.
-
-### Sending safety
-
-`send_message` creates an external side effect. An MCP client or agent must call it only when the user explicitly authorized sending that content to that chat, either in the current request or after the agent asked and received a clear yes. If authorization is absent or ambiguous, ask the user and wait. The required `user_confirmation` value is an audit assertion; filling it in does not grant permission. For a scheduled task, the task instructions themselves must explicitly authorize the destination and sending scope. Authorization for one test or one message does not grant ongoing permission. Searching, summarizing, exporting, or finding a pending task never implies permission to send. The server does not log or store the confirmation text, and does not forward it to Microsoft. The MCP client may handle tool arguments according to its own logging policy.
-
-The message request is attempted once and is not retried automatically. If a connection error occurs after Teams may have accepted the request, verify the chat before trying again to avoid duplicates. Message content is plain text and HTML-escaped before it is sent.
-
-The service does not use a verified server-side message search route. `search_messages` first scans and archives the explicit remote chat/date scope, so a complete result means that scope was fetched successfully and searched together with older local-only messages. It does not mean every chat or every lifetime message was included unless that scope explicitly requested them. If preparation is incomplete, continue with its cursor; the coverage lists the exact chats and dates searched so far. Participant search still depends on the rosters successfully indexed.
-
-The `export_chat` result's resource URI follows `teams-export://exports/{export_id}/parts/{offset_bytes}`. Read it with standard MCP `resources/read`; its JSON payload contains one bounded section of `content`, a `next_resource_uri` when more bytes remain, and the completion/size fields. The `read_export` tool exposes the same sections as structured tool results. Each section begins and ends on a UTF-8 boundary, so concatenating returned content reconstructs the exact export. Resource support varies across MCP clients; use the inline tool if needed.
-
-Message timestamps returned through MCP are normalized to UTC. The local page formats chat activity times in the browser's local timezone; text export timestamps are UTC.
-
-Read-only GET/HEAD requests retry transient HTTP 408, 429, selected 5xx responses, and transport failures up to four total attempts per request. Retry-After and exponential delays are capped. A new request/page receives a fresh retry budget; write requests are never retried. The MCP retry fields count additional attempts for the current page request or per-chat sync call.
-
-The local page runs exports as background jobs and reports the current chat, phase, pages, messages, and retries. Cancellation is checked between pages, during retry delays, while formatting, and while combining files. It cannot abort a network read already in progress; the request completes or reaches its 30-second timeout before cancellation is observed. Export message bodies are spooled to disk and the final file is published only after successful completion. A normal export does not yet have a durable resume checkpoint after a process restart or exhausted retry budget; index-sync pages have their own persisted progress.
 
 ## Configure an MCP client
 
-Replace `<repo>` with the absolute repository path and use the Python executable where the dependencies were installed. On Windows, paths in TOML strings need doubled backslashes.
+Use an absolute path to the repository. `uv run --directory` locates the locked environment even
+when the MCP client starts from another folder.
 
-### Codex
+### Codex CLI
 
-Add this to `~/.codex/config.toml`:
-
-```toml
-[mcp_servers.lrh-teams]
-command = "C:\\path\\to\\lrh-teams-connector\\.venv\\Scripts\\python.exe"
-args = ["-m", "teams_exporter.mcp_server"]
-cwd = "C:\\path\\to\\lrh-teams-connector"
+```powershell
+codex mcp add lrh-teams-connector -- uv run --directory C:\path\to\lrh-teams-connector teams-connector mcp
 ```
 
 ### Claude Code
 
-Create or update the project-root `.mcp.json`:
+```powershell
+claude mcp add --transport stdio lrh-teams-connector -- uv run --directory C:\path\to\lrh-teams-connector teams-connector mcp
+```
+
+### VS Code
+
+Add this entry to `.vscode/mcp.json`:
 
 ```json
 {
-  "mcpServers": {
-    "lrh-teams": {
+  "servers": {
+    "lrh-teams-connector": {
       "type": "stdio",
-      "command": "C:\\path\\to\\lrh-teams-connector\\.venv\\Scripts\\python.exe",
-      "args": ["-m", "teams_exporter.mcp_server"]
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "C:\\path\\to\\lrh-teams-connector",
+        "teams-connector",
+        "mcp"
+      ]
     }
   }
 }
 ```
 
-Open the project from its repository root so Python can import `teams_exporter`. These examples use the same stdio command and do not depend on an agent skill.
+Replace the sample path with the clone's absolute path. Escape Windows backslashes in JSON and
+TOML. These instructions are for local clients that can run a process; the connector has no remote
+MCP endpoint.
 
-## Suggested use
+## Tools and workflow
 
-1. Run the one-time sign-in command if the cached Microsoft session is missing or expired.
-2. Call `list_chats` to find a stable conversation ID.
-3. Call `search_messages` with the exact chat scope and date interval when looking for text; it fetches and archives that requested range before searching.
-4. Use `sync_search_index` for a broader manual prefetch or to populate participant rosters for `search_chats`. It resumes saved history links and rotates fairly across chats.
-5. Check `get_search_index_status` for manual-sync/participant coverage. For on-demand text search, use that call's own per-chat range coverage.
+### Find conversations and read messages
 
-The local archive can retain messages after Teams stops exposing them, provided they were fetched before then. On-demand exports and searches lazily keep the ranges they retrieve; no expiry or recurring job is configured. If a retention policy requires capturing messages before Teams removes them, an external schedule would be needed. The database is not application-encrypted, so storage and deletion must follow the organization's policy.
+1. Call `list_chats` to browse current chats and channels. It returns up to 50 items by default,
+   supports `limit` up to 200 and opaque continuation `cursor`, and can filter by `kind`. A cached
+   catalog up to ten minutes old may answer unless `refresh=true`. `coverage.source` identifies
+   whether the response used the local catalog or a refresh.
+2. Use `search_chats` to match a conversation name or participant name. Participant names are
+   available only after rosters have been indexed by `sync_archive`; read roster coverage.
+3. Call `get_messages` with the selected `conversation_id`. Pages are newest first; records within
+   each page are oldest first. `since` and `until` are inclusive. `message_limit` caps the latest
+   matching messages, while `page_size` controls the returned page. Follow `cursor` to get older
+   messages. If a message body has `text_truncated=true`, call `get_message_content` with its ID and
+   the indicated continuation offset.
+
+Example arguments for a bounded history read:
+
+```json
+{
+  "conversation_id": "19:sample@thread.v2",
+  "since": "2026-08-01T00:00:00Z",
+  "until": "2026-08-31T23:59:59Z",
+  "page_size": 25,
+  "message_limit": 100
+}
+```
+
+### Search message text
+
+`search_messages` currently performs local matching. Choose exactly one scope: a list of
+`conversation_ids` or `all_chats=true`, and provide both `since` and `until`. Each call fetches a
+bounded number of remote pages into the archive before matching. If `coverage.preparation_complete`
+is false, repeat with the returned `cursor`. The response distinguishes incomplete retrieval from
+an empty match set and reports date coverage per conversation.
+
+The modes are `exact`, `substring` (the default), and `all_terms`. Matching is case-insensitive,
+accents remain significant, and SQL wildcard characters in a query are literal. Local archive
+messages remain searchable after the remote service no longer returns them. This tool is not the
+Teams Web global-search endpoint and does not return a page number or a jump-to-message handle.
+
+Example search across one explicitly selected conversation and month:
+
+```json
+{
+  "query": "budget review",
+  "since": "2026-08-01T00:00:00Z",
+  "until": "2026-08-31T23:59:59Z",
+  "conversation_ids": ["19:sample@thread.v2"],
+  "match_mode": "substring",
+  "limit": 20,
+  "max_pages": 10
+}
+```
+
+### Sync, archive status, and exports
+
+`sync_archive` explicitly fetches history and optional participant rosters in bounded resumable
+batches. It does not run in the background. Repeated calls rotate fairly across chats and resume
+each chat's saved continuation. `archive_status` reports total messages and the history, date-range,
+and roster coverage for the selected conversations.
+
+`export_chats` writes a `.txt` file by default or `.jsonl` when requested. Multiple chats become a
+ZIP unless `combine=true`. You can apply inclusive date bounds and a latest-message limit per chat.
+The result contains a local path; use the MCP client's local file-reading capability to inspect it.
+Exporting fetches the selected remote history first and can take time for a large selection.
+
+`download_attachment` saves a file linked from a message already in the archive. Pass `name` when
+the message has multiple downloadable files. Downloads stream to an exclusive local file and have
+a size bound; the tool returns the saved path. General OneDrive and SharePoint discovery belongs to
+the SharePoint connector. Email attachments belong to Outlook.
+
+### Send a message
+
+`send_message` is the only Teams write tool. The user must explicitly authorize both the recipient
+and exact message content. Pass the current conversation name from `list_chats` as
+`expected_chat_name`; the service checks it before sending. HTML characters are escaped and the
+message is attempted once. A network failure after the request may leave the result uncertain, so
+inspect the conversation before deciding whether another send is needed. A search result or request
+to analyze a conversation does not authorize a send.
+
+## Local files, logs, and backup
+
+The default Teams data directory is `%LOCALAPPDATA%\lrh-teams-connector` on Windows and
+`~/.local/share/lrh-teams-connector` on other platforms. Set `TEAMS_CONNECTOR_HOME` to choose another
+data directory. The archive is stored under `accounts/<fingerprint>/teams.sqlite3`; separate
+accounts do not share a database. Owner metadata is checked whenever the store opens. No tokens or
+authorization headers are stored in the archive.
+
+The archive is not encrypted by the connector. It retains the messages the user has fetched until
+the archive is removed. Generated exports and downloaded files are under `exports/` and `downloads/`
+and are cleaned up after seven days when those directories are next used. Backup while the app is
+running with SQLite's online backup API:
+
+```powershell
+uv run teams-connector backup C:\Backups\teams-archive.sqlite3
+```
+
+The command refuses to overwrite an existing destination unless `--overwrite` is supplied. A
+backup keeps its account binding and must be opened with the same signed-in account.
+
+The MCP process logs to a per-process daily-rotated file, keeping stdout for protocol traffic. Log
+files are under the Teams data directory's `logs/` folder. UI logs also go to stdout. Operational
+records include timing, status, and counts, not message bodies, search text, chat names, IDs, tokens,
+or authorization headers. Set `TEAMS_CONNECTOR_LOG_LEVEL=DEBUG` to enable safe request and paging
+diagnostics.
+
+## Troubleshooting
+
+- **`uv sync` cannot fetch the shared auth dependency:** verify GitHub SSH access to the private
+  `lrh-m365-auth` repository and rerun `uv sync --locked`.
+- **MCP reports authentication required:** run the explicit `teams-connector auth` command, finish
+  Microsoft's device-code and MFA flow, then reconnect the MCP process.
+- **A status profile is missing:** run the explicit `auth` command to bootstrap all shared profiles.
+  Microsoft may ask for a separate approval for another client or audience.
+- **A request returns access denied:** the token can be valid while access to a specific resource or
+  operation is denied. Use the error and coverage result; do not treat cache presence as service
+  authorization.
+- **The archive reports a different account:** preserve it and sign in as its owner, or choose a
+  separate `TEAMS_CONNECTOR_HOME` directory.
+- **The UI cannot use its preferred port:** it selects another free loopback port and prints the
+  URL when it starts.
+
+## Checks
+
+```powershell
+uv run ruff check .
+uv run ruff format --check .
+uv run pyright
+uv run pytest
+```
+
+All tests use synthetic accounts and fake HTTP transports; they do not use private browser captures
+or real message content.
 
 ## References
 
-- [Model Context Protocol Python SDK: tools](https://github.com/modelcontextprotocol/python-sdk/blob/main/docs/servers/tools.md)
-- [Model Context Protocol Python SDK: structured output](https://github.com/modelcontextprotocol/python-sdk/blob/main/docs/servers/structured-output.md)
-- [Codex MCP connections](https://developers.openai.com/api/docs/guides/agents-api/tools/mcp)
-- [Claude Code MCP configuration](https://docs.anthropic.com/en/docs/claude-code/mcp)
+- [Project architecture](project-architecture.md)
+- [Teams API research](teams-api-research.md)
+- [Product roadmap](teams-connector-roadmap.md)
+- [MCP specification](https://modelcontextprotocol.io/specification/2025-06-18/server/tools)

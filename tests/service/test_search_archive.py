@@ -81,6 +81,17 @@ async def test_search_requires_a_range_and_one_scope(services: Services) -> None
         )
 
 
+async def test_search_cursor_rejects_a_different_query(services: Services) -> None:
+    first = await services.search.search_messages(
+        "e", since=SINCE, until=UNTIL, conversation_ids=[ONE], limit=1
+    )
+    assert first.cursor
+    with pytest.raises(InvalidRequest, match="query does not match"):
+        await services.search.search_messages(
+            "another query", since=SINCE, until=UNTIL, conversation_ids=[ONE], cursor=first.cursor
+        )
+
+
 async def test_unreachable_chat_is_reported_not_fatal(services: Services) -> None:
     result = await services.search.search_messages(
         "hello", since=SINCE, until=UNTIL, conversation_ids=["19:gone@thread.v2", ONE]

@@ -47,7 +47,7 @@ A local, single-user Microsoft Teams connector with an MCP server and a user-ope
 - MCP behavior: `docs/teams-mcp-server.md`
 - Work register: `docs/teams-connector-roadmap.md`
 
-The connector uses application-owned Microsoft sign-in and an encrypted MSAL token cache by default. Microsoft handles the user's password and verification. MCP uses stdio; the local UI binds to loopback. Teams reads may use Microsoft Graph and documented-in-research Teams service routes. Treat reverse-engineered routes as private and undocumented, verify them feature by feature, and do not describe them as a stable public API.
+The Outlook, Teams, and SharePoint connectors use application-owned Microsoft sign-in through the private `lrh-m365-auth` package and one encrypted cross-process MSAL cache by default. Microsoft handles the user's password and verification. One active account is shared across the connectors; account switching requires explicit shared sign-out and sign-in. MCP uses stdio; the local UI binds to loopback. Teams reads may use Microsoft Graph and documented-in-research Teams service routes. Treat reverse-engineered routes as private and undocumented, verify them feature by feature, and do not describe them as a stable public API.
 
 ## Checks
 
@@ -84,8 +84,8 @@ explicit private config file rather than embedding fallback settings in code.
 
 - Sending a Teams message is the only write path. Require explicit authorization for both destination and content. Send once; do not retry automatically after an uncertain result.
 - Keep logs limited to operational timings, statuses, and counts. Do not log message bodies, search terms, chat names, identifiers, tokens, or authorization headers. Keep MCP protocol stdout free of diagnostics.
-- Normal UI, MCP, and sign-in use encrypted MSAL storage. Do not fall back to plaintext if encrypted storage is unavailable.
-- A user-requested local development probe may explicitly use `TeamsConnector(unsecure=True)` and `connector.login(interactive=False)` to select the separate development cache. Its `.local/teams-msal-debug-cache.json` file contains reusable tokens. Never print, copy into logs, commit, or share it; delete it when development is finished. Do not enable plaintext mode implicitly.
+- Normal UI, MCP, and sign-in use the shared encrypted cache provided by `lrh-m365-auth`. Do not fall back to plaintext if encrypted storage is unavailable.
+- For an explicitly authorized local development probe only, pass `--unsecure` to a supported `teams-connector` command and set `M365_AUTH_HOME` to an isolated local path. This selects a separate plaintext cache containing reusable tokens. Never print it, copy it into logs, commit it, or share it; remove it when the probe is complete. Do not enable plaintext mode implicitly.
 - Use the project's `.venv` for direct probes when available. If an authorized read-only probe fails with a network `ConnectionError` in the sandbox, retry only that same probe through the approved network-access path; do not change authentication routes.
 - Do not access live Teams data unless the user requested or authorized that probe.
 

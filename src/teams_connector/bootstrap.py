@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
+from m365_auth import Account, AccountBoundTokenSource, AuthenticationRequired, TokenProvider
 
-from teams_connector.auth.tokens import Account, TokenProvider
-from teams_connector.domain.errors import AuthenticationRequired
+from teams_connector import config
 from teams_connector.domain.models import Participant
 from teams_connector.remote.chat_service import ChatService
 from teams_connector.remote.csa import CsaCatalog
@@ -54,39 +55,48 @@ class AppContext:
         tokens: TokenProvider | None = None,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
-        self.tokens = tokens or TokenProvider(unsecure=unsecure)
+        self.tokens = tokens or TokenProvider(unsecure=unsecure, login_command=f"{config.CLI_NAME} auth")
         self._http_client = http_client
         self._transport: Transport | None = None
         self._services: Services | None = None
         self._lock = asyncio.Lock()
 
     async def services(self) -> Services:
-        if self._services is None:
-            async with self._lock:  # concurrent first requests (UI) build the services once
-                if self._services is None:
-                    self._services = await self._build()
+        account, claims = self._current_identity()
+        if self._services is not None and self._services.account.fingerprint == account.fingerprint:
+            return self._services
+        async with self._lock:
+            account, claims = self._current_identity()
+            if self._services is None or self._services.account.fingerprint != account.fingerprint:
+                self._services = await self._build(account, claims)
         return self._services
 
-    async def _build(self) -> Services:
-        claims = self.tokens.get_token("teams").claims()
+    def _current_identity(self) -> tuple[Account, dict[str, Any]]:
+        claims = self.tokens.get_token("teams.spaces").claims()
         if not claims.get("tid") or not claims.get("oid"):
             raise AuthenticationRequired(
                 "The Teams token carries no account identity.", command=self.tokens.sign_in_command()
             )
         account = Account(
-            tenant_id=claims["tid"],
+            tenant_id=str(claims["tid"]),
             object_id=str(claims["oid"]).lower(),
             username=claims.get("upn") or claims.get("preferred_username") or claims.get("unique_name"),
         )
+        return account, claims
+
+    async def _build(self, account: Account, claims: dict[str, Any]) -> Services:
         name = claims.get("name") if isinstance(claims.get("name"), str) else account.username
         me = Me(user_id=account.object_id, name=name)
-        transport = self._transport = Transport(client=self._http_client)
-        graph = Graph(transport, Bearer(self.tokens, "graph"))
-        session = TeamsSession(transport, self.tokens)
+        account_tokens = AccountBoundTokenSource(self.tokens, account)
+        if self._transport is None:
+            self._transport = Transport(client=self._http_client)
+        transport = self._transport
+        graph = Graph(transport, Bearer(account_tokens, "teams.graph"))
+        session = TeamsSession(transport, account_tokens)
         people = GraphPeople(graph)
         channels = GraphChannels(graph)
         chat_service = ChatService(transport, session, people)
-        catalog_source = CsaCatalog(transport, session, self.tokens, people, chat_service, me)
+        catalog_source = CsaCatalog(transport, session, account_tokens, people, chat_service, me)
 
         store = Store(store_path(account.fingerprint), account.fingerprint)
         catalog = Catalog(store, catalog_source, channels, chat_service)

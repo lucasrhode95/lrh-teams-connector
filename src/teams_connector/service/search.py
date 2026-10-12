@@ -55,6 +55,8 @@ class Search:
     ) -> SearchResult:
         if cursor:
             s = cursors.decode(cursor, "search_messages")
+            if query and query.strip() != s.get("query"):
+                raise InvalidRequest("The query does not match this search cursor; start the search again.")
             query, mode, limit, max_matches = s["query"], s["mode"], s["limit"], s["max_matches"]
             since, until = from_iso(s["since"]), from_iso(s["until"])
             chat_ids = await self._scope(s["ids"], s["all"], s["scope_hash"])

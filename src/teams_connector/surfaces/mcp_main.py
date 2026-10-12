@@ -113,7 +113,7 @@ def _logged[**P, R](function: Callable[P, Awaitable[R]]) -> Callable[P, Awaitabl
 
 
 def build_server(context: AppContext) -> FastMCP:
-    mcp = FastMCP("lrh-teams", instructions=INSTRUCTIONS, log_level="WARNING")
+    mcp = FastMCP("lrh-teams-connector", instructions=INSTRUCTIONS, log_level="WARNING")
 
     async def services() -> Services:
         return await context.services()
