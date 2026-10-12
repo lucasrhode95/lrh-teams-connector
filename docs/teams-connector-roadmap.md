@@ -23,9 +23,12 @@ recordings, transcripts, recap, and meeting notes. Verified identifiers connect 
 general OneDrive/SharePoint file discovery belongs to the planned SharePoint connector. Calendar
 and meeting-resource ownership does not depend on which product hosted a shared search endpoint.
 
-**Standalone search update:** [Outlook research §3.14](https://github.com/lucasrhode95/lrh-outlook-connector/blob/3c71bb1f3b517a4b28d6aa752b1ee4e9fc8b494e/docs/outlook-api-research.md#314-owa-search-v2-calendar-and-teams-message-replay-2026-10-10)
-records successful app-owned OWA-host Search v2 Message/Teams requests with pagination. One known
-chat's result identities matched; a second target's identity bridge remains unresolved. The current
+**Standalone search update:** The pinned evidence is in repository `lrh-outlook-connector`, file
+`docs/outlook-api-research.md` §3.14, at commit `3c71bb1f3b517a4b28d6aa752b1ee4e9fc8b494e`.
+From an Outlook connector checkout, inspect it with
+`git show 3c71bb1f3b517a4b28d6aa752b1ee4e9fc8b494e:docs/outlook-api-research.md`. It records
+successful app-owned OWA-host Search v2 Message/Teams requests with pagination. One known chat's
+result identities matched; a second target's identity bridge remains unresolved. The current
 product search is still fetch/archive/local matching. Broad-discovery work can use the successful
 shared Search profile while completing message identity and context checks; prior Graph denial
 does not establish that every remote route is inaccessible.
@@ -1349,4 +1352,6 @@ channel command. The chat command receives `replyChainId`, `messageId`, `dateTim
 can address an exact hit without a page ordinal. The HAR does not include a message-history request
 or the click-triggered wire sequence. Mapping `dateTimeSent` to the existing Chat Service
 `startTime` parameter remains an inference. See [API research](teams-api-research.md#search-result-activation-and-exact-message-navigation-source-2026-10-11-audit)
-and the [cross-product endpoint/workflow ledger](../../lrh-outlook-connector/docs/m365-search-findings-2026-10-10.md).
+and the cross-product endpoint/workflow ledger in `lrh-outlook-connector`,
+`docs/m365-search-findings-2026-10-10.md`, pinned at commit
+`3c71bb1f3b517a4b28d6aa752b1ee4e9fc8b494e`.
