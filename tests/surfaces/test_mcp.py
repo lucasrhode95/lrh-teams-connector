@@ -41,6 +41,13 @@ async def test_mcp_exposes_current_contract_and_reads_synthetic_chats(context: A
         assert tools["send_message"].annotations.readOnlyHint is False
         assert tools["send_message"].annotations.destructiveHint is True
 
+        auth_status = await client.call_tool("auth_status", {})
+        assert not auth_status.isError and auth_status.structuredContent is not None
+        profiles = auth_status.structuredContent["profiles"]
+        assert profiles["teams.csa"]["client_credential_cached"] is True
+        assert profiles["teams.csa"]["access_token_expires_on"] is None
+        assert "signed_in" not in profiles["teams.csa"]
+
         result = await client.call_tool("list_chats", {"refresh": True, "limit": 10})
         assert not result.isError
         assert result.structuredContent is not None

@@ -67,9 +67,10 @@ approval because the public clients and resource audiences differ.
 One active Microsoft account is bound to the shared cache. Signing out and choosing another account
 invalidates the shared profile state; long-running processes refresh their account binding on the
 next token request. The Teams composition root checks the current identity at each service boundary
-and builds an account-specific Store before serving account data. Sign-in status means only that
-credentials are cached. A successful token acquisition does not prove that a particular service or
-conversation will authorize the operation.
+and builds an account-specific Store before serving account data. Offline status reports cached
+OAuth client credentials separately from resource-specific access-token expiry; profiles sharing a
+client can show the same credential state. Neither fact proves that a token can be acquired or that a
+particular service or conversation will authorize the operation.
 
 MCP, ordinary UI use, and status reads do not launch interactive login. Encrypted storage is
 mandatory by default. The explicitly selected `--unsecure` mode uses a separate plaintext development

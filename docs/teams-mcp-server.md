@@ -36,9 +36,11 @@ their remembered tokens on the next acquisition. Encrypted storage is required b
 explicit `--unsecure` option selects a separate plaintext development cache and must not be used for
 normal MCP connections.
 
-`status` displays local cache and per-profile status without network requests. `status --check`
-attempts token acquisition for every profile. A successful check proves that a token was acquired;
-it does not prove access to all Teams endpoints, chats, channels, or files. For example:
+`status` displays cached client credentials and any resource-specific access-token expiry without
+network requests. Teams profiles share one OAuth client, so client-credential presence can be the
+same even when only one resource token is cached. `status --check` attempts token acquisition for
+every profile. A successful check proves that a token was acquired; it does not prove access to all
+Teams endpoints, chats, channels, or files. For example:
 
 ```powershell
 uv run teams-connector status --check --json

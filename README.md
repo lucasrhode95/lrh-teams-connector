@@ -44,9 +44,11 @@ need approval. Tokens for one active account are shared across connectors. To sw
 sign-in. This signs the shared auth cache out for all three connectors. Running processes discard
 their remembered tokens on the next token request.
 
-`status` reports cached profiles without making network calls. `status --check` attempts token
+`status` reports cached client credentials and any resource-specific access-token expiry without
+making network calls. Teams profiles share one OAuth client, so client-credential presence can be
+the same across them even when only one resource token is cached. `status --check` attempts token
 acquisition for each profile; that confirms token availability, not access to every Teams endpoint
-or individual conversation. Permission denials should be read separately from sign-in status.
+or individual conversation. Permission denials should be read separately from token acquisition.
 
 The shared encrypted auth cache is stored outside this repository under the current user's
 `~/.lrh-m365-auth` directory by default. Set `M365_AUTH_HOME` to choose another shared location.
@@ -101,7 +103,8 @@ project does not expose a remote MCP service.
 
 ### MCP tools
 
-- `auth_status` reports the active account and which shared token profiles are cached.
+- `auth_status` reports the active account, cached OAuth client credentials and resource-token
+  expiry per profile.
 - `list_chats` returns recent chats and channels, with paging, kind filters, empty-chat control, and
   freshness coverage. A catalog no more than ten minutes old may answer unless `refresh=true`.
 - `search_chats` matches conversation names and participant names indexed by `sync_archive`.

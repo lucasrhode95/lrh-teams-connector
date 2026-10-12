@@ -29,3 +29,5 @@ def test_status_reports_the_shared_profile_catalog_without_connecting(capsys) ->
         "teams.csa",
         "teams.graph",
     }
+    assert all(profile["client_credential_cached"] for profile in status["profiles"])
+    assert all(profile["access_token_expires_on"] is None for profile in status["profiles"])
