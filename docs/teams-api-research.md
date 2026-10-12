@@ -686,10 +686,11 @@ The same bundle's schema defines `PinnedChat` with `conversationId` and `order`,
 The source includes an explicit query call in a desktop experience warm-up path (`includePinnedChats: true`, `includeSuggestedContacts: false`). The supplied HARs contain no chat-list GraphQL request/response, and this source audit did not trace the full sidebar component-to-query-to-render path. Treat this as the strongest client-source lead for exact list behavior, not yet a verified endpoint contract or proof of final visible ordering. See [the dated source audit](#teams-web-chat-list-and-people-helper-source-audit-2026-10-11).
 
 This absence is specifically about the Teams chat-list operation. The combined October captures do
-contain ten Outlook `/outlookgatewayb2/graphql` POSTs during Recaps, documented in the linked
-[cross-product search ledger](../../lrh-outlook-connector/docs/m365-search-findings-2026-10-10.md)
-and Outlook research. Those operations concern calendar groups, tabs/entitlements, working hours,
-auth settings and meeting response; they are not evidence of a Teams sidebar GraphQL call.
+contain ten Outlook `/outlookgatewayb2/graphql` POSTs during Recaps. They are recorded in
+`lrh-outlook-connector`, `docs/m365-search-findings-2026-10-10.md`, at commit
+`3c71bb1f3b517a4b28d6aa752b1ee4e9fc8b494e`, and in Outlook's API research. Those operations
+concern calendar groups, tabs/entitlements, working hours, auth settings and meeting response; they
+are not evidence of a Teams sidebar GraphQL call.
 
 ### 4. Teams Web IndexedDB conversation state
 
@@ -2694,7 +2695,7 @@ can hydrate history; the private request used by the Teams Web click-through rem
 The two Teams message-history transcript URI references documented above are also reference-only
 and do not establish a request contract.
 
-Primary references: [Teams deep links](https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/build-and-test/deep-link-teams), [Graph chat-message search](https://learn.microsoft.com/en-us/graph/search-concept-chat-messages), and [Graph get chatMessage](https://learn.microsoft.com/en-us/graph/api/chatmessage-get?view=graph-rest-1.0). Cross-product endpoint and workflow map: [Microsoft 365 search findings in the Outlook connector research](../../lrh-outlook-connector/docs/m365-search-findings-2026-10-10.md).
+Primary references: [Teams deep links](https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/build-and-test/deep-link-teams), [Graph chat-message search](https://learn.microsoft.com/en-us/graph/search-concept-chat-messages), and [Graph get chatMessage](https://learn.microsoft.com/en-us/graph/api/chatmessage-get?view=graph-rest-1.0). The cross-product endpoint and workflow map is `lrh-outlook-connector`, `docs/m365-search-findings-2026-10-10.md`, at commit `3c71bb1f3b517a4b28d6aa752b1ee4e9fc8b494e`.
 
 ## Teams Web chat-list and People helper source audit (2026-10-11)
 
