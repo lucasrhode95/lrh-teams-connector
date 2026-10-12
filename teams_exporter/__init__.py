@@ -1,1 +1,0 @@
-"""Teams exporter application package."""

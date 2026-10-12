@@ -32,7 +32,7 @@ class TeamsSession:
     def __init__(self, transport: Transport, tokens: TokenSource) -> None:
         self._transport = transport
         self._tokens = tokens
-        self._spaces = Bearer(tokens, "teams")
+        self._spaces = Bearer(tokens, "teams.spaces")
         self._info: SessionInfo | None = None
         self._lock = asyncio.Lock()
 
@@ -48,7 +48,7 @@ class TeamsSession:
         return (await self.info()).chat_service_url
 
     def sign_in_command(self) -> str:
-        return self._tokens.sign_in_command("teams")
+        return self._tokens.sign_in_command("teams.spaces")
 
     async def _authorize(self, renew: dict[str, Any] | None) -> SessionInfo:
         with operation("starting the Teams session"):
@@ -119,7 +119,7 @@ class CsaCredential:
 
     def __init__(self, session: TeamsSession, tokens: TokenSource) -> None:
         self._session = session
-        self._bearer = Bearer(tokens, "csa")
+        self._bearer = Bearer(tokens, "teams.csa")
 
     async def headers(self, renewal: dict[str, Any] | None) -> dict[str, str]:
         info = await self._session.info(renew=renewal)

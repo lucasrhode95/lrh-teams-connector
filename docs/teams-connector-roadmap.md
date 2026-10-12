@@ -2,19 +2,20 @@
 
 ## Scope and evidence
 
-**Required prework — canonical connector terminology (2026-10-11):** use `lrh-teams-connector`
-for repository/MCP identity, `teams-connector` for the CLI, and `teams_connector` for the Python
-package. “Teams extractor”/“Teams exporter” must stop being application identities; export remains
-a connector operation. Before shared-auth integration, inventory required behavior and active
-launchers/MCP/UI consumers of `teams_exporter`, move them to the canonical package, verify the
-workflows, then remove the duplicate implementation and obsolete dependencies/entry points.
+**Canonical connector terminology and implementation cutover (2026-10-11):** use
+`lrh-teams-connector` for repository/MCP identity, `teams-connector` for the CLI, and
+`teams_connector` for the Python package. Extractor/exporter are not application identities; export
+remains a connector operation. The duplicate `teams_exporter` implementation and obsolete
+dependency have been removed; the dated module/cache names below are migration history, not current
+setup instructions.
 
-The agent performs necessary one-time local configuration edits and transparent current-format
-file moves. Deliver only current names, paths and formats: no legacy aliases, forwarding wrappers,
-compatibility dependencies, old-format readers, automatic import/migration, dual-cache fallback or
-committed migration helpers. Preserve account ownership and current-format data safeguards. The
-README's temporary distinction between the installed package and original exporter describes the
-current checkout; it is not the intended final architecture.
+The canonical README and architecture describe the target package. Older module names, cache paths,
+and implementation details recorded below are dated migration evidence, not current setup
+instructions. The agent performs necessary one-time local configuration edits and transparent
+current-format file moves. Deliver only current names, paths and formats: no legacy aliases,
+forwarding wrappers, compatibility dependencies, old-format readers, automatic import/migration,
+dual-cache fallback or committed migration helpers. Preserve account ownership and current-format
+data safeguards.
 
 **Product ownership (2026-10-11):** Outlook owns Exchange calendar events, schedules, agenda,
 organizer/invitees, event attachments, and join links. Teams owns related Teams meeting chats,
@@ -547,7 +548,7 @@ This is the right tool once the caller knows which conversations/scope it wants 
 
 The 2026-10-01 capture establishes a useful separate capability: Teams' top-bar/powerbar search can return heterogeneous pointers across categories such as messages, chats, files, teams/channels, people, events and apps.
 
-That makes it valuable as a **broad-spectrum discovery channel** for difficult investigations. An agent could use it to learn that some potentially relevant artifact exists even when that artifact is outside the exporter's directly retrievable content.
+That makes it valuable as a **broad-spectrum discovery channel** for difficult investigations. An agent could use it to learn that some potentially relevant artifact exists even when that artifact is outside the connector's directly retrievable content.
 
 Example desired behavior:
 
@@ -822,7 +823,7 @@ The surface adapter decides only **how to deliver that artifact**:
 - HTTP UI -> normal HTTP file download response;
 - MCP -> MCP Resource/file artifact/reference suitable for text or binary content.
 
-Do not make the shared exporter know about HTTP handlers, browser response objects, MCP tool schemas, or MCP protocol details.
+Do not make the shared export service know about HTTP handlers, browser response objects, MCP tool schemas, or MCP protocol details.
 
 ##### Single-chat primitive
 
@@ -896,7 +897,7 @@ The MCP layer must not loop through public MCP calls to emulate batch export; it
 
 Do **not** require the MCP client to manually download each attachment or construct ZIPs.
 
-For media-inclusive exports, expose the completed artifact as a binary/file MCP Resource or equivalent downloadable artifact reference. Avoid base64-encoding an entire potentially large ZIP inside ordinary tool JSON. Text-only exports may continue to support bounded text reads, but the canonical export artifact should still come from the shared exporter.
+For media-inclusive exports, expose the completed artifact as a binary/file MCP Resource or equivalent downloadable artifact reference. Avoid base64-encoding an entire potentially large ZIP inside ordinary tool JSON. Text-only exports may continue to support bounded text reads, but the canonical export artifact should still come from the shared export service.
 
 #### Selection parity
 
@@ -982,7 +983,7 @@ Goals:
 - one place for refresh behavior and not-found errors;
 - preserve requested input order when resolving multiple IDs;
 - reject/handle duplicates consistently;
-- HTTP must not need to rebuild a domain `ChatSummary` from its own JSON response records merely to call the exporter;
+- HTTP must not need to rebuild a domain `ChatSummary` from its own JSON response records merely to call the export service;
 - send/history/export/search preparation should reuse the same resolver where practical.
 
 Do not introduce a repository or abstraction layer merely for its own sake; a few well-named methods on `TeamsService` are enough.

@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="Group conversation">
-  <circle cx="24" cy="24" r="24" fill="#e8ebfa"/>
-  <g fill="#444791">
-    <circle cx="17" cy="18" r="5.5"/>
-    <circle cx="31" cy="18" r="5.5"/>
-    <path d="M5.5 37c.6-6 4.6-10 11.5-10 6.7 0 10.7 4 11.3 10z"/>
-    <path d="M20 37c.7-6 4.5-10 11-10 6.8 0 10.7 4 11.5 10z"/>
-  </g>
-</svg>

@@ -113,7 +113,7 @@ def _logged[**P, R](function: Callable[P, Awaitable[R]]) -> Callable[P, Awaitabl
 
 
 def build_server(context: AppContext) -> FastMCP:
-    mcp = FastMCP("lrh-teams", instructions=INSTRUCTIONS, log_level="WARNING")
+    mcp = FastMCP("lrh-teams-connector", instructions=INSTRUCTIONS, log_level="WARNING")
 
     async def services() -> Services:
         return await context.services()
@@ -121,12 +121,17 @@ def build_server(context: AppContext) -> FastMCP:
     @mcp.tool(annotations=READ_ONLY)
     @_logged
     async def auth_status() -> dict[str, Any]:
-        """Offline sign-in status: the bound account and which token profiles have credentials."""
+        """Offline status: account, cached client credentials and resource-token expiry by profile."""
         status = context.tokens.status()
         return {
             "account": [a.username for a in status.accounts],
             "profiles": {
-                p.profile: {"signed_in": p.signed_in, "purpose": p.purpose} for p in status.profiles
+                p.profile: {
+                    "client_credential_cached": p.client_credential_cached,
+                    "access_token_expires_on": p.access_token_expires_on,
+                    "purpose": p.purpose,
+                }
+                for p in status.profiles
             },
             "sign_in_command": context.tokens.sign_in_command(),
         }

@@ -28,6 +28,7 @@ PREFER = {"Prefer": "include-unknown-enum-members"}
 BATCH_LIMIT = 20  # Graph JSON batching maximum per request
 BATCH_CONCURRENCY = 2
 BATCH_RETRIES = 4  # rounds of re-sending throttled sub-requests
+BATCH_RETRY_STATUSES = frozenset({429, 502, 503, 504})
 DEFAULT_RETRY_WAIT = 5.0
 MAX_RETRY_WAIT = 30.0
 MAX_DOWNLOAD_BYTES = 250 * 1024 * 1024
@@ -103,18 +104,24 @@ class Graph:
     ) -> tuple[list[dict[str, Any]], bool]:
         """Follow pages up to ``max_items``. Returns (items, truncated)."""
         items, link = await self.page(path, params)
+        seen_links: set[str] = set()
         while link and len(items) < max_items:
-            more, link = await self.page(link)
+            if link in seen_links:
+                raise Upstream("Graph collection repeated a continuation link; pagination stopped.")
+            seen_links.add(link)
+            more, next_link = await self.page(link)
             items.extend(more)
+            if next_link and len(items) < max_items and next_link in seen_links:
+                raise Upstream("Graph collection repeated a continuation link; pagination stopped.")
+            link = next_link
         return items[:max_items], bool(link) or len(items) > max_items
 
     async def batch(self, requests: Mapping[str, str]) -> dict[str, SubResponse]:
         """GET many relative URLs via $batch. Returns {caller key: sub-response}, one per request.
 
         Batch request ids are numbers assigned here, never the caller's keys. At most BATCH_LIMIT requests
-        per batch and BATCH_CONCURRENCY batches in flight. Throttled sub-requests (429) are re-sent in new
-        batches after the advised delay, up to BATCH_RETRIES rounds; what is still throttled is returned
-        as 429.
+        per batch and BATCH_CONCURRENCY batches in flight. Transient sub-requests are re-sent in new
+        batches after the advised delay, up to BATCH_RETRIES rounds; final sub-responses are returned.
         """
         results: dict[str, SubResponse] = {}
         pending = list(requests)
@@ -127,7 +134,7 @@ class Graph:
             chunks = [pending[i : i + BATCH_LIMIT] for i in range(0, len(pending), BATCH_LIMIT)]
             for part in await asyncio.gather(*(send(c) for c in chunks)):
                 results.update(part)
-            pending = [k for k in pending if results[k].status == 429]
+            pending = [k for k in pending if results[k].status in BATCH_RETRY_STATUSES]
             if not pending or attempt == BATCH_RETRIES:
                 break
             await self._transport.sleep(max(_retry_after(results[k].headers) for k in pending))

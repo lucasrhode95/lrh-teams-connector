@@ -36,7 +36,11 @@ def package(files: list[Path], *, zip_name: str) -> tuple[Path, str]:
         shutil.move(str(files[0]), str(target))
         return target, CONTENT_TYPES.get(target.suffix, "application/octet-stream")
     target = localfiles.claim(directory, zip_name)
-    with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for path in files:
-            archive.write(path, arcname=path.name)
+    try:
+        with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for path in files:
+                archive.write(path, arcname=path.name)
+    except BaseException:
+        target.unlink(missing_ok=True)
+        raise
     return target, CONTENT_TYPES[".zip"]

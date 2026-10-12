@@ -120,3 +120,31 @@ async def test_search_matches_names_and_indexed_participants(services: Services)
     by_name = await services.catalog.search("sprint")
     assert by_name.items[0].name_matched and by_name.items[0].chat.id == "19:meeting_abc@thread.v2"
     assert found.coverage.rosters_indexed >= 4
+
+
+async def test_chat_search_reports_missing_and_unresolved_rosters(
+    services: Services, fake: FakeTeams
+) -> None:
+    await services.catalog.list(refresh=True)
+    missing = await services.catalog.search("no-synthetic-match")
+    assert not missing.items
+    assert missing.coverage.rosters_missing == missing.coverage.chats
+    assert not missing.coverage.complete
+
+    fake.chats["19:one@unq.gbl.spaces"].members = [
+        ("33333333-3333-3333-3333-333333333333", ""),
+        ("66666666-6666-6666-6666-666666666666", ""),
+    ]
+    await services.archive.sync(conversation_id="19:one@unq.gbl.spaces", max_pages=1)
+    unresolved = await services.catalog.search("no-synthetic-match")
+    assert unresolved.coverage.unresolved_participants == 1
+    assert not unresolved.coverage.complete
+
+
+async def test_bounded_archive_sync_rotates_between_chats(services: Services) -> None:
+    first = await services.archive.sync(max_chats=1, max_pages=1, include_rosters=False, refresh_latest=False)
+    second = await services.archive.sync(
+        max_chats=1, max_pages=1, include_rosters=False, refresh_latest=False
+    )
+    assert len(first.items) == len(second.items) == 1
+    assert first.items[0].conversation_id != second.items[0].conversation_id
