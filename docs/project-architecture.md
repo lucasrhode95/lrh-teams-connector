@@ -48,7 +48,7 @@ on their typed contracts.
 
 ## Authentication and account boundaries
 
-The private `lrh-m365-auth` package supplies five named profiles shared by the three connectors:
+The shared `lrh-m365-auth` package supplies five named profiles shared by the three connectors:
 
 | Profile | Used for |
 |---|---|

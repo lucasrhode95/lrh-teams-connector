@@ -6,8 +6,8 @@ needed; it is not an HTTP service. The MCP and web surfaces use the same service
 ## Install and sign in
 
 The project requires Python 3.12 or later and [uv](https://docs.astral.sh/uv/). Its shared auth
-dependency is a private GitHub repository pinned to an immutable commit, so the developer or user
-installing the connector needs GitHub SSH access to `lrh-m365-auth`.
+dependency, `lrh-m365-auth`, is a public GitHub repository pinned to an immutable commit and
+fetched over HTTPS.
 
 From the connector root:
 
@@ -219,8 +219,8 @@ diagnostics.
 
 ## Troubleshooting
 
-- **`uv sync` cannot fetch the shared auth dependency:** verify GitHub SSH access to the private
-  `lrh-m365-auth` repository and rerun `uv sync --locked`.
+- **`uv sync` cannot fetch the shared auth dependency:** check that github.com is reachable over
+  HTTPS and rerun `uv sync --locked`.
 - **MCP reports authentication required:** run the explicit `teams-connector auth` command, finish
   Microsoft's device-code and MFA flow, then reconnect the MCP process.
 - **A status profile is missing:** run the explicit `auth` command to bootstrap all shared profiles.

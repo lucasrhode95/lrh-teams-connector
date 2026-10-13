@@ -25,8 +25,6 @@ connector; the general file itself belongs to SharePoint.
 
 - Install [uv](https://docs.astral.sh/uv/getting-started/installation/).
 - Use Python 3.12 or newer; uv can install a managed Python if needed.
-- Have access to the private `lrh-m365-auth` GitHub repository. The dependency is pinned by commit
-  and fetched over SSH, so configure GitHub SSH access before running `uv sync`.
 - Use a Microsoft 365 account with Teams access. Microsoft may request more than one device-code
   approval because the shared auth catalog uses separate first-party client/resource profiles.
 
@@ -187,8 +185,8 @@ the same account identity; another account cannot silently open it as its own ar
   profiles not yet accepted. `status --check` tests token acquisition for those profiles.
 - **A specific chat or file says access denied:** the current sign-in may be valid while that item
   or operation is unavailable to the account. A cached token does not prove service permission.
-- **The MCP dependency cannot be fetched:** confirm your GitHub SSH key has access to the private
-  `lrh-m365-auth` repository, then run `uv sync --locked` again.
+- **The MCP dependency cannot be fetched:** `lrh-m365-auth` is installed from its public GitHub
+  repository over HTTPS; check that github.com is reachable, then run `uv sync --locked` again.
 - **The local UI does not start:** check its printed URL and any automatically selected port. Stop
   the UI with Ctrl+C; it also exits after the configured idle period.
 - **The archive belongs to another account:** do not delete or replace it. Sign into the expected
