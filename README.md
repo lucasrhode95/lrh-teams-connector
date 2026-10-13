@@ -224,3 +224,12 @@ message content.
 - [Teams API research](docs/teams-api-research.md)
 - [Product roadmap](docs/teams-connector-roadmap.md)
 - [MCP guide](docs/teams-mcp-server.md)
+
+## License
+
+Copyright 2026 Lucas Rhode. This is source-available software, not open source: the code is public
+so anyone can read and audit it. The [PolyForm Strict License 1.0.0](LICENSE.md) allows use for
+noncommercial purposes only, such as personal study, research, hobby projects, or work at a
+charitable, educational or government organization. It does not allow commercial use, including use
+for your job at a company, and it does not allow distributing, changing, or building on the
+software.
