@@ -1,89 +1,63 @@
-# LRH Teams Connector
+# Teams for MCP clients
 
-A local MCP server and browser UI for one user's Microsoft Teams chats and channels. Both surfaces
-use the same service layer, shared Microsoft sign-in, and account-bound local archive.
+A local MCP server and browser UI for one user's Microsoft Teams chats and channels.
 
-The connector reads chats, channel posts, message history, and message attachments. It provides
-local scoped search over prepared history and a separate bounded online Teams Search v2 tool for
-message discovery. Those tools have different coverage and continuation behavior; neither claims
-to search every message or meeting transcript. See the [roadmap](docs/teams-connector-roadmap.md)
-for scope and remaining live-validation work.
+- Find conversations by name or participant, then read chat and channel history.
+- Search message text in chosen chats and dates, or discover messages online through Microsoft Search.
+- Export conversations with their attachments, and download files linked from messages.
+- Send a message, only after you explicitly authorize it.
 
-## Microsoft 365 connectors
+Local search covers the history the connector has prepared, and online search returns bounded
+pages; neither claims to cover every message or meeting transcript. See the
+[roadmap](docs/teams-connector-roadmap.md) for scope and remaining live-validation work.
 
-This repository is part of the `lrh-*` Microsoft 365 connectors: local tools that give MCP agents
-access to a common corporate environment, its mail and calendar, chats and meetings, and files. Each
-repository owns one product, and all of them share one sign-in.
-
-<table>
-  <tr><th width="270" nowrap>Repository</th><th>Responsible for</th></tr>
-  <tr><td nowrap><picture><img src="docs/logos/entra-id.svg" height="29" align="absmiddle" alt="Entra ID"></picture>&nbsp;<a href="https://github.com/lucasrhode95/lrh-m365-auth">lrh-m365-auth</a></td><td>Shared Microsoft sign-in: one encrypted token cache and the profiles every connector uses</td></tr>
-  <tr><td nowrap><picture><img src="docs/logos/outlook.svg" height="24" align="absmiddle" alt="Outlook"></picture>&nbsp;<a href="https://github.com/lucasrhode95/lrh-outlook-connector">lrh-outlook-connector</a></td><td>Exchange mail, folders, drafts, rules, native signatures, and calendar events (schedule, agenda, attendees, Teams join link)</td></tr>
-  <tr><td nowrap><picture><img src="docs/logos/teams.svg" height="24" align="absmiddle" alt="Teams"></picture>&nbsp;<a href="https://github.com/lucasrhode95/lrh-teams-connector">lrh-teams-connector</a></td><td>Teams chats and channels, message attachments, and meeting chats, recordings, transcripts, recaps and notes</td></tr>
-  <tr><td nowrap><picture><img src="docs/logos/sharepoint.svg" height="24" align="absmiddle" alt="SharePoint"></picture>&nbsp;<a href="https://github.com/lucasrhode95/lrh-sharepoint-connector">lrh-sharepoint-connector</a></td><td>General OneDrive and SharePoint file search and selected file retrieval (read-only)</td></tr>
-</table>
-
-A calendar event stays with Outlook even when it links to a Teams meeting; Teams owns that meeting's
-chat and artifacts. A file linked from an email or a Teams message stays part of that message, while
-the stored file itself is retrieved through SharePoint. Only verified identifiers connect records
-across products.
-
-## Requirements and setup
+## Requirements
 
 - Install [uv](https://docs.astral.sh/uv/getting-started/installation/).
-- Use Python 3.12 or newer; uv can install a managed Python if needed.
-- Use a Microsoft 365 account with Teams access. Microsoft may request more than one device-code
-  approval because the shared auth catalog uses separate first-party client/resource profiles.
+- Use a Microsoft 365 account with Teams access.
 
-From the repository root:
+A separate Python installation is optional: uv selects an installed Python 3.12 or newer, or installs a managed version when needed.
 
-```powershell
+## Setup
+
+```bash
 uv sync --locked
 uv run teams-connector auth
 uv run teams-connector status
 ```
 
-Any of the Outlook, Teams, or SharePoint connectors can start the same shared sign-in bootstrap.
-It silently reuses accepted profile credentials and asks Microsoft only for profiles that still
-need approval. Tokens for one active account are shared across connectors. To switch accounts, run
-`uv run teams-connector auth --sign-out`, then `uv run teams-connector auth` and complete the new
-sign-in. This signs the shared auth cache out for all three connectors. Running processes discard
-their remembered tokens on the next token request.
+Run the `auth` command above and it logs you in. All `lrh-*` Microsoft 365 connectors share one login engine (`lrh-m365-auth`), so one login covers them all. Microsoft may ask for more than one approval, because the connectors use different Microsoft clients.
 
-`status` reports cached client credentials and any resource-specific access-token expiry without
-making network calls. Teams profiles share one OAuth client, so client-credential presence can be
-the same across them even when only one resource token is cached. `status --check` attempts token
-acquisition for each profile; that confirms token availability, not access to every Teams endpoint
-or individual conversation. Permission denials should be read separately from token acquisition.
+`status` shows the signed-in account and its cached profiles without touching the network. To switch accounts, run `auth --sign-out`, then `auth` again. Which profile serves which tool is in [architecture](docs/project-architecture.md#authentication-and-account-boundaries).
 
-The shared encrypted auth cache is stored outside this repository under the current user's
-`~/.lrh-m365-auth` directory by default. Set `M365_AUTH_HOME` to choose another shared location.
+> Credentials are entered only on Microsoft's sign-in page. Tokens stay in the shared encrypted cache
+> (`~/.lrh-m365-auth`, or `M365_AUTH_HOME`). If encryption is unavailable, sign-in fails closed.
+
 The Teams archive and local output files are stored under `%LOCALAPPDATA%\lrh-teams-connector` on
 Windows, or `~/.local/share/lrh-teams-connector` on other systems. Set `TEAMS_CONNECTOR_HOME` to
 override the Teams data directory.
 
-## MCP server
+### Configure a local MCP client
 
-The MCP server uses stdio. Register this command with a local MCP client, replacing the example path
-with the absolute path to your clone:
+Replace `/path/to/lrh-teams-connector` with the absolute path to your clone.
 
-```powershell
-uv run --directory C:\path\to\lrh-teams-connector teams-connector mcp
+**Claude Code** — add the server from a terminal:
+
+```bash
+claude mcp add --transport stdio lrh-teams-connector -- uv run --directory /path/to/lrh-teams-connector teams-connector mcp
 ```
 
-For example, add a server to Codex CLI:
+See the [Claude Code MCP guide](https://docs.anthropic.com/en/docs/claude-code/mcp).
 
-```powershell
-codex mcp add lrh-teams-connector -- uv run --directory C:\path\to\lrh-teams-connector teams-connector mcp
+**Codex CLI** — register the same stdio command:
+
+```bash
+codex mcp add lrh-teams-connector -- uv run --directory /path/to/lrh-teams-connector teams-connector mcp
 ```
 
-For Claude Code:
+See the [Codex MCP guide](https://developers.openai.com/codex/mcp/).
 
-```powershell
-claude mcp add --transport stdio lrh-teams-connector -- uv run --directory C:\path\to\lrh-teams-connector teams-connector mcp
-```
-
-For VS Code's local MCP support, add the equivalent server to `.vscode/mcp.json`:
+**GitHub Copilot Chat in VS Code** — add this server to `.vscode/mcp.json` in your workspace:
 
 ```json
 {
@@ -94,7 +68,7 @@ For VS Code's local MCP support, add the equivalent server to `.vscode/mcp.json`
       "args": [
         "run",
         "--directory",
-        "C:\\path\\to\\lrh-teams-connector",
+        "/path/to/lrh-teams-connector",
         "teams-connector",
         "mcp"
       ]
@@ -103,58 +77,36 @@ For VS Code's local MCP support, add the equivalent server to `.vscode/mcp.json`
 }
 ```
 
-Replace every sample path with the clone's absolute path. JSON and TOML strings on Windows require
-doubled backslashes. These commands require a local client that can start an MCP process; this
-project does not expose a remote MCP service.
+Replace the sample path with your clone’s absolute path. In Windows JSON paths, escape backslashes (for example, `C:\\Users\\you\\lrh-teams-connector`). This example requires Copilot Chat’s Agent mode with local MCP support; see [VS Code’s MCP guide](https://code.visualstudio.com/docs/copilot/chat/mcp-servers).
 
-### MCP tools
+> **Client compatibility:** These examples require a locally running agentic client that can launch a stdio MCP server. Hosted ChatGPT Web, Claude web chat, Copilot web chat, and similar services cannot start this local process. This project does not provide a remote MCP endpoint; hosted clients require one to be deployed separately.
 
-- `auth_status` reports the active account, cached OAuth client credentials and resource-token
-  expiry per profile.
-- `list_chats` returns recent chats and channels, with paging, kind filters, empty-chat control, and
-  freshness coverage. A catalog no more than ten minutes old may answer unless `refresh=true`.
-- `search_chats` matches conversation names and participant names indexed by `sync_archive`.
-  Check roster coverage before treating participant results as complete.
-- `search_remote_messages` searches message content online through Microsoft Search v2. It returns
-  one bounded page with the service's message pointer, preview, timestamp, and conversation-ID
-  candidates. A `conversation_id` is included only when a candidate exactly matches the local chat
-  catalog. The Search v2 message pointer is not yet proven interchangeable with `get_messages`'s
-  `message_id`; use the matched conversation and timestamp to fetch surrounding history. Follow its
-  cursor only when additional hits are useful. It does not search meeting transcripts or recaps.
-- `get_messages` returns one bounded page of a conversation, newest pages first and oldest first
-  within each page. Follow `cursor` for older history. Date bounds are inclusive; `message_limit`
-  counts the latest matching messages. Long bodies can be continued with `get_message_content`.
-- `search_messages` requires an inclusive date range and either selected `conversation_ids` or
-  `all_chats=true`. It fetches history into the local archive in bounded calls, then matches
-  literally using exact, substring, or all-terms mode. Follow its cursor while preparation is
-  incomplete and inspect per-chat coverage. This is local matching, not the Teams Web global search
-  endpoint.
-- `sync_archive` incrementally fetches history and participant rosters in bounded, resumable batches.
-  `archive_status` reports which histories, date ranges, and rosters are covered.
-- `export_chats` writes a `.txt` or `.jsonl` file for one conversation or a `.zip` for several; set
-  `include_attachments=false` to omit linked message files. One conversation with selected
-  attachments returns a ZIP containing its text export and downloaded files; without attachments it
-  returns the plain text/JSONL file. Multiple conversations return an outer ZIP of per-conversation
-  artifacts, so chats with files have their own ZIP and chats without files remain plain files. The
-  client receives the single artifact directly or the outer ZIP. Exports can filter by date and
-  per-chat message count.
-- `download_attachment` saves a file linked from a message already in the local archive. Email
-  attachments belong to `lrh-outlook-connector`; general OneDrive and SharePoint search belongs to
-  `lrh-sharepoint-connector`.
-- `send_message` is the only Teams write tool. Use it only after the user explicitly authorizes the
-  destination and exact content. The connector checks the current conversation name and sends once;
-  if the response is uncertain, inspect Teams before considering another send.
+## MCP tools
 
-Message timestamps are returned in UTC. Search coverage describes the exact conversations and date
-range prepared; a successful query does not imply that every Teams message has already been
-downloaded.
+The MCP server exposes the tools below. Each one's inputs, results and caveats are in the [MCP guide](docs/teams-mcp-server.md#tools-and-workflow).
+
+| MCP tool | Service module | Behavior |
+|---|---|---|
+| `auth_status` | shared auth provider | Read cached account/client credentials and resource-token expiry |
+| `list_chats` | [`service/catalog.py`](src/teams_connector/service/catalog.py) | List chats and channels by recent activity, with kind filters and paging |
+| `search_chats` | [`service/catalog.py`](src/teams_connector/service/catalog.py) | Match conversation names, and participant names indexed by `sync_archive` |
+| `search_remote_messages` | [`service/search.py`](src/teams_connector/service/search.py) | Discover messages online through Microsoft Search v2, one bounded page at a time |
+| `get_messages` | [`service/history.py`](src/teams_connector/service/history.py) | Read a conversation's history, newest pages first, with inclusive date bounds |
+| `get_message_content` | [`service/history.py`](src/teams_connector/service/history.py) | Continue a long message's text |
+| `search_messages` | [`service/search.py`](src/teams_connector/service/search.py) | Match message text locally in chosen chats and dates, preparing history first |
+| `sync_archive`, `archive_status` | [`service/archive.py`](src/teams_connector/service/archive.py) | Fetch history and rosters in resumable batches, and report what is covered |
+| `export_chats` | [`service/export/`](src/teams_connector/service/export/) | Export conversations to `.txt`, `.jsonl` or `.zip`, with their attachments |
+| `download_attachment` | [`service/files.py`](src/teams_connector/service/files.py) | Save a file linked from an archived message |
+| `send_message` | [`service/send.py`](src/teams_connector/service/send.py) | Send one message after explicit authorization; the only write tool |
+
+Message timestamps are returned in UTC.
 
 ## Browser export UI and archive backup
 
 Start the local UI when you want to choose conversations and download an export without an MCP
 client:
 
-```powershell
+```bash
 uv run teams-connector ui
 ```
 
@@ -199,9 +151,28 @@ the same account identity; another account cannot silently open it as its own ar
 - **The archive belongs to another account:** do not delete or replace it. Sign into the expected
   account or choose a separate `TEAMS_CONNECTOR_HOME` location.
 
-## Development checks
+## Microsoft 365 connectors
 
-```powershell
+This repository is part of the `lrh-*` **Microsoft 365** connectors: local tools that give MCP agents
+access to a common corporate environment, its mail and calendar, chats and meetings, and files. Each
+repository owns one product, and all of them share one sign-in.
+
+<table>
+  <tr><th width="270" nowrap>Repository</th><th>Responsible for</th></tr>
+  <tr><td nowrap><picture><img src="https://raw.githubusercontent.com/lucasrhode95/lrh-m365-auth/main/docs/logos/entra-id.svg" height="29" align="absmiddle" alt="Entra ID"></picture>&nbsp;<a href="https://github.com/lucasrhode95/lrh-m365-auth">lrh-m365-auth</a></td><td>Shared <b>Microsoft</b> sign-in through <b>Entra ID</b>: one encrypted token cache and the profiles every connector uses</td></tr>
+  <tr><td nowrap><picture><img src="https://raw.githubusercontent.com/lucasrhode95/lrh-m365-auth/main/docs/logos/outlook.svg" height="24" align="absmiddle" alt="Outlook"></picture>&nbsp;<a href="https://github.com/lucasrhode95/lrh-outlook-connector">lrh-outlook-connector</a></td><td><b>Exchange</b> mail, folders, drafts, rules, native signatures, and calendar events (schedule, agenda, attendees, <b>Teams</b> join link)</td></tr>
+  <tr><td nowrap><picture><img src="https://raw.githubusercontent.com/lucasrhode95/lrh-m365-auth/main/docs/logos/teams.svg" height="24" align="absmiddle" alt="Teams"></picture>&nbsp;<a href="https://github.com/lucasrhode95/lrh-teams-connector">lrh-teams-connector</a></td><td><b>Teams</b> chats and channels, message attachments, and meeting chats, recordings, transcripts, recaps and notes</td></tr>
+  <tr><td nowrap><picture><img src="https://raw.githubusercontent.com/lucasrhode95/lrh-m365-auth/main/docs/logos/sharepoint.svg" height="24" align="absmiddle" alt="SharePoint"></picture>&nbsp;<a href="https://github.com/lucasrhode95/lrh-sharepoint-connector">lrh-sharepoint-connector</a></td><td>General <b>OneDrive</b> and <b>SharePoint</b> file search and selected file retrieval (read-only)</td></tr>
+</table>
+
+A calendar event stays with **Outlook** even when it links to a **Teams** meeting; **Teams** owns that
+meeting's chat and artifacts. A file linked from an email or a **Teams** message stays part of that
+message, while the stored file itself is retrieved through **SharePoint**. Only verified identifiers
+connect records across products.
+
+## Development
+
+```bash
 uv run ruff check .
 uv run ruff format --check .
 uv run pyright
@@ -211,12 +182,7 @@ uv run pytest
 Tests use synthetic accounts and fake HTTP transports. They do not use browser captures or real
 message content.
 
-## Documentation
-
-- [Architecture](docs/project-architecture.md)
-- [Teams API research](docs/teams-api-research.md)
-- [Product roadmap](docs/teams-connector-roadmap.md)
-- [MCP guide](docs/teams-mcp-server.md)
+Project references: [architecture](docs/project-architecture.md) · [API research](docs/teams-api-research.md) · [roadmap](docs/teams-connector-roadmap.md) · [MCP guide](docs/teams-mcp-server.md).
 
 ## Disclaimer
 
