@@ -2498,6 +2498,18 @@ sort, and an initial `from=0`, `size=30`. Its parser reads
 `EntitySets[0].ResultSets[0].Results[].Source`. This source route has not been tied to the global
 Teams Meetings tab captured in the HAR and its page size must not be generalized to other flows.
 
+**SOURCE recheck (2026-10-12):** the configured Substrate base defaults to
+`https://substrate.office.com`, and the client authorizes against that resource. The Event
+`entityRequests[]` entry has `query:{queryString,displayQueryString}`, `entityType`,
+`startDateTime`/`endDateTime` serialized as ISO strings, `from=0`, `size=30`,
+`contentSources=["Exchange"]`, and `sort=[{"Time":"Proximity"}]`; top-level fields include
+`cvid` and `scenario.name`. The request sets `X-AnchorMailbox` from the signed-in user and a
+client request id. This is a date-bounded search builder, not proof of the Calendar week-view
+request. Empty-query behavior, server enforcement of dates, and continuation are unverified.
+Separately, the current shared `teams.graph` token successfully read Graph `calendarView`,
+event Search, and event description content; these Exchange calendar capabilities belong to
+Outlook. See [Outlook research §3.18](https://github.com/lucasrhode95/lrh-outlook-connector/blob/main/docs/outlook-api-research.md#318-calendar-range-listing-and-description-search-through-the-teams-client-graph-profile-2026-10-12).
+
 **CAPTURED + SOURCE, meeting recap:** recap calls return `EntitySets[].MeetingInsights`. The
 client's `getMeetingRecapCatchupItems` and `getMeetingRecapCallSummary` builders send
 `EntityRequests[].QueryParameters` with entity type, entity id and context; time-bounded variants
