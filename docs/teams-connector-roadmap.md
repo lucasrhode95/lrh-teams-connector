@@ -263,7 +263,7 @@ meeting-recap/transcript retrieval paths. These are browser/source observations,
 connector proof. Graph `driveItem` success and `chatMessage` denial remain specific to the tested
 profile; reassess before choosing migration or unsupported status. Details are in
 [Teams API research](teams-api-research.md#microsoft-365-search-capture-and-source-audit-2026-10-10)
-and the [cross-product search findings](../../lrh-outlook-connector/docs/m365-search-findings.md).
+and the [cross-product search findings](https://github.com/lucasrhode95/lrh-outlook-connector/blob/main/docs/m365-search-findings.md).
 
 **Local known-hit check (2026-10-10):** the connector fetched one scoped self-chat item and then
 returned it from local substring search; exact mode returned no match because the probe term was
@@ -991,4 +991,4 @@ channel command. The chat command receives `replyChainId`, `messageId`, `dateTim
 can address an exact hit without a page ordinal. The HAR does not include a message-history request
 or the click-triggered wire sequence. Mapping `dateTimeSent` to the existing Chat Service
 `startTime` parameter remains an inference. See [API research](teams-api-research.md#search-result-activation-and-exact-message-navigation-source-2026-10-11-audit)
-and the [cross-product endpoint/workflow ledger](../../lrh-outlook-connector/docs/m365-search-findings.md).
+and the [cross-product endpoint/workflow ledger](https://github.com/lucasrhode95/lrh-outlook-connector/blob/main/docs/m365-search-findings.md).
