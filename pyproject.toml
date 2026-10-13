@@ -3,7 +3,7 @@ name = "teams-connector"
 version = "0.1.0"
 description = "Local Microsoft Teams connector: MCP server and local export UI over Teams services and Microsoft Graph."
 readme = "README.md"
-license = "LicenseRef-PolyForm-Strict-1.0.0"
+license = "LicenseRef-PolyForm-Internal-Use-1.0.0"
 license-files = ["LICENSE.md"]
 requires-python = ">=3.12"
 dependencies = [
