@@ -1,7 +1,8 @@
 """Self-contained continuation cursors.
 
-Processes are short-lived (architecture §2), so a cursor carries everything needed to continue:
-the remote continuation link and the original selection. Cursors are opaque to callers.
+Processes are short-lived (architecture, "Requests, caching, and storage"), so a cursor carries
+everything needed to continue: the remote continuation link and the original selection. Cursors are
+opaque to callers.
 """
 
 from __future__ import annotations

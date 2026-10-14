@@ -43,9 +43,10 @@ A local, single-user Microsoft Teams connector with an MCP server and a user-ope
 
 - User and operator guide: `README.md`
 - Documentation index: `docs/README.md`
+- What it must do: `docs/requirements.md`
 - Architecture, module guide and MCP tool reference: `docs/architecture.md`
 - API evidence and limitations: `docs/api-research.md`
-- Work register: `docs/roadmap.md`
+- Open work: `docs/roadmap.md`
 
 The Outlook, Teams, and SharePoint connectors use application-owned Microsoft sign-in through the shared `lrh-m365-auth` package and one encrypted cross-process MSAL cache by default. Microsoft handles the user's password and verification. One active account is shared across the connectors; account switching requires explicit shared sign-out and sign-in. MCP uses stdio; the local UI binds to loopback. Teams reads may use Microsoft Graph and documented-in-research Teams service routes. Treat reverse-engineered routes as private and undocumented, verify them feature by feature, and do not describe them as a stable public API.
 

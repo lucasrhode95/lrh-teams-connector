@@ -1,4 +1,4 @@
-"""The ports the service depends on (architecture §6.1).
+"""The ports the service depends on (architecture, "Code structure"; requirements §4).
 
 Adapters (wired in bootstrap.py):
 

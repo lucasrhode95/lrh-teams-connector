@@ -32,6 +32,19 @@ bad request shape, transport failure and empty result are different outcomes.
 No private account, tenant identity, corporate endpoint or captured credential is
 required to use this record.
 
+## Method
+
+- Label each claim as observed network behavior, Teams Web source behavior, inference, or an
+  implementation choice.
+- Keep browser-session success apart from success with the connector's app-owned sign-in.
+  Production code never copies browser tokens or cookies.
+- Tie a capture to one user action with a unique marker string (for example a search for
+  `MARKER 7Q2 SEARCH`).
+- Prefer read-only probes. A write probe needs explicit authorization for its exact destination and
+  content.
+- Never keep tokens, cookies, authorization headers, sync cursors, status notes or unrelated message
+  bodies in this record or in fixtures.
+
 ---
 
 # High-level architecture
@@ -1049,6 +1062,12 @@ Likely response:
 }
 ```
 
+**Teams Web capture and source (2026-10-01):** a controlled self-chat send returned a body with only
+`OriginalArrivalTime`. Teams Web takes the server message id from the last path segment of the
+response `Location` header, and also reads a response context id. A client that drops response
+headers cannot return the message id. The connector now sends through Graph, which returns the id
+in the body (see [Microsoft Graph with the Teams client](#microsoft-graph-with-the-teams-client-2026-10-01)).
+
 ---
 
 ## PUT `{chatService}/v1/users/ME/conversations/{conversationId}/messages/{messageId}`
@@ -1794,6 +1813,13 @@ Authorization: Bearer <SharePoint token>
 Content-Type: application/octet-stream
 ```
 
+**Teams Web source (2026-10-01):** small uploads use the drive-content route above; larger uploads
+use chunked `StartUpload` / `ContinueUpload` / `FinishUpload` operations. Chat Service has a thread
+file-reference operation, `POST /v1/threads/{threadId}/files`. The outgoing message serializes
+ordinary file metadata into `properties.files`; inline media uses AMS references instead. No
+attachment send was captured, so the token audience, drive discovery, the order of the calls,
+sharing changes and the final `/messages` payload are unconfirmed.
+
 ---
 
 ## Create SharePoint sharing link
@@ -2321,7 +2347,7 @@ Microsoft guarantees.
 ## Implementation decisions
 
 - Normalize both CSA and Chat Service rows to the stable catalog values
-  `meeting`, `group`, `oneOnOne`, `channel`, or `chat` for notes-to-self;
+  `meeting`, `group`, `one_on_one`, `channel`, or `self` for notes-to-self;
   leave ambiguous types unknown. An explicit meeting type wins over the
   generic `isOneOnOne` flag, and a complete roster larger than two prevents an
   impossible one-to-one classification. `meetingInformation` alone is never
@@ -2340,14 +2366,42 @@ Microsoft guarantees.
   ellipsis. `+N` counts every roster participant not shown, including the
   signed-in user and unresolved/app participants. If no participant name can
   be resolved, retain the safe ID fallback.
-- Keep self-chat enrichment in `TeamsService`, which combines CSA deltas with
-  the persistent local catalog. The connector normalizes raw transport rows;
-  the service owns merged-catalog activity and ordering. The service's
-  one-message lookup refreshes `48:notes` after catalog updates without
-  changing Teams state.
+- Keep self-chat enrichment in the catalog service (`service/catalog.py`),
+  which combines CSA deltas with the persistent local catalog. The `remote/`
+  adapters normalize raw transport rows; the service owns merged-catalog
+  activity and ordering. Its one-message lookup refreshes `48:notes` after
+  catalog updates without changing Teams state.
 - Derive the UI's type label and fallback icon from the same canonical
   conversation presentation kind. The ID prefix is only a fallback when the
   normalized type is absent.
+
+# Microsoft Graph with the Teams client (2026-10-01)
+
+**Evidence:** observed live, with the Microsoft Teams first-party client's Graph token
+(`https://graph.microsoft.com/.default`) for one account. These grants and denials describe that
+client and account; reassess them for another tenant or policy.
+
+| Graph capability | Result |
+|---|---|
+| Current user, and the current user's profile photo | works |
+| Joined teams, team channels, channel metadata and members | works |
+| Channel messages and replies | works |
+| OneDrive metadata and root listing; Microsoft Search `driveItem` | works |
+| Send a message to the self chat `48:notes` | works (HTTP 201) |
+| Chat Service sees the Graph-sent message under the same server id | works |
+| List private chats; private chat metadata, members and history | blocked: no `Chat.ReadBasic`, `Chat.Read` or `Chat.ReadWrite` |
+| Read the Graph-sent private-chat message back | blocked: no `Chat.Read` |
+| Edit or delete a private-chat message | blocked: no `Chat.ReadWrite` |
+| Presence | blocked: no `Presence.Read` |
+| Microsoft Search `chatMessage` (v1.0 and beta) | blocked |
+
+An explicit delegated `Chat.Read` request with the Teams client returned `AADSTS65002`. The token
+held `Files.ReadWrite.All` and `Sites.ReadWrite.All`.
+
+The connector's backend split follows from this table: Graph serves channels, channel history and
+members, people's names and photos, sending, and shared-file downloads; the private Chat Service and
+CSA serve the chat catalog and chat history, which Graph cannot read with this client. The
+[requirements](requirements.md#4-backend-choice) record the rule.
 
 # Source notes
 
@@ -2487,7 +2541,7 @@ global Files content-source defaults remain unresolved.
 The app-owned Microsoft Search probe recorded earlier in this file returned a generic HTTP 400;
 this later browser capture does not change that standalone result. Graph `driveItem` search works
 in the tested profile, while Graph `chatMessage` search was denied there. Those outcomes are
-account-specific; see the dated G1 notes in `roadmap.md`.
+account-specific; see [Microsoft Graph with the Teams client](#microsoft-graph-with-the-teams-client-2026-10-01).
 
 ### Meet search and recap
 
@@ -2588,7 +2642,8 @@ These additional routes are recorded to close the Recaps-HAR endpoint inventory.
 adjacent-UI support calls, not search result providers. The scheduling `PUT` was observed only and
 was not replayed.
 
-These browser-session routes and results are useful reverse-engineering evidence, but do not prove their use with this connector's sign-in. Keep P2.2 pending until a bounded known-hit operation succeeds through app-owned authentication and returns a useful pointer or resource.
+These browser-session routes and results are useful reverse-engineering evidence, but do not prove their use with this connector's sign-in. Recap and transcript work stays open until a bounded known-hit operation succeeds through app-owned authentication and returns a useful pointer or resource.
+
 ### Captured response and paging details
 
 **CAPTURED:** the Teams flow made four submitted Search v2 POSTs, all HTTP 200: two mixed searches,
@@ -2820,7 +2875,8 @@ enumeration/history, Chat Service message history, message search, meeting recap
 ## Teams online message search adapter (2026-10-12)
 
 The connector now exposes `search_remote_messages`, implemented against the standalone-proven
-Search v2 route documented in `lrh-outlook-connector/docs/api-research.md` §3.14:
+Search v2 route documented in the Outlook connector's
+[research §3.14](https://github.com/lucasrhode95/lrh-outlook-connector/blob/main/docs/api-research.md#314-owa-search-v2-calendar-and-teams-message-replay-2026-10-10):
 `POST https://outlook.office.com/searchservice/api/v2/query`. It uses the shared `m365.search`
 profile and the account anchor header; it does not reuse browser cookies or Teams web session state.
 
@@ -3001,8 +3057,9 @@ Moved from the Outlook connector's former cross-product index (`m365-search-find
 The Teams connector now exposes bounded online Message/Teams discovery through Search v2 and the
 shared `m365.search` profile. Request mapping and continuation have synthetic coverage; a live MCP
 call and direct hydration of a returned hit ID remain unverified. Recap and transcript capabilities
-remain separate open work. See the [Teams search roadmap](https://github.com/lucasrhode95/lrh-teams-connector/blob/main/docs/roadmap.md#p22--search)
-and [adapter research](https://github.com/lucasrhode95/lrh-teams-connector/blob/main/docs/api-research.md#teams-online-message-search-adapter-2026-10-12).
+remain separate open work. See the roadmap's [online search check](roadmap.md#p22d--online-message-search-through-the-connector),
+[recaps and transcripts](roadmap.md#p22f--meeting-recaps-and-transcripts) and the
+[adapter research](#teams-online-message-search-adapter-2026-10-12).
 
 | Endpoint or route family | Purpose and observed shape | Evidence / limit |
 | --- | --- | --- |

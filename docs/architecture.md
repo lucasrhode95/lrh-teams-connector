@@ -1,6 +1,6 @@
 # Teams Connector — Architecture
 
-**Inputs:** [Roadmap](roadmap.md) · [API research](api-research.md)
+**Inputs:** [Requirements](requirements.md) · [API research](api-research.md) · **Open work:** [roadmap](roadmap.md)
 
 The repository contains one current application: the `teams-connector` CLI and the
 `teams_connector` Python package. MCP and the loopback web UI call the same domain services.
@@ -32,6 +32,12 @@ The service layer receives adapters through the ports and is responsible for dec
 Only the `remote/` layer knows Microsoft request bodies, headers, endpoints, paging links, and IDs.
 The two surfaces validate external inputs before calling services; internal service routines rely
 on their typed contracts.
+
+Shared rules live once in the service and domain layers: conversation lookup, history selection,
+export packaging and domain errors. Each surface keeps its own protocol work: the UI parses calendar
+dates with the browser's UTC offset while MCP takes ISO 8601 timestamps; the UI guards Host headers
+and a session token while MCP runs over stdio; the UI streams downloads while MCP returns local
+paths; each maps domain errors to its own responses.
 
 ## Authentication and account boundaries
 

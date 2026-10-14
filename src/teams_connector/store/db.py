@@ -1,4 +1,4 @@
-"""Account-bound SQLite archive (architecture §5.7).
+"""Account-bound SQLite archive (architecture, "Requests, caching, and storage").
 
 Holds what Teams cannot give back cheaply or at all: the chat catalog and its delta token, every
 message the app has fetched (retained indefinitely, so content survives later edits and deletions),
@@ -9,7 +9,7 @@ Several short-lived processes may share it: WAL mode, busy timeout, one connecti
 short transactions. If SQLite reports it damaged when it is opened, the damaged files are moved to a
 ``corrupt-<timestamp>`` folder next to it and a fresh store is started.
 
-Retention rules for a message seen again (docs/roadmap.md P2.1):
+Retention rules for a message seen again (requirements §6):
 - an edit overwrites the text; no edit history is kept, and an unversioned or older record never
   replaces a known edit;
 - a deletion keeps the last known text and marks the row deleted;

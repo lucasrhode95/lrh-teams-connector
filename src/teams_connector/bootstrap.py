@@ -1,7 +1,8 @@
 """Composition root: config → tokens → transport → adapters → store → services.
 
-Built lazily on first use, so a starting process does no network or disk work (architecture §2).
-This is the one place that decides which backend serves each capability (architecture §6).
+Built lazily on first use, so a starting process does no network or disk work (architecture,
+"Requests, caching, and storage"). This is the one place that decides which backend serves each
+capability (requirements §4).
 """
 
 from __future__ import annotations

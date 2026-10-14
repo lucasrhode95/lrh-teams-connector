@@ -1,4 +1,4 @@
-"""MCP server over stdio: thin tools over the shared service (architecture §8).
+"""MCP server over stdio: thin tools over the shared service (architecture, "MCP tools").
 
 One process per agent session. Nothing touches the network until the first tool call. Every tool is
 read-only except send_message.

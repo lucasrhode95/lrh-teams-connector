@@ -9,7 +9,7 @@ A local MCP server and browser UI for one user's Microsoft Teams chats and chann
 
 Local search covers the history the connector has prepared, and online search returns bounded
 pages; neither claims to cover every message or meeting transcript. See the
-[roadmap](docs/roadmap.md) for scope and remaining live-validation work.
+[requirements](docs/requirements.md) for scope and the [roadmap](docs/roadmap.md) for open work.
 
 ## Requirements
 
@@ -182,7 +182,7 @@ uv run pytest
 Tests use synthetic accounts and fake HTTP transports. They do not use browser captures or real
 message content.
 
-Project references: [documentation index](docs/README.md) · [architecture](docs/architecture.md) · [API research](docs/api-research.md) · [roadmap](docs/roadmap.md).
+Project references: [documentation index](docs/README.md) · [requirements](docs/requirements.md) · [architecture](docs/architecture.md) · [API research](docs/api-research.md) · [roadmap](docs/roadmap.md).
 
 ## Disclaimer
 

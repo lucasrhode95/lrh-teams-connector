@@ -2,8 +2,9 @@
 
 | Document | Read it for |
 |---|---|
+| [Requirements](requirements.md) | What the connector must do, and the decisions behind it |
 | [Architecture](architecture.md) | How the connector is built: layers, sign-in profiles, storage, safety rules, logging, and the reference for every MCP tool |
-| [Roadmap](roadmap.md) | Scope, open work and live-validation status |
+| [Roadmap](roadmap.md) | Open bugs, improvements, enhancements and validation |
 | [API research](api-research.md) | Dated evidence of how Teams' private and Graph APIs behave |
 
 Diagrams: [architecture](diagrams/architecture.svg) (overview) and [code map](diagrams/code-map.svg)
