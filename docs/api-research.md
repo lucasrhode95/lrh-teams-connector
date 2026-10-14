@@ -24,8 +24,8 @@ with attributed public sources. Live results describe their dated sample, client
 resource configuration; they do not establish universal grants or denials. Names,
 search examples and message text in local examples and fixtures are fictional.
 
-For another account, tenant or changed policy, follow the investigation checklist in
-[the architecture guide](project-architecture.md#porting-and-rechecking-an-environment).
+For another account, tenant or changed policy, start from the sign-in profiles in
+[the architecture guide](architecture.md#authentication-and-account-boundaries).
 Keep public API contracts, private request shapes and historical findings, and rerun
 the relevant calls before selecting a backend. A missing permission, expired token,
 bad request shape, transport failure and empty result are different outcomes.
@@ -212,7 +212,7 @@ The live read-only test on 2026-09-29 acquired a CSA token for:
 https://chatsvcagg.teams.microsoft.com/.default
 ```
 
-using the Teams first-party public client ID and an app-owned interactive sign-in. The resulting token, together with the Skype token, was accepted by the CSA startup route. The response and ordering comparison are summarized under [Live observations and confidence](#live-observations-and-confidence-2026-09-29).
+using the Teams first-party public client ID and an app-owned interactive sign-in. The resulting token, together with the Skype token, was accepted by the CSA startup route. The response and ordering comparison are summarized under [Live observations and confidence](#live-observations-and-confidence--2026-09-29).
 
 ---
 
@@ -609,7 +609,7 @@ The detailed request/response contracts for these routes remain unverified.
 
 ## CSA and visible chat ordering
 
-The live startup response and sidebar comparison are documented under [Live observations and confidence](#live-observations-and-confidence-2026-09-29). In that session, CSA returned a complete catalog, its array order differed from the sidebar, and sorting by descending `lastMessage.originalArrivalTime` matched the observed visible order. The result is account- and time-scoped; the API does not declare that ordering as a contract.
+The live startup response and sidebar comparison are documented under [Live observations and confidence](#live-observations-and-confidence--2026-09-29). In that session, CSA returned a complete catalog, its array order differed from the sidebar, and sorting by descending `lastMessage.originalArrivalTime` matched the observed visible order. The result is account- and time-scoped; the API does not declare that ordering as a contract.
 
 The startup response also exposes synchronization metadata. A live read-only
 request to the delta route accepted the startup token and returned a complete
@@ -675,7 +675,7 @@ This route returns the Chat Service conversation feed and its own continuation m
 GET https://teams.microsoft.com/api/csa/api/v1/teams/users/me
 ```
 
-CSA includes UI-oriented fields such as `isRead`, `isSticky`, `hidden`, `consumptionHorizon`, `lastMessage`, and synchronization metadata. In one live comparison, the raw `chats[]` order differed from the sidebar, while descending `lastMessage.originalArrivalTime` matched the visible ordering. See [Live observations and confidence](#live-observations-and-confidence-2026-09-29) for the scope and limits of that comparison.
+CSA includes UI-oriented fields such as `isRead`, `isSticky`, `hidden`, `consumptionHorizon`, `lastMessage`, and synchronization metadata. In one live comparison, the raw `chats[]` order differed from the sidebar, while descending `lastMessage.originalArrivalTime` matched the visible ordering. See [Live observations and confidence](#live-observations-and-confidence--2026-09-29) for the scope and limits of that comparison.
 
 ### 3. Teams Web chat-list GraphQL operation
 
@@ -686,9 +686,8 @@ The same bundle's schema defines `PinnedChat` with `conversationId` and `order`,
 The source includes an explicit query call in a desktop experience warm-up path (`includePinnedChats: true`, `includeSuggestedContacts: false`). The supplied HARs contain no chat-list GraphQL request/response, and this source audit did not trace the full sidebar component-to-query-to-render path. Treat this as the strongest client-source lead for exact list behavior, not yet a verified endpoint contract or proof of final visible ordering. See [the dated source audit](#teams-web-chat-list-and-people-helper-source-audit-2026-10-11).
 
 This absence is specifically about the Teams chat-list operation. The combined October captures do
-contain ten Outlook `/outlookgatewayb2/graphql` POSTs during Recaps. They are summarized in the
-[cross-product search findings](https://github.com/lucasrhode95/lrh-outlook-connector/blob/main/docs/m365-search-findings.md) and
-detailed in Outlook's API research. Those operations
+contain ten Outlook `/outlookgatewayb2/graphql` POSTs during Recaps. They are
+detailed in [Outlook's API research](https://github.com/lucasrhode95/lrh-outlook-connector/blob/main/docs/api-research.md). Those operations
 concern calendar groups, tabs/entitlements, working hours, auth settings and meeting response; they
 are not evidence of a Teams sidebar GraphQL call.
 
@@ -2488,7 +2487,7 @@ global Files content-source defaults remain unresolved.
 The app-owned Microsoft Search probe recorded earlier in this file returned a generic HTTP 400;
 this later browser capture does not change that standalone result. Graph `driveItem` search works
 in the tested profile, while Graph `chatMessage` search was denied there. Those outcomes are
-account-specific; see the dated G1 notes in `teams-connector-roadmap.md`.
+account-specific; see the dated G1 notes in `roadmap.md`.
 
 ### Meet search and recap
 
@@ -2508,7 +2507,7 @@ client request id. This is a date-bounded search builder, not proof of the Calen
 request. Empty-query behavior, server enforcement of dates, and continuation are unverified.
 Separately, the current shared `teams.graph` token successfully read Graph `calendarView`,
 event Search, and event description content; these Exchange calendar capabilities belong to
-Outlook. See [Outlook research §3.18](https://github.com/lucasrhode95/lrh-outlook-connector/blob/main/docs/outlook-api-research.md#318-calendar-range-listing-and-description-search-through-the-teams-client-graph-profile-2026-10-12).
+Outlook. See [Outlook research §3.17](https://github.com/lucasrhode95/lrh-outlook-connector/blob/main/docs/api-research.md#317-calendar-range-listing-and-description-search-through-the-teams-client-graph-profile-2026-10-12).
 
 **CAPTURED + SOURCE, meeting recap:** recap calls return `EntitySets[].MeetingInsights`. The
 client's `getMeetingRecapCatchupItems` and `getMeetingRecapCallSummary` builders send
@@ -2715,8 +2714,8 @@ profile and synthetic workloads; they do not establish a general service-latency
 
 These measurements did not justify a product-code optimization. Broader workload and throttling
 measurements remain necessary before changing concurrency or local indexing. Do not mix those
-decisions with Graph-migration parity. The cross-product summary and Outlook/file-search comparison
-are in [Microsoft 365 search findings](https://github.com/lucasrhode95/lrh-outlook-connector/blob/main/docs/m365-search-findings.md).
+decisions with Graph-migration parity. The cross-product summary is in the
+[cross-product search ledger](#cross-product-search-ledger-teams-2026-10-12) below.
 
 ## Message identity and jump-to-hit navigation (2026-10-10)
 
@@ -2738,7 +2737,7 @@ can hydrate history; the private request used by the Teams Web click-through rem
 The two Teams message-history transcript URI references documented above are also reference-only
 and do not establish a request contract.
 
-Primary references: [Teams deep links](https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/build-and-test/deep-link-teams), [Graph chat-message search](https://learn.microsoft.com/en-us/graph/search-concept-chat-messages), and [Graph get chatMessage](https://learn.microsoft.com/en-us/graph/api/chatmessage-get?view=graph-rest-1.0). The cross-product endpoint and workflow map is [Microsoft 365 search findings](https://github.com/lucasrhode95/lrh-outlook-connector/blob/main/docs/m365-search-findings.md).
+Primary references: [Teams deep links](https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/build-and-test/deep-link-teams), [Graph chat-message search](https://learn.microsoft.com/en-us/graph/search-concept-chat-messages), and [Graph get chatMessage](https://learn.microsoft.com/en-us/graph/api/chatmessage-get?view=graph-rest-1.0). The cross-product endpoint and workflow map is the [cross-product search ledger](#cross-product-search-ledger-teams-2026-10-12).
 
 ## Teams Web chat-list and People helper source audit (2026-10-11)
 
@@ -2821,7 +2820,7 @@ enumeration/history, Chat Service message history, message search, meeting recap
 ## Teams online message search adapter (2026-10-12)
 
 The connector now exposes `search_remote_messages`, implemented against the standalone-proven
-Search v2 route documented in `lrh-outlook-connector/docs/outlook-api-research.md` §3.14:
+Search v2 route documented in `lrh-outlook-connector/docs/api-research.md` §3.14:
 `POST https://outlook.office.com/searchservice/api/v2/query`. It uses the shared `m365.search`
 profile and the account anchor header; it does not reuse browser cookies or Teams web session state.
 
@@ -2847,3 +2846,218 @@ continuation values, and a response without a Message result set. This documents
 the previous standalone evidence; the new MCP method has not been live-invoked from this connector
 branch. This is message discovery only. Transcript requests with empty or uninterpretable envelopes
 remain inconclusive; global transcript-text search and recap discovery/retrieval are not implemented.
+
+## Teams search and local cache findings (2026-10-11)
+
+This note records code-path and live behavior measurements for the current Teams connector. Live counts and timings describe one connected account and are not service-wide guarantees. No message bodies, identifiers, chat names, or query strings are retained here.
+
+### Current search path
+
+`search_messages` does not use a verified server-side content-search route. It fetches the requested chat/date scope from Teams, archives fetched messages in the local SQLite store, then applies exact, substring, or all-terms matching locally. Search coverage reports `server_side_search_used=false`.
+
+The page budget applies to each call. When preparation is incomplete, the returned cursor resumes that same search's preparation at its saved chat/page position; after preparation is complete, cursor paging applies to local match results. A fresh search does not reuse a completed preparation cursor.
+
+### Live measurements
+
+- Repeated the same exact query over one chat and a one-day range twice. Each independent search fetched one remote page; each completed in about one second. This demonstrates that fresh searches repeat the requested remote read even when the local store already holds the page.
+- Ran an all-catalog search with a five-page budget over a one-day range. It requested 966 chat IDs, fetched five pages in 8.7 seconds, remained incomplete, and returned a continuation cursor. No matches were returned for the synthetic unique query. This is a bounded sample, not a full-history crawl or a benchmark of every catalog chat.
+- The index status reported 966 catalog rows and 14,723 indexed messages, with no complete message histories. A refreshed chat listing reported 734 chats and 232 empty chats excluded. The 966-row search scope therefore includes entries excluded from the visible non-empty chat list; whether all empty entries need to be visited is an optimization to validate.
+
+These measurements show that one global-search call does not download the whole database, but a fresh global search can repeat remote page reads across its requested chat/date scope over multiple cursor calls. The cursor avoids restarting that preparation only when the caller continues the same search.
+
+### Cache-removal implications
+
+Moving message matching to a verified remote Teams search route is the preferred direction. Removing the persisted message-history index is plausible after verifying that the route covers chat message text, required meeting recaps/transcripts, paging, scope, and result hydration. A remote search hit must still be hydrated for the requested excerpt or full message.
+
+Removing the entire local store has additional dependencies: participant/chat search currently uses locally indexed rosters, and catalog/index coverage state is persisted. Those features need a verified remote replacement or should be intentionally removed. Outlook is a useful precedent for avoiding a durable content cache while retaining minimal local application state; it does not imply that Teams can remove every local store before its feature dependencies are mapped.
+
+### Remote-search candidate found
+
+Microsoft documents `POST /v1.0/search/query` with `entityTypes: ["chatMessage"]` for server-side Teams message search. It searches message bodies and supported message attachments in the signed-in user's Teams messages. The documented delegated permission is `Chat.Read`; the Search API entity table also lists `ChannelMessage.Read.All` for channel messages. A live connector request with the required permission has not yet been measured.
+
+This route can replace per-chat page preparation for message text. Search hits provide a summary plus chat and message identifiers, but not all `chatMessage` properties, so hydrate only returned hits. The documented API doesn't support custom sorting for chat messages, and the reported `total` is only the current page size. It doesn't combine `chatMessage` with other entity types, so M365-wide search must issue separate searches and merge the results.
+
+Transcripts remain a separate route: Graph can list and retrieve transcript content per online meeting with `OnlineMeetingTranscript.Read.All`, subject to tenant settings, but no Graph full-text transcript search was identified. Copilot Meeting AI Insights exposes structured meeting notes and action items with separate permission and licensing prerequisites; it is not a search endpoint.
+
+Next, validate the Graph search permission and compare remote hit recall, KQL/date behavior, paging, hydration cost, and repeated-query latency against the current connector. Separately map Teams web requests for recap/transcript content and check whether transcript files are discoverable through OneDrive/SharePoint search. Do not remove the message-history cache until those paths and the remaining local roster/catalog dependencies are covered.
+
+Sources reviewed on 2026-10-11:
+
+- https://learn.microsoft.com/en-us/graph/search-concept-chat-messages
+- https://learn.microsoft.com/en-us/graph/api/resources/search-api-overview?view=graph-rest-1.0
+- https://learn.microsoft.com/en-us/graph/api/onlinemeeting-list-transcripts?view=graph-rest-1.0
+- https://learn.microsoft.com/en-us/microsoftteams/platform/graph-api/meeting-transcripts/meeting-insights
+
+## Teams remote search and cache evaluation (2026-10-11)
+
+This dated addendum records live connector behavior and public Microsoft Graph documentation reviewed during the Microsoft 365 search investigation. Live measurements describe one connected account and are not service-wide performance guarantees. No message content, identifiers, or account names are retained.
+
+### Current Teams connector behavior
+
+The Teams connector fetches pages for the requested chat/date scope, archives those messages in SQLite, then matches locally. Search reports `server_side_search_used=false`. A page budget is per call; the cursor resumes the same search's preparation and then local match paging. A fresh query creates new preparation work rather than reusing the old cursor's completed preparation.
+
+Live measurement: the same exact one-chat, one-day search fetched one remote page on each of two independent runs (about one second per run). An all-catalog search with a five-page cap requested 966 chat IDs, fetched five pages in 8.7 seconds, remained incomplete, and returned a cursor. It did not download the entire message database in that call, but a fresh global search can repeat remote page reads across the requested scope over multiple cursor calls.
+
+Index status reported 14,723 indexed messages and no complete message histories. It reported 966 catalog rows; a refreshed visible chat list reported 734 chats and 232 empty chats excluded. The search scope therefore appears to include entries excluded from the visible non-empty chat list. Confirm whether visiting those empty entries causes avoidable remote calls before changing scope behavior.
+
+### Remote search candidate: Microsoft Search API
+
+Microsoft documents `POST /v1.0/search/query` with `entityTypes: ["chatMessage"]` as server-side Teams message search. It searches message bodies and supported attachment content in the signed-in user's Teams message storage, returns ranked/date-ordered hits, and can be paged with `from` and `size`. The documented delegated permission for chat messages is `Chat.Read`; the entity-type permission table also lists `ChannelMessage.Read.All` for channel messages.
+
+This is a strong replacement candidate for per-chat message fetching plus local text matching. Search results expose message and chat IDs and a summary, but do not include every `chatMessage` property, so hydrate returned hits selectively through the Teams message API. The documented limitations include no custom sort, no exact total beyond the current page for Teams hits, and no combining `chatMessage` with other entity types. Validate supported query semantics and result coverage against the connector's current exact/substring/all-terms behavior before switching.
+
+### Transcripts and meeting recaps
+
+The message-search entity does not cover transcript entities. Graph has separate transcript APIs: list transcripts for an online meeting and retrieve transcript content. The delegated permission is `OnlineMeetingTranscript.Read.All`; tenant policy can disable Graph transcript access. The documented per-meeting list applies to scheduled online meetings and excludes live events, so it is not a global full-text transcript-search endpoint.
+
+For Copilot meeting recaps, the Meeting AI Insights API returns structured meeting notes, action items, and participant mentions. It requires `OnlineMeetingAiInsight.Read.All` and a Microsoft 365 Copilot license, is available only after a meeting, may take up to four hours to appear, and has meeting-type/retention limitations. It retrieves insight objects rather than searching their text remotely.
+
+### Cache decision
+
+Prefer remote message search and then remove the durable message-history cache once a live Graph request succeeds and parity, paging, hydration, and query semantics are measured. Treat transcript and recap search separately: without a server-side search route, matching their content still requires downloading content per query or maintaining a local index.
+
+Removing the entire local store also affects participant search, which currently uses locally indexed rosters, and persisted catalog/index coverage. Replace those dependencies with verified remote routes or intentionally remove those features. The Outlook connector is a precedent for avoiding a durable mail-content cache, while still retaining minimal local application state.
+
+### Sources
+
+- Microsoft Search API for Teams messages: https://learn.microsoft.com/en-us/graph/search-concept-chat-messages
+- Microsoft Search API entity types and permissions: https://learn.microsoft.com/en-us/graph/api/resources/search-api-overview?view=graph-rest-1.0
+- List Teams meeting transcripts: https://learn.microsoft.com/en-us/graph/api/onlinemeeting-list-transcripts?view=graph-rest-1.0
+- Teams Meeting AI Insights API: https://learn.microsoft.com/en-us/microsoftteams/platform/graph-api/meeting-transcripts/meeting-insights
+
+## Microsoft 365 Search API coverage review (2026-10-10)
+
+**Evidence:** DOCUMENTED in Microsoft Graph v1.0 documentation (moved from the Outlook connector's research, where the review covered all products).
+
+| Area | Documented Graph capability | Connector decision or remaining gap |
+|---|---|---|
+| Teams messages | `chatMessage` search is available on v1.0. Microsoft documents it searches message bodies and attachments, with supported file types matching SharePoint Online search. Results are limited to messages the signed-in user is in, omit some `chatMessage` fields, cannot be combined with other entity types, and do not support sorting. The returned total is page-local. | Hydrate selected hits through the documented Teams resource APIs. The tested profile's Graph search was denied; live attachment recall, matched-attachment identity, hosted-file linkage, and parity with the captured Files filter remain unverified. |
+| Meeting transcripts | Per-meeting transcript listing and content retrieval are separate from Search. Delegated transcript reads use `OnlineMeetingTranscript.Read.All` and are subject to tenant settings. `getAllTranscripts` is application-only and organizer-scoped; it does not cover channel meetings. | The documented Microsoft Search v1.0 entity list has no transcript entity, while transcript APIs document listing/content retrieval. **Inference:** classify Graph transcript support as retrieval only; online full-text discovery remains unproven, not disproven for every Microsoft provider. |
+
+## Attachment and message discovery endpoint confirmation (2026-10-11)
+
+Microsoft Search in Graph uses `POST /v1.0/search/query`; `chatMessage` cannot be combined with other entity types (moved from the Outlook connector's research).
+
+| Search target | Graph request | Documented coverage and observed limits |
+|---|---|---|
+| Teams message body and attachment contents | `POST /v1.0/search/query`, `entityTypes=["chatMessage"]` | Microsoft documents body-plus-attachment search for supported file types. The response is a Teams message hit and the API omits some message fields; the tested profile's live call was denied, so tenant access and actual recall still need validation. |
+
+## Microsoft 365 search capture and source route map: Teams rows (2026-10-10)
+
+Moved from the Outlook connector's cross-product route map; the detailed Teams evidence is in the audit section above.
+
+| Surface | Captured/source contract | What remains unproven |
+|---|---|---|
+| Teams global search | Captures used `POST /searchservice/api/v2/query`; request shapes include `EntityRequests` and, in some flows, `AnswerEntityRequests`. Teams also submitted three `POST /search/api/v2/query` Transcript requests and five `POST /search/api/v1/recommendations` recap requests. | See the Teams API research for request/result details and click-navigation source. Browser success does not prove standalone auth; continuation and transcript-search completeness remain open. |
+| Teams Meet search | SOURCE maps `MEETINGDOMAIN` to `Event`; `MEETING_SEARCH.DEFAULT_REQUEST_BODY` uses `Event`, `Exchange`, and supported/preferred result-source-format hints. A separate Meet-app `searchEvents` builder posts to `/search/api/v2/query` with lowercase `entityRequests[]`, date bounds, proximity sort, `from=0`, `size=30`; its parser reads `EntitySets[0].ResultSets[0].Results[].Source`. | The separate Meet-app builder has not been tied to the global Teams Meetings tab captured in the HAR. Source page-size settings are UI defaults, not server guarantees; standalone usability remains open. |
+| Meeting recap | Captured recap calls returned `EntitySets[].MeetingInsights`. SOURCE identifies `getMeetingRecapCatchupItems` and `getMeetingRecapCallSummary` request builders with `QueryParameters` fields for entity type/id/context and optional start/end times, top count and meeting-thread filter. The parser reads recording, summary, points-of-interest, speaker and timing fields; recommendations can expose `PaginationSessionId`. | The caller path that would reuse that pagination id has not been established; recap search coverage is not equivalent to calendar event search. |
+| Transcripts | CAPTURED ODSP transcript GET path: `/_api_cached/v2.1/drives/{drive}/items/{item}/cdnmedia/transcripts` (three HTTP 200 responses), with query keys `cTag`, `P1`–`P4`, `isformatjson`, `transcriptkey`, `applyhighlights`, `applymediaedits` and `kid`. SOURCE also shows legacy AMS `/v1/objects/{object}/views/transcript` and `/status`, Meeting Intelligence `/MeetingIntelligence/TranscriptService/storage/{storage}/scope/{scope}/`, and ODSP `/drives/{drive}/items/{item}/media/transcripts/{transcript}/content`. The storage/scope builder sets `isChannel=true` for channel meetings. | Retrieval does not prove global text search. The captured ODSP keys' semantics and continuation role are unverified; `applymediaedits=true` in the source builder is a content-control flag. View and download permissions remain distinct. |
+
+## Meeting recaps and transcripts as search sources (2026-10-10)
+
+Moved from the Outlook connector's research §3.13.
+
+**Meeting recaps (CAPTURED + SOURCE):** Teams web returned `MeetingInsights` in recap responses,
+and its client source contains separate recap catch-up/summary request builders. This remains
+distinct from Event Search and transcript retrieval. `PaginationSessionId` appears in recap data,
+but a working continuation path and standalone authentication have not been proven; see the
+[route map rows](#microsoft-365-search-capture-and-source-route-map-teams-rows-2026-10-10) and the audit above.
+
+**Transcripts (DOCUMENTED, retrieval only):** Graph can list transcripts for a scheduled
+calendar-backed `onlineMeeting` and retrieve content through a separate `/transcripts/{id}/content`
+request. Delegated listing requires `OnlineMeetingTranscript.Read.All`; tenant settings gate access,
+meetings expire, and the documented API excludes live events and meetings created without a
+calendar event. Transcript content is returned as bytes; the documented content formats include
+speaker-attributed WebVTT and timestamped text without speaker tags. Bulk `getAllTranscripts` is
+application-only and requires an application access policy, with organizer scope. The Graph Search
+entity list contains no transcript type. These contracts make discovery, per-meeting retrieval,
+and transcript-text Search separate checks; transcript keyword Search remains unproven, not
+disproven for every provider. [List transcripts](https://learn.microsoft.com/en-us/graph/api/onlinemeeting-list-transcripts?view=graph-rest-1.0),
+[get transcript content](https://learn.microsoft.com/en-us/graph/api/calltranscript-get?view=graph-rest-1.0),
+[organizer transcript listing](https://learn.microsoft.com/en-us/graph/api/onlinemeeting-getalltranscripts?view=graph-rest-1.0).
+The permissions reference marks delegated `OnlineMeetingTranscript.Read.All` as requiring admin
+consent, and tenant Graph transcript access must also be enabled; a fresh user login alone may not
+be sufficient. [Permission reference](https://learn.microsoft.com/en-us/graph/permissions-reference?view=graph-rest-1.0).
+
+## Cross-product search ledger: Teams (2026-10-12)
+
+Moved from the Outlook connector's former cross-product index (`m365-search-findings.md`). Some rows summarize evidence recorded in more detail above.
+
+**Graph link:** Graph message-history and transcript APIs are listed in the Graph table below. Teams global Search v2 and its MCPS recap/transcript routes are separate Teams services.
+
+### Search and meeting surfaces
+
+- The global Teams search bar exposed **All, Messages, Files, People, Channels, Group chats, and Meetings**. No Transcript tab was visible; an overflow menu was present but its labels were not captured.
+- Teams global search submitted to `POST https://teams.microsoft.com/searchservice/api/v2/query`, whose bodies used `EntityRequests` and sometimes `AnswerEntityRequests`. A separate Teams route, `POST /search/api/v2/query`, carried three `Transcript` queries with `ContentSources=Teams`; one structured response had zero results and two response bodies could not be interpreted. This does not establish that transcript search is unsupported.
+- The separate Meet-app Event builder also posts to `/search/api/v2/query` with lowercase `entityRequests`, date bounds, proximity sort, `from=0`, and `size=30`; source code has not tied that builder to the global Meetings filter. The route family therefore has distinct payload/workflow variants.
+- A later capture showed File, People, Message, and Event categories. The separate Meet-app Event query was not proven to back the global-search Events category. Teams' global Substrate search is distinct from Graph Search API and direct SharePoint search.
+- One parseable mixed response contained eight Message, three File, and five Event hits. Message `Source` fields included `InternetMessageId`, conversation/client-thread identities, and sent/received/created timestamps; File `Source` fields included SharePoint site/list/item pointers; Event `Source` included event ID and start/end times. A Teams Web Message-result normalizer uses `InternetMessageId` for the UI result id and builds `primaryAction.navigationId` from reply-chain identity, `ClientThreadId`, and `DateTimeSent`; the click handler uses those values to address the hit. The capture confirms those core input fields, but `ParentMessageId` and `ThreadSubType` used in reply-chain derivation were not top-level Source keys, and the exact component caller is not fully traced. This identifies and dates a captured message hit, but not a history-page number. The identifier has not been cross-checked against Graph/Chat Service history IDs, and the history-fetch wire request remains uncaptured.
+- A common query with the Meetings filter returned 25 rows in the observed UI. A calendar-event detail/expanded view exposed agenda, participants, and an attachment.
+- The Recaps surface loaded transcript tabs for both known recap pages. In-pane transcript search returned matches in one recap. The underlying transcript-viewer search request was not mapped. A download control was disabled for one recap and indicated host permission was needed; this is distinct from viewing/searching the transcript.
+- The Recaps capture also links meeting-resource storage metadata to follow-up routes: for three captured artifacts, MCPS `driveId`/`driveItemId` values match cached ODSP media requests and Graph DriveItem `/preview` requests. This establishes ID handoff for those recap artifacts, but does not map global Search v2 file hits to Graph IDs. The same workflow fetched video visual frames from SharePoint media routes; these are playback hydration, not search results.
+
+### Teams and meeting endpoint inventory
+
+The Teams connector now exposes bounded online Message/Teams discovery through Search v2 and the
+shared `m365.search` profile. Request mapping and continuation have synthetic coverage; a live MCP
+call and direct hydration of a returned hit ID remain unverified. Recap and transcript capabilities
+remain separate open work. See the [Teams search roadmap](https://github.com/lucasrhode95/lrh-teams-connector/blob/main/docs/roadmap.md#p22--search)
+and [adapter research](https://github.com/lucasrhode95/lrh-teams-connector/blob/main/docs/api-research.md#teams-online-message-search-adapter-2026-10-12).
+
+| Endpoint or route family | Purpose and observed shape | Evidence / limit |
+| --- | --- | --- |
+| `POST https://teams.microsoft.com/searchservice/api/v2/query` | Teams global Search v2; request fields included `EntityRequests` and sometimes `AnswerEntityRequests`, with `File`, `People`, `Message`, and `Event` categories. | Captured submitted global searches. Results include `EntitySets` and/or `AnswerEntitySets`; no later page offset was captured. |
+| `POST https://teams.microsoft.com/search/api/v2/query` | A distinct Teams route used for three `Transcript` queries with `ContentSources=Teams`. | All returned HTTP 200; one structured response had zero hits, two bodies were not interpretable. This does not establish unsupported transcript search. |
+| `POST /search/api/v1/recommendations` | Teams Recaps recommendation flow requested `MeetingCatchUp`; interpreted responses included `EntitySets[].MeetingInsights`. | Five HTTP 200 calls in the Recaps capture; no continuation request using the observed recap pagination identifier was captured. This is not the global result-query route. |
+| `POST /search/api/v1/suggestions` and `GET /search/api/v1/suggestions` | Search-box suggestions vary by surface and request shape. | Teams global search used POST; SharePoint used GET; Outlook used POST. These are suggestion routes, not submitted result searches. |
+| `POST /search/api/v1/suggestions?scenario=powerbar` | Captured Teams Powerbar People suggestion workflow. | Nine HTTP 200 POST entries; one interpretable response returned one People suggestion. This differs from Middle Tier People Picker routes and from global Search v2 results; full result completeness/paging is unknown. |
+| Meet-app `POST /search/api/v2/query` | Separate Event search builder; lowercase `entityRequests`, date bounds, proximity sort, `from=0`, `size=30`; parses `EntitySets[0].ResultSets[0].Results[].Source`. | Teams client source observation, not proven to back the global Meetings tab. |
+| `GET https://teams.microsoft.com/api/mcps/{region}/user/meetings/contents?startDateTime=...&endDateTime=...&includeTypes=...&top=...` | Lists meeting contents. Observed `includeTypes` values: `MeetingChat`, `MeetingStage`, `Notes`, `Recording`, `TranscriptV2`. | Four HTTP 200 responses; returned `value` plus `paginationInfo.hasNextPage`; advancing this endpoint's page was not verified. |
+| `GET https://teams.microsoft.com/api/mcps/{region}/contents/?threadId=...` | Meeting resource lookup. Thirteen captured HTTP 200 calls used `threadId` with `recapCallId`, `iCalUid`, `organizerId`, `organizerEmail`, and/or `isSeriesMeeting`. | Resource records included `addedBy`, `additionDateTime`, `id`, `mcoResourceId`, `metadata`, `subType`, `type`, and `webUrl`. Metadata keys observed are recorded in the Teams research file. |
+| `POST https://graph.microsoft.com/v1.0/drives/{driveId}/items/{itemId}/preview` | DriveItem preview route used during Recaps. | Four HTTP 200 POSTs plus two successful OPTIONS preflights across three drive/item pairs; all three pairs match MCPS resource metadata. This is preview/context hydration, not Search API, and no body/response contract was established. |
+| `GET /_api/v2.1/sites/{siteId}/drive/items/{itemId}/media/visualSegmentFrames/{frameId}/content` | SharePoint media frame retrieval during Recaps. | Twenty HTTP 200 JPEG GETs and twenty OPTIONS preflights; no query keys. Video display hydration, not global file/transcript search. |
+| `POST https://teams.microsoft.com/api/mcps/{region}/meetingcatchup/multilingual/aicontent` | Recap/AI-content retrieval. | Captured body keys: `EntityRequests`, `Flights`, `Scenario`, `TargetLanguage`; response included `EntitySets[].MeetingInsights`. |
+| `GET /api/mcps/{region}/collab/readcollabobject/V2/{opaquePath}` | Recaps collaboration-object hydration. | Five HTTP 200 responses; response included resource metadata fields. Opaque path composition is not established. |
+| `GET /api/apps/part/{region}/beta/chats/{chatId}/tabs` | Recap-associated chat tab discovery. | One HTTP 200 response with a `value` envelope; not a message-history request. |
+| `GET /api/chatsvc/{region}/v1/threads/{threadId}/consumptionhorizons` | Thread-level metadata fetched during recap navigation. | Two HTTP 200 calls; no captured response field establishes the message page/window for a search hit. |
+| `GET /api/teamsevents/{region}/beta/events/{eventId}` and `GET /api/mt/part/{region}/v2.0/me/calendars/events/{eventId}` | Event and calendar-event detail hydration. | One Teams Events call and two Middle Tier calendar calls returned HTTP 200; response schemas and attendance meaning are not established. |
+| `GET /api/csa/{region}/api/v1/teams/users/me/pinnedChannels` | Teams shell channel-pin state. | Two HTTP 200 calls in the global-search capture; not a Search v2 result request or chat-list GraphQL response. |
+| `POST /ups/{region}/v1/presence/getpresence` and `/ups/global/v1/presence/getpresence` | Teams presence support calls. | In the Recaps capture, two regional requests returned HTTP 200 and two global-alias requests returned HTTP 404; this is capture-specific service discovery, not a general restriction. |
+| `POST /ups/{region}/v1/pubsub/subscriptions/{subscriptionId}` | Teams shell subscription activity. | Three HTTP 200 calls total: two in the Recaps capture and one in the global-search capture; payload semantics are unresolved. |
+| `PUT /api/mt/part/{region}/v1/schedulingService/meetings` | Adjacent meeting-scheduling update route. | Five HTTP 200 calls observed in Recaps with a `SchedulingServiceUpdateUrls` body field; the write route was not replayed. |
+| Outlook `POST /outlookgatewayb2/graphql?cv=...&n=...` | The same Recaps browser session made private OWA GraphQL calls for calendar availability, meeting response, and tab/entitlement data. | See Outlook section above. This cross-product call does not establish that Outlook GraphQL performs Teams Search or transcript retrieval. |
+| Recap builders `getMeetingRecapCatchupItems` and `getMeetingRecapCallSummary` | Substrate recap catch-up/summary request families; `QueryParameters` carried entity type/id/context and optional time bounds, top count, and meeting-thread filter. | Source names and fields observed; the exact caller/pagination path for `PaginationSessionId` remains unproven. These are distinct from calendar Event search and MCPS AI content. |
+| `GET https://teams.microsoft.com/_api_cached/v2.1/drives/{drive}/items/{item}/cdnmedia/transcripts?...` | Cached transcript-family request. Query key names included `cTag`, `P1`–`P4`, `isformatjson`, `transcriptkey`, `applyhighlights`, `applymediaedits`, and `kid`. | Captured route shape only; parameter meanings, continuation, and full response behavior remain uncertain. |
+| `POST /api/mt/part/{region}/beta/users/fetch` and `fetchShortProfile` | Middle Tier profile resolution; both took a JSON-array body and returned an object with a `value` array. | One HTTP 200 call per route in the Teams search capture. The `fetch` response included profile field names; these are lookup helpers, not free-form People Picker searches. |
+| `POST /api/mt/part/{region}/beta/users/fetchfeaturesettings` | Batch feature-setting lookup by `Mri`; returns an array with per-entry `status`. | Three HTTP 200 calls; values and status meaning were not retained or interpreted. |
+| `GET /api/mt/part/{region}/beta/users/{userId}/profilepicturev2/{mri}` and `GET /api/mt/part/{region}/beta/users/{userId}/mergedProfilePicturev2` | Profile-image hydration with display/size/etag query-key variants. | Successful image responses (JPEG/PNG); these hydrate People results and are not search calls. |
+| `/drives/{drive}/items/{item}/media/transcripts/{transcript}/content` | Transcript-content route assembled by the Teams client bundle. A chat-history embedded URI used two additional path segments. | Static source observation, not a captured request; method, auth, and response remain unverified. Do not treat as an endpoint contract yet. |
+| `/v1/objects/{object}/views/transcript`, `/v1/objects/{object}/views/transcript/status`, and `/MeetingIntelligence/TranscriptService/storage/{storage}/scope/{scope}/` | Legacy AMS and Meeting Intelligence transcript route families; the storage/scope builder adds `isChannel=true` for channel meetings. | Teams bundle source observations, not confirmed requests in the captured workflow. |
+| `https://teams.microsoft.com/l/message/{chatId}/{messageId}?context={...}` | Documented Teams deep link to a chat message. | Microsoft-documented navigation form. User-observed click-to-hit behavior is consistent with message-ID anchoring; the actual client click handler and follow-up network request were not captured. |
+| `https://teams.microsoft.com/l/message/{channelId}/{messageId}?tenantId=...&groupId=...&parentMessageId=...&teamName=...&channelName=...&createdTime=...` | Documented Teams deep link to a channel message. | Same limit: URL contract is documented; internal surrounding-window loading sequence is not captured. |
+
+### Clicking a Teams message hit
+
+The observed product behavior jumps to the selected message in its conversation. The 2026-10-10 Teams bundle gives a concrete client-side explanation: the search result activation path parses the result's primary navigation reference and calls `chat.chatById` with `replyChainId`, `messageId`, `dateTimeSent`, a generated `searchSessionId`, and highlight text; the channel path calls `channel.channelMessagesById` with channel/team identity, `replyChainId`, `deepLinkId`/message identity, and highlight options. A separate deep-link handler uses `focusOnLoad=DeeplinkedMessage`. The client can therefore address the hit by identity and timestamp without a page number.
+
+No message-history HTTP call or event-level click trace appears in the supplied HARs. The exact request chain and the conversion of `dateTimeSent` to the existing Chat Service `startTime` parameter remain unverified. Treat the source-level navigation fields as established, and the timestamp-to-wire-query mapping as an inference. See [the Teams capture/source audit](https://github.com/lucasrhode95/lrh-teams-connector/blob/main/docs/api-research.md#search-result-activation-and-exact-message-navigation-source-2026-10-11-audit).
+
+The captured Teams Search v2 route and the message deep link serve different steps: Search v2 discovers results; the deep link identifies a destination message. They should not be collapsed into one endpoint. The in-pane transcript search is a third workflow whose request route remains unknown.
+
+Further detail: [Teams API research](https://github.com/lucasrhode95/lrh-teams-connector/blob/main/docs/api-research.md) and [Teams roadmap](https://github.com/lucasrhode95/lrh-teams-connector/blob/main/docs/roadmap.md).
+
+| Shared mechanism | Products / data | How the workflows relate |
+| --- | --- | --- |
+| `POST /v1.0/search/query` with `entityTypes: ["chatMessage"]` | Graph chat-message search. | Denied for the tested profile; account-specific, not a general Graph restriction. Separate from Teams Search v2. |
+| `GET /v1.0/chats/{chatId}/messages` and `/v1.0/teams/{teamId}/channels/{channelId}/messages` | Teams chat/channel message history. | Context retrieval, distinct from search discovery and Teams' direct message link. Graph paging is opaque; list responses support up to 50 messages/page and do not provide a stable page number for a search hit. |
+| `GET /v1.0/me/onlineMeetings/{meetingId}/transcripts` and `GET /v1.0/me/onlineMeetings/{meetingId}/transcripts/{transcriptId}/content` | Transcript listing and per-meeting transcript content. | Documented Graph routes, separate from full-text discovery, Teams Search v2, and MCPS recap routes. Retrieval requires documented transcript permissions and applicable tenant settings; not live-verified in this investigation. |
+
+For Teams message hits, preserve message ID, chat/channel identity, and timestamp. Prefer the Teams deep link when the agent/user wants to open the UI at the exact hit. For programmatic context, fetch by chat/channel identity and use opaque paging or a bounded date strategy; an exact page number was not found. Let the agent choose whether to hydrate a hit, fetch more surrounding messages, or stop. The connector should return provenance and useful identifiers rather than guessing which hits are promising.
+
+Measurements below are point-in-time observations, not broad latency claims. Before online Teams search was implemented, a one-chat/one-day exact search fetched one history page in about one second. A five-page all-catalog search covered five pages across 966 catalog IDs in 8.7 seconds and remained incomplete. Four concurrent one-page history reads took 3.552 seconds versus 4.298 seconds sequentially, about 17% lower; each result was incomplete at the one-page limit, so this small sample does not establish a safe concurrency setting.
+
+A synthetic SQLite FTS5 comparison across 14,720 and 100,000 messages found selective rare-substring searches improved from 15.36 to 3.82 ms and 44.06 to 4.64 ms, respectively. Common-substring searches regressed from 3.97 to 29.28 ms and 4.02 to 153.09 ms; common all-terms searches regressed from 4.01 to 31.80 ms and 3.87 to 185.98 ms. The FTS index increased database size by 30.5% and 34.1% and took 77 ms and 717 ms to build. Only three query shapes were compared, so this does not justify replacing the current matcher. An empty temporary-scope delete measured roughly 1–3 microseconds per search, within noise. Detailed methods and limits are in [Teams API research](https://github.com/lucasrhode95/lrh-teams-connector/blob/main/docs/api-research.md#connector-code-path-audit-and-measurements-2026-10-10).
+
+| Content | Graph Search API entity | What it searches | Status in this investigation |
+| --- | --- | --- | --- |
+| Teams messages and supported attachments | `chatMessage` | Message body and attachments; supported attachment file types match SharePoint Online search. Results identify the message, not a documented attachment-specific hit. | Graph `chatMessage` search was denied for the tested profile. The Teams connector instead implements the separately captured Search v2 Message/Teams route; live invocation through that connector remains unverified. |

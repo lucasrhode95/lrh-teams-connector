@@ -24,9 +24,9 @@ general OneDrive/SharePoint file discovery belongs to the planned SharePoint con
 and meeting-resource ownership does not depend on which product hosted a shared search endpoint.
 
 **Standalone search update:** The pinned evidence is in repository `lrh-outlook-connector`, file
-`docs/outlook-api-research.md` §3.14, at commit `3c71bb1f3b517a4b28d6aa752b1ee4e9fc8b494e`.
+`docs/api-research.md` §3.14, at commit `3c71bb1f3b517a4b28d6aa752b1ee4e9fc8b494e`.
 From an Outlook connector checkout, inspect it with
-`git show 3c71bb1f3b517a4b28d6aa752b1ee4e9fc8b494e:docs/outlook-api-research.md`. It records
+`git show 3c71bb1f3b517a4b28d6aa752b1ee4e9fc8b494e:docs/api-research.md`. It records
 successful app-owned OWA-host Search v2 Message/Teams requests with pagination. One known chat's
 result identities matched; a second target's identity bridge remains unresolved. The current
 product search is still fetch/archive/local matching. Broad-discovery work can use the successful
@@ -49,7 +49,7 @@ does not establish that every remote route is inaccessible.
 These are synthetic regression checks; no live-service performance or reliability improvement has
 been measured.
 
-This is the consolidated register of gaps between the current application and the intended product. Endpoint facts and captured payloads live in [Teams API research](teams-api-research.md); module responsibilities are in [Project architecture](project-architecture.md); usage is in [MCP server guide](teams-mcp-server.md).
+This is the consolidated register of gaps between the current application and the intended product. Endpoint facts and captured payloads live in [Teams API research](api-research.md); module responsibilities are in [Project architecture](architecture.md); usage is in [MCP server guide](architecture.md#mcp-tools).
 
 Implementation status in this register was reviewed on **2026-10-12**. Earlier capture dates below
 remain the dates of that evidence, not the date of the current code review.
@@ -262,8 +262,8 @@ route is used for submitted searches, while targeted client source maps `FILEDOM
 meeting-recap/transcript retrieval paths. These are browser/source observations, not standalone
 connector proof. Graph `driveItem` success and `chatMessage` denial remain specific to the tested
 profile; reassess before choosing migration or unsupported status. Details are in
-[Teams API research](teams-api-research.md#microsoft-365-search-capture-and-source-audit-2026-10-10)
-and the [cross-product search findings](https://github.com/lucasrhode95/lrh-outlook-connector/blob/main/docs/m365-search-findings.md).
+[Teams API research](api-research.md#microsoft-365-search-capture-and-source-audit-2026-10-10)
+and its [cross-product search ledger](api-research.md#cross-product-search-ledger-teams-2026-10-12).
 
 **Local known-hit check (2026-10-10):** the connector fetched one scoped self-chat item and then
 returned it from local substring search; exact mode returned no match because the probe term was
@@ -272,7 +272,7 @@ search was used. This validates local archive search only; it did not validate o
 bounded `search_remote_messages` implementation now covers one Search v2 Message/Teams page per call
 through the shared `m365.search` profile. Its response mapping and continuation have synthetic tests,
 while a live call through this connector and direct hit-id hydration remain unverified; see the
-current P2.2d status above and [API research](teams-api-research.md#teams-online-message-search-adapter-2026-10-12).
+current P2.2d status above and [API research](api-research.md#teams-online-message-search-adapter-2026-10-12).
 
 **Required Microsoft 365 coverage:** a complete cross-product search workflow also needs calendar
 events, meeting recap results, transcript discovery/retrieval, and transcript-text search where a
@@ -409,7 +409,7 @@ Codex may create a temporary script (preferably under a temp/dev-only path and n
 7. run the normal service/index/export path and verify the SQLite result matches the policy above;
 8. delete/clean up remaining disposable test messages when the experiment is complete where practical.
 
-The authorization is limited to the user's self chat and disposable messages created for this test. Do not mutate other chats/messages. Never print tokens/cookies/auth headers. Record sanitized raw behavior and update `docs/teams-api-research.md` with the verified edit/delete contract afterward.
+The authorization is limited to the user's self chat and disposable messages created for this test. Do not mutate other chats/messages. Never print tokens/cookies/auth headers. Record sanitized raw behavior and update `docs/api-research.md` with the verified edit/delete contract afterward.
 
 ### 5. P1.2 — long-history filtering and export reliability
 
@@ -569,7 +569,7 @@ to request another search page. Search result IDs have not yet been verified as 
 no exact history page number is returned.
 
 Live standalone behavior, known-hit identity results, and failure cases are recorded in
-`lrh-outlook-connector/docs/outlook-api-research.md` §3.14. This connector branch has synthetic
+`lrh-outlook-connector/docs/api-research.md` §3.14. This connector branch has synthetic
 request and mapping coverage; it has not yet run an account-backed search through the new MCP tool.
 
 Still open: heterogeneous Search v2 results for chats, files, teams/channels and events; global
@@ -927,7 +927,7 @@ Do not build the canonical classifier from prefixes alone. Prefer explicit `chat
 
 ## How future investigations should be conducted
 
-- Start from [Teams API research](teams-api-research.md), the captured Teams Web source/network archive and current repository code before searching for another implementation.
+- Start from [Teams API research](api-research.md), the captured Teams Web source/network archive and current repository code before searching for another implementation.
 - Distinguish **observed network behavior**, **current Web source behavior**, **inference**, and **our implementation choice**.
 - Keep browser-session success distinct from success with the application's app-owned MSAL authentication. Production capabilities must work without copying browser tokens/cookies.
 - Use controlled marker strings when tracing searches or other read behavior so a captured request can be tied to one user action.
@@ -947,7 +947,7 @@ Do not build the canonical classifier from prefixes alone. Prefer explicit `chat
   observed. Next: compare it with a sanitized DevTools/Resource Saver capture from the loaded
   transcript viewer and map the two extra path segments.
 - The bounded code-path and performance review is recorded in Teams API research,
-  [Connector code-path audit and measurements](teams-api-research.md#connector-code-path-audit-and-measurements-2026-10-10).
+  [Connector code-path audit and measurements](api-research.md#connector-code-path-audit-and-measurements-2026-10-10).
   Small tests found one modest concurrent-read timing difference and mixed FTS results, with large
   common-query regressions and added database size. They do not justify a concurrency or indexing
   change. Any future optimization should use representative workload and throttling measurements,
@@ -958,7 +958,7 @@ Do not build the canonical classifier from prefixes alone. Prefer explicit `chat
 - A targeted read of the supplied Teams Web bundle establishes source-level request/response
   construction for multiple People Picker and profile helpers, including the distinct
   `peopleProfileService` working-set route. The route inventory, body/parameter shapes, response
-  transforms and unresolved boundaries are recorded in [Teams API research](teams-api-research.md#peoplesearchprofile-helpers).
+  transforms and unresolved boundaries are recorded in [Teams API research](api-research.md#peoplesearchprofile-helpers).
 - The supplied HAR captures Substrate `scenario=powerbar` requests with a People entity and one
   successful response containing a single People suggestion. That is a different surface from
   Middle Tier `/beta/users/searchV2` and the full Search v2 result endpoint. Field names are
@@ -972,7 +972,7 @@ Do not build the canonical classifier from prefixes alone. Prefer explicit `chat
   add them to production code from source alone.
 - The Teams Web source also identifies separate chat-list GraphQL connections and a Teams/Channels
   folder sorting helper, but does not connect that helper to recent-chat rendering. Exact sidebar
-  recent ordering remains open; see the [dated source audit](teams-api-research.md#teams-web-chat-list-and-people-helper-source-audit-2026-10-11).
+  recent ordering remains open; see the [dated source audit](api-research.md#teams-web-chat-list-and-people-helper-source-audit-2026-10-11).
 
 ### Exact-message search-result navigation (2026-10-11 source audit)
 
@@ -990,5 +990,5 @@ channel command. The chat command receives `replyChainId`, `messageId`, `dateTim
 `replyChainId`, `deepLinkId`/message identity, and highlight options. This explains how the client
 can address an exact hit without a page ordinal. The HAR does not include a message-history request
 or the click-triggered wire sequence. Mapping `dateTimeSent` to the existing Chat Service
-`startTime` parameter remains an inference. See [API research](teams-api-research.md#search-result-activation-and-exact-message-navigation-source-2026-10-11-audit)
-and the [cross-product endpoint/workflow ledger](https://github.com/lucasrhode95/lrh-outlook-connector/blob/main/docs/m365-search-findings.md).
+`startTime` parameter remains an inference. See [API research](api-research.md#search-result-activation-and-exact-message-navigation-source-2026-10-11-audit)
+and its [cross-product search ledger](api-research.md#cross-product-search-ledger-teams-2026-10-12).

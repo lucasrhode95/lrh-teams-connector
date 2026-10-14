@@ -9,7 +9,7 @@ A local MCP server and browser UI for one user's Microsoft Teams chats and chann
 
 Local search covers the history the connector has prepared, and online search returns bounded
 pages; neither claims to cover every message or meeting transcript. See the
-[roadmap](docs/teams-connector-roadmap.md) for scope and remaining live-validation work.
+[roadmap](docs/roadmap.md) for scope and remaining live-validation work.
 
 ## Requirements
 
@@ -28,7 +28,7 @@ uv run teams-connector status
 
 Run the `auth` command above and it logs you in. All `lrh-*` Microsoft 365 connectors share one login engine (`lrh-m365-auth`), so one login covers them all. Microsoft may ask for more than one approval, because the connectors use different Microsoft clients.
 
-`status` shows the signed-in account and its cached profiles without touching the network. To switch accounts, run `auth --sign-out`, then `auth` again. Which profile serves which tool is in [architecture](docs/project-architecture.md#authentication-and-account-boundaries).
+`status` shows the signed-in account and its cached profiles without touching the network. To switch accounts, run `auth --sign-out`, then `auth` again. Which profile serves which tool is in [architecture](docs/architecture.md#authentication-and-account-boundaries).
 
 > Credentials are entered only on Microsoft's sign-in page. Tokens stay in the shared encrypted cache
 > (`~/.lrh-m365-auth`, or `M365_AUTH_HOME`). If encryption is unavailable, sign-in fails closed.
@@ -83,7 +83,7 @@ Replace the sample path with your clone’s absolute path. In Windows JSON paths
 
 ## MCP tools
 
-The MCP server exposes the tools below. Each one's inputs, results and caveats are in the [MCP guide](docs/teams-mcp-server.md#tools-and-workflow).
+The MCP server exposes the tools below. Each one's inputs, results and caveats are in [architecture](docs/architecture.md#mcp-tools).
 
 | MCP tool | Service module | Behavior |
 |---|---|---|
@@ -182,7 +182,7 @@ uv run pytest
 Tests use synthetic accounts and fake HTTP transports. They do not use browser captures or real
 message content.
 
-Project references: [architecture](docs/project-architecture.md) · [API research](docs/teams-api-research.md) · [roadmap](docs/teams-connector-roadmap.md) · [MCP guide](docs/teams-mcp-server.md).
+Project references: [documentation index](docs/README.md) · [architecture](docs/architecture.md) · [API research](docs/api-research.md) · [roadmap](docs/roadmap.md).
 
 ## Disclaimer
 

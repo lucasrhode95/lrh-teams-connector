@@ -1,4 +1,6 @@
-# Project architecture
+# Teams Connector — Architecture
+
+**Inputs:** [Roadmap](roadmap.md) · [API research](api-research.md)
 
 The repository contains one current application: the `teams-connector` CLI and the
 `teams_connector` Python package. MCP and the loopback web UI call the same domain services.
@@ -11,17 +13,6 @@ Local UI ──┘        │
 
 Outlook / Teams / SharePoint auth commands ─> shared lrh-m365-auth cache
 ```
-
-## Product ownership
-
-Teams owns chat and channel messages, their attachments, and Teams meeting chats, recordings,
-transcripts, recaps, and meeting notes. Outlook owns the Exchange calendar event, schedule,
-organizer, invitees, event attachments, and join link. A Teams meeting may have related resources in
-both products; verified identifiers link those records. General OneDrive and SharePoint discovery
-and retrieval belong to `lrh-sharepoint-connector`, even when a message links to the same file.
-
-These are product boundaries, not a claim that every planned meeting or file tool is shipped.
-Current capabilities and open work are listed in the [roadmap](teams-connector-roadmap.md).
 
 ## Code structure
 
@@ -48,7 +39,7 @@ on their typed contracts.
 
 ## Authentication and account boundaries
 
-The shared `lrh-m365-auth` package supplies five named profiles shared by the three connectors:
+The shared `lrh-m365-auth` package supplies six named profiles shared by the three connectors:
 
 | Profile | Used for |
 |---|---|
@@ -57,6 +48,7 @@ The shared `lrh-m365-auth` package supplies five named profiles shared by the th
 | `teams.graph` | Graph teams, channels, people, and message operations. |
 | `outlook.graph` | Outlook and validated OneDrive/SharePoint Graph capabilities. |
 | `outlook.api` | Outlook Web operations owned by the Outlook connector. |
+| `m365.search` | Search v2 for online Teams message discovery (and Outlook calendar search). |
 
 The auth package owns MSAL state and the encrypted cross-process cache; it does not issue Teams or
 Graph requests or exchange a Teams Skype token. Each connector keeps its product wire logic. An
@@ -132,19 +124,115 @@ coverage. Neither message search discovers transcript or recap text, and there i
 page number for a search hit.
 
 Reverse-engineered endpoint shapes, source audits, and dated confidence notes are maintained in
-[Teams API research](teams-api-research.md). Treat successful browser behavior as evidence, not a
+[Teams API research](api-research.md). Treat successful browser behavior as evidence, not a
 guarantee that the connector's app-owned token has the same access.
 
-## Development and checks
+## Logging
 
-```powershell
-uv sync --locked
-uv run ruff check .
-uv run ruff format --check .
-uv run pyright
-uv run pytest
+The MCP process logs to a per-process daily-rotated file, keeping stdout for protocol traffic. Log
+files are under the Teams data directory's `logs/` folder. UI logs also go to stdout. Operational
+records include timing, status, and counts, not message bodies, search text, chat names, IDs, tokens,
+or authorization headers. Set `TEAMS_CONNECTOR_LOG_LEVEL=DEBUG` to enable safe request and paging
+diagnostics.
+
+## MCP tools
+
+### Find conversations and read messages
+
+1. Call `list_chats` to browse current chats and channels. It returns up to 50 items by default,
+   supports `limit` up to 200 and opaque continuation `cursor`, and can filter by `kind`. A cached
+   catalog up to ten minutes old may answer unless `refresh=true`. `coverage.source` identifies
+   whether the response used the local catalog or a refresh.
+2. Use `search_chats` to match a conversation name or participant name. Participant names are
+   available only after rosters have been indexed by `sync_archive`; read roster coverage.
+3. Call `get_messages` with the selected `conversation_id`. Pages are newest first; records within
+   each page are oldest first. `since` and `until` are inclusive. `message_limit` caps the latest
+   matching messages, while `page_size` controls the returned page. Follow `cursor` to get older
+   messages. If a message body has `text_truncated=true`, call `get_message_content` with its ID and
+   the indicated continuation offset.
+
+Example arguments for a bounded history read:
+
+```json
+{
+  "conversation_id": "19:sample@thread.v2",
+  "since": "2026-08-01T00:00:00Z",
+  "until": "2026-08-31T23:59:59Z",
+  "page_size": 25,
+  "message_limit": 100
+}
 ```
 
-Tests use synthetic accounts and fake transports. Do not use browser captures or private messages as
-fixtures. Keep `AGENTS.md` and `CLAUDE.md` identical. See the [MCP guide](teams-mcp-server.md) for
-client setup, tool behavior, archive operations, and troubleshooting.
+### Online Teams message discovery
+
+`search_remote_messages` calls Microsoft Search v2 for Teams messages and returns one bounded page
+(up to 25 hits; query text is limited to 512 characters).
+It does not fill or scan the local archive. Each hit preserves the Search v2 message reference,
+preview, sender, subject, timestamp, and conversation identity candidates supplied by the service.
+The connector sets `conversation_id` only when a candidate exactly equals a known local catalog ID.
+The search message reference has not been proven interchangeable with the `message_id` used by
+`get_messages`.
+
+When a hit has a `conversation_id` and `sent_at`, use `get_messages` with a bounded `since`/`until`
+window around that timestamp to inspect surrounding context. History paging has no stable page number
+for a search result. The agent decides whether to expand context or follow the search `cursor`; each
+cursor requests only the next bounded Search v2 page. This operation does not discover recap or
+transcript text. Those capabilities remain separate and unresolved.
+
+### Search message text in a chosen scope
+
+`search_messages` performs local matching. Choose exactly one scope: a list of
+`conversation_ids` or `all_chats=true`, and provide both `since` and `until`. Each call fetches a
+bounded number of remote pages into the archive before matching. If `coverage.preparation_complete`
+is false, repeat with the returned `cursor`. The response distinguishes incomplete retrieval from
+an empty match set and reports date coverage per conversation.
+
+The modes are `exact`, `substring` (the default), and `all_terms`. Matching is case-insensitive,
+accents remain significant, and SQL wildcard characters in a query are literal. Local archive
+messages remain searchable after the remote service no longer returns them. This tool is not the
+Teams Web global-search endpoint and does not return a page number or a jump-to-message handle.
+
+Example search across one explicitly selected conversation and month:
+
+```json
+{
+  "query": "budget review",
+  "since": "2026-08-01T00:00:00Z",
+  "until": "2026-08-31T23:59:59Z",
+  "conversation_ids": ["19:sample@thread.v2"],
+  "match_mode": "substring",
+  "limit": 20,
+  "max_pages": 10
+}
+```
+
+### Sync, archive status, and exports
+
+`sync_archive` explicitly fetches history and optional participant rosters in bounded resumable
+batches. It does not run in the background. Repeated calls rotate fairly across chats and resume
+each chat's saved continuation. `archive_status` reports total messages and the history, date-range,
+and roster coverage for the selected conversations.
+
+`export_chats` writes `.txt` by default or `.jsonl` when requested. Set `include_attachments=false`
+to omit linked files. A single conversation with selected attachments returns a ZIP containing a
+folder with the text export and files; without selected attachments it returns the plain text/JSONL
+file. Multiple conversations always return an outer ZIP of each conversation's artifact, so chats
+with attachments have an inner ZIP and chats without them have a plain file. Apply inclusive date
+bounds and a latest-
+message limit per chat. The result contains a local path; use the MCP client's local file-reading
+capability to inspect it. Exporting fetches the selected remote history first and can take time for a
+large selection.
+
+`download_attachment` saves a file linked from a message already in the archive. Pass `name` when
+the message has multiple downloadable files. Downloads stream to an exclusive local file and have
+a size bound; the tool returns the saved path. General OneDrive and SharePoint discovery belongs to
+the SharePoint connector. Email attachments belong to Outlook.
+
+### Send a message
+
+`send_message` is the only Teams write tool. The user must explicitly authorize both the recipient
+and exact message content. Pass the current conversation name from `list_chats` as
+`expected_chat_name`; the service checks it before sending. HTML characters are escaped and the
+message is attempted once. A network failure after the request may leave the result uncertain, so
+inspect the conversation before deciding whether another send is needed. A search result or request
+to analyze a conversation does not authorize a send.

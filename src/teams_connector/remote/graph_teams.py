@@ -1,6 +1,6 @@
 """Microsoft Graph adapters: channels, channel history and members, people, photos, sending, files.
 
-Live evidence (docs/teams-api-research.md, "Microsoft Graph"): with the Teams client, Graph serves
+Live evidence (docs/api-research.md, "Microsoft Graph"): with the Teams client, Graph serves
 channels (more completely than the private catalog), people, photos, shared files and sending, but
 not chat reads (no Chat.Read for this client).
 """
