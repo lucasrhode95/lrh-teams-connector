@@ -6,5 +6,8 @@
 | [Roadmap](roadmap.md) | Scope, open work and live-validation status |
 | [API research](api-research.md) | Dated evidence of how Teams' private and Graph APIs behave |
 
+Diagrams: [architecture](diagrams/architecture.svg) (overview) and [code map](diagrams/code-map.svg)
+(classes and who calls whom; open it in a browser to see the tooltips).
+
 Start with the [repository README](../README.md), then the architecture. The research is a dated
 evidence log: read the section you need, not the whole file.

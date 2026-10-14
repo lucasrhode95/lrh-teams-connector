@@ -5,14 +5,10 @@
 The repository contains one current application: the `teams-connector` CLI and the
 `teams_connector` Python package. MCP and the loopback web UI call the same domain services.
 
-```text
-MCP stdio ─┐
-           ├─> services ─> remote ports/adapters ─> Microsoft Graph and Teams services
-Local UI ──┘        │
-                    └─> account-bound SQLite archive and local files
+![Teams connector architecture](diagrams/architecture.svg)
 
-Outlook / Teams / SharePoint auth commands ─> shared lrh-m365-auth cache
-```
+The classes and who calls whom, in more detail: [code map](diagrams/code-map.svg). The diagrams give the
+overview; this document records the rules and contracts they cannot show.
 
 ## Code structure
 

@@ -937,7 +937,7 @@ Do not build the canonical classifier from prefixes alone. Prefer explicit `chat
 - Prefer a supported Microsoft Graph implementation over a private Teams endpoint when live parity is proven; do not keep both merely for compatibility. Keep private APIs where Graph is unavailable, permission-blocked, or materially less complete.
 - Keep shared behavior in connector/service/formatter/archive layers so MCP and the local UI use one implementation.
 - No further work is needed merely to recreate already delivered MCP registration, backup, profile-picture caching, empty-chat filtering or bounded export behavior.
-- A separate Outlook client remains outside this application's completion scope; see [Outlook feasibility plan](outlook-client-feasibility-plan.md).
+- A separate Outlook client remains outside this application's completion scope; Outlook is the [Outlook connector](https://github.com/lucasrhode95/lrh-outlook-connector)'s job.
 
 ## Microsoft 365 search follow-up (updated 2026-10-12)
 
