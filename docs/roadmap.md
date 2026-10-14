@@ -9,12 +9,92 @@ Snapshot **2026-10-14**.
 
 ## Bugs
 
-None open. Write each bug as **Seen** (a synthetic example: the call and what came back),
-**Expected**, **Cause** and **Fix**.
+Write each bug as **Seen** (a synthetic example: the call and what came back), **Expected**,
+**Cause** and **Fix**.
+
+### B1 — `exact` search mode compares the whole message
+
+**Seen:** `search_messages` with `match_mode: "exact"` and query `alpha7q2 budget`, over a chat
+holding the message `CACHEPROBE alpha7q2 budget`, returns no items with `coverage.complete: true`.
+
+**Expected:** the message is found; `exact` means "this exact phrase".
+
+**Cause:** the store compares the whole folded text (`m.text_folded = ?` in
+[`Store.search`](../src/teams_connector/store/db.py)). An agent searching for a phrase concludes the
+text is absent.
+
+**Fix:** none if D2 lands first, because server-side search replaces the modes with quoted phrases.
+Otherwise match the phrase on word boundaries.
+
+### B2 — Online search cannot confirm zero hits
+
+**Seen:** `search_remote_messages` for `zzqxv7npl` returns no items, `coverage.complete: false` and
+"Search returned no interpretable Message result set; zero hits are not confirmed."
+
+**Expected:** `coverage.complete: true` with zero items.
+
+**Cause:** Search v2 answers an empty search with a result set holding `Total: 0`,
+`MoreResultsAvailable: false` and no `Results` key
+([research](api-research.md#search-v2-message-search)). The adapter counts a result set as found
+only when `Results` is a list (`_message_rows` in
+[`substrate_search.py`](../src/teams_connector/remote/substrate_search.py)).
+
+**Fix:** treat a result set that reports `Total: 0` as a confirmed empty page.
 
 ## Improvements
 
 Working behavior that could be cheaper, simpler or better informed.
+
+### D2 — Remove the message archive
+
+Decided 2026-10-14: Teams is the record and the connector keeps no message content
+([requirements §6](requirements.md#6-local-data-decided-2026-10-14)). What replaces each use of the
+archive:
+
+| Today | Replacement |
+|---|---|
+| `search_messages`: fetch a scope, match locally | Search v2 scoped the way Teams Web scopes it: `clientthreadid:<id>`, `sent >= … AND sent < …`, a `conversationType` filter, `NOT (isClientSoftDeleted:TRUE)`. Merge it with `search_remote_messages` into one tool (P2.2d). |
+| `search_chats` participant matches from indexed rosters | P2.2b |
+| `get_messages` merges remote pages with retained ones | Read Teams only; drop the archive merge and its paging floor |
+| `get_message_content`, `download_attachment` read the archived message | Re-read the message: chat message ids are epoch milliseconds, so `startTime` just before the id returns it first; channels by Graph message id |
+| Exports stream from SQLite | Stream through the export's own temporary file |
+| `sync_archive`, `archive_status`, the `backup` command | Remove |
+| Catalog, sync token, untitled-chat names, omitted channels, photo ids | Keep, in a small account-bound cache with no message text |
+
+Then reset local state; no migration. Update the README, architecture, MCP server instructions and
+tests in the same change.
+
+### P2.2d — Search v2 message search improvements
+
+The hit id is the history message id, and Teams Web shows how to scope, filter and page
+([research](api-research.md#search-v2-message-search)). Change `search_remote_messages` to:
+
+- return `message_id` (the hit's `InternetMessageId`) and drop the "not verified" note;
+- take optional `conversation_ids`, `since` and `until`, sent as `clientthreadid:` and `sent` terms;
+- add `NOT (isClientSoftDeleted:TRUE)`;
+- report `Total` and `MoreResultsAvailable`, and a confirmed zero (B2);
+- keep agent text from being read as KQL: `NOT IN THE CHAT` acted as an operator in Teams Web.
+  Quote or escape terms unless the caller asks for KQL.
+
+**Example:** `{"query": "budget", "conversation_ids": ["19:sample@thread.v2"], "since":
+"2026-08-01T00:00:00Z"}` should send `clientthreadid:19:sample@thread.v2 AND sent >=
+2026-08-01T00:00:00Z AND NOT (isClientSoftDeleted:TRUE) budget` and return hits with `message_id`.
+
+### P2.2b — Find chats by participant without indexed rosters
+
+Three server routes together cover most of it ([research](api-research.md#finding-chats-by-person)):
+
+1. **One-on-ones:** People suggestions return the person's object id, which forms the chat id
+   `19:{a}_{b}@unq.gbl.spaces`. Works with the current `m365.search` profile.
+2. **Named group and meeting chats:** the Search v2 `Chat` entity, queried with the person's email.
+   Works with `m365.search`; returns only named chats, about the last five months.
+3. **Unnamed groups:** the catalog's generated names contain members' names, so name search finds
+   them unless the person was cut off by the 87-character limit.
+
+Not covered: an older named chat where the person is a member but not in the title. Decide whether
+the chat-list cache keeps member lists for that case. Chat *suggestions* need a Teams-client
+Substrate token, a new `lrh-m365-auth` profile, and return fewer chats than route 2, so they are not
+needed.
 
 ### P1.6 — Look up omitted channels in one batch
 
@@ -39,18 +119,19 @@ where the check needs only the one conversation.
 **Fix:** refresh only what the recipient needs: the CSA delta for a chat, or one Graph GET of
 `/teams/{team}/channels/{channel}` for a channel. The live name check itself stays.
 
-### P2.2b — Find chats by participant without indexed rosters
+### R1 — Multi-line messages read back double-spaced
 
-`search_chats` matches participants only in rosters that `sync_archive` has indexed, so a chat with
-a person is invisible until its roster is synced. Teams has a chat-suggestion search
-(`EntityType: "Chat"`, fields `ThreadId`, `MatchingMembers`, `ChatMembers`) and a People suggestion
-search. The chat request returned HTTP 400 on 2026-09-29, but that probe used the older Substrate
-token; the `m365.search` profile now answers Search v2 on the Outlook host, and the browser's People
-suggestions (`scenario=powerbar`) succeeded in the 2026-10-11 capture
-([research](api-research.md#substrate-peoplechat-search)).
+**Seen:** a message sent as two lines (`<p>first<br>second</p>`) shows as two lines in Teams, but
+`get_messages` returns `"first\n\nsecond"`.
 
-**Next:** retry the chat suggestion through the `m365.search` profile. If it answers, map
-`ThreadId` to the catalog and report roster-indexed and suggested matches separately.
+**Expected:** `"first\nsecond"`, matching what Teams shows.
+
+**Cause:** the text rendering turns each paragraph into a blank line
+([`teams_html.py`](../src/teams_connector/remote/teams_html.py)), and Teams stored the message as
+separate paragraphs. Teams Web displays consecutive paragraphs one line apart.
+
+**Fix:** confirm the stored markup of a multi-line message, then render consecutive paragraphs with
+one line break. Low priority.
 
 ## Enhancements
 
@@ -99,20 +180,22 @@ disposable self-chat messages.
 ### P2.2f — Meeting recaps and transcripts
 
 Four separate capabilities, none implemented: finding recaps, listing a meeting's transcripts,
-reading a transcript, and searching transcript text. Leads, best first:
+reading a transcript, and searching transcript text. The Teams Web routes are now known
+([research](api-research.md#teams-web-source-build-26091712222)):
 
-- **The archive already holds transcript references.** Recording messages in meeting chats carry an
-  `amsTranscript` item. Public reverse-engineering fetches its URL with the Teams session token and
-  gets WEBVTT back ([research](api-research.md#meeting-transcripts)); the connector already has
-  that session. Two known meeting chats also carry a drive-hosted reference, `/drives/{drive}/items/{item}/{segment}/{segment}/media/transcripts/{transcript}/content`,
-  whose two middle segments are unmapped
-  ([research](api-research.md#transcript-uri-reference-in-meeting-chat-history-2026-10-10)).
-- **Graph** lists and reads transcripts per online meeting, but needs
-  `OnlineMeetingTranscript.Read.All`, which requires admin consent
-  ([research](api-research.md#meeting-recaps-and-transcripts-as-search-sources-2026-10-10)).
-- Transcript searches that returned empty or unreadable envelopes do not prove search unsupported.
+- list a recording's transcripts: `{site}/_api/v2.0/drives/{drive}/items/{item}/media/transcripts`,
+  taking the one flagged `isDefault`;
+- read one: `…/media/transcripts/{id}/content` (`?format=docx`, or `?is=1` for VTT), or
+  `{site}/_api/v2.1/drives/{drive}/items/{item}/versions/current/media/transcripts/{id}/streamContent`;
+- meeting chats already carry a reference to that last route
+  ([research](api-research.md#transcript-uri-reference-in-meeting-chat-history-2026-10-10)), and
+  recording messages carry an `amsTranscript` item ([research](api-research.md#meeting-transcripts)).
 
-Respect the download restriction the Teams UI showed for one meeting; a reference is not permission.
+**Next:** try the listing route with a SharePoint-audience token from the Teams client on one
+recording you choose. Graph's per-meeting transcript API needs `OnlineMeetingTranscript.Read.All`,
+which requires admin consent
+([research](api-research.md#meeting-recaps-and-transcripts-as-search-sources-2026-10-10)). Respect
+the download restriction the Teams UI showed for one meeting; a reference is not permission.
 
 ### N1 — Conversation viewer with authenticated resources
 
@@ -132,17 +215,18 @@ N3) and rendering fidelity (former N4).
 ### N5 — Presence
 
 Show availability, activity, last-active time and device type, and nothing richer (no status notes
-or calendar text) by default. Graph presence is not granted to the Teams client, so this needs Teams
-Unified Presence with app-owned sign-in. Cache it briefly, fail open, and never block chat listing.
+or calendar text) by default. Graph presence is not granted to the Teams client; Teams Web uses
+Unified Presence `v1/presence/getpresence/`
+([research](api-research.md#teams-web-source-build-26091712222)). Check it with app-owned sign-in.
+Cache it briefly, fail open, and never block chat listing.
 
-### N6 — Favorites and pinned chats
+### N6 — Favorites
 
-Show the chats and channels the user keeps at the top of Teams. Whether the UI's Favorites are the
-same as the pinned state below is unverified. The 2026-10-11 capture shows `GET /api/csa/{region}/api/v1/teams/users/me/pinnedChannels`, and the client's chat-list
-GraphQL has a pinned connection with `PinnedChat.order`
-([research](api-research.md#global-teams-search),
-[source audit](api-research.md#chat-list-ordering-source-mapping)). Read the real pinned state; do
-not infer it from `isSticky`. Put it behind a setting until it is checked on more accounts.
+`GET {csa}/api/v1/teams/users/me/conversationFolders` returns the sidebar folders, including
+`Favorites` with its chats, using the CSA credential the connector already has
+([research](api-research.md#sidebar-folders-live)). Old pinned chats were migrated into Favorites.
+Expose the Favorites folder (for example a `favorite` flag in `list_chats`), behind a setting until
+checked on more accounts. Do not infer it from `isSticky`.
 
 ## Validation
 
@@ -160,34 +244,13 @@ live catalog with what Teams shows:
 Then reset the local catalog and bootstrap fresh. The connector orders chats by last activity; Teams'
 own recent-chat order is unknown ([research](api-research.md#chat-list-ordering-source-mapping)).
 
-### P2.1 — Edit and delete behavior, live
+### S3 — Sending to channels and meeting chats
 
-The retention rules are implemented and tested synthetically
-([requirements §6](requirements.md#6-archive-and-retention)). How Chat Service reports an edit and a
-delete (`edittime`, `deletetime`, message type, body) has not been observed live.
-
-**Authorized** by the user: disposable messages in the user's own self chat (`48:notes`) only, from a
-temporary script outside the repository. Send a few uniquely prefixed messages, read them into the
-archive, edit one more than once, delete another, read the raw history after each change, then check
-that the archive, exports and search follow the rules. Clean up the test messages where possible.
-Never touch another chat, and never print tokens or headers. Record the observed contract in the
-research.
-
-### P2.2d — Online message search through the connector
-
-`search_remote_messages` has synthetic tests only; it has not been called live through this
-connector. Check:
-
-- **Hit to history message.** Teams Web opens a hit from `ClientThreadId` and `DateTimeSent`, without
-  a page number ([research](api-research.md#search-result-activation-and-exact-message-navigation-source-2026-10-11-audit)).
-  Teams chat message ids look like the send time in epoch milliseconds. If a hit's `DateTimeSent` of
-  `2026-08-14T12:30:05.123Z` matches history message id `1786710605123`, the tool can return a
-  `message_id` directly. One known chat's identities matched in the standalone replay; a second
-  target did not resolve.
-- **Conversation match.** Teams Web takes the chat target from `ClientThreadId` and parses a
-  reply-chain id out of `ClientConversationId` for group and channel hits, so `ClientConversationId`
-  may never equal a catalog id. The adapter tries it first; check that `ClientThreadId` is the one
-  that matches.
+Graph sends to the self chat, a one-on-one and a group chat were verified on 2026-10-14
+([research](api-research.md#sending-through-graph)). Channels go through a different Graph route
+(`/teams/{team}/channels/{channel}/messages`) and meeting chats may carry meeting policies. Send one
+disposable, user-approved message to each, then check that the returned id matches history and that
+a refusal is reported clearly.
 
 ### N2 — Unread state
 

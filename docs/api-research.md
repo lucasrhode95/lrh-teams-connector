@@ -1614,6 +1614,10 @@ The `teams-api` implementation sends chat suggestions to the endpoint above with
 
 A read-only direct request using the cached Substrate token and that request shape returned HTTP 400 with a generic service error. It did not return a usable chat result. This does not establish whether a different Teams build, tenant policy, request context, or token acquisition path would succeed; the route is not used by the exporter.
 
+**Update 2026-10-14:** Chat suggestions succeed with a Teams-client Substrate token and fail with
+the One Outlook Web search token; People suggestions succeed with both
+([finding chats by person](#finding-chats-by-person)).
+
 The signed-in Teams Web UI returned keyword search results spanning messages and chats. The
 2026-10-10 HAR captures `POST /searchservice/api/v2/query` for global search and three
 `POST /search/api/v2/query` Transcript requests. Their request and response evidence is recorded
@@ -2388,6 +2392,7 @@ client and account; reassess them for another tenant or policy.
 | Channel messages and replies | works |
 | OneDrive metadata and root listing; Microsoft Search `driveItem` | works |
 | Send a message to the self chat `48:notes` | works (HTTP 201) |
+| Send to a one-on-one and a group chat (2026-10-14) | works; [live checks](#sending-through-graph) |
 | Chat Service sees the Graph-sent message under the same server id | works |
 | List private chats; private chat metadata, members and history | blocked: no `Chat.ReadBasic`, `Chat.Read` or `Chat.ReadWrite` |
 | Read the Graph-sent private-chat message back | blocked: no `Chat.Read` |
@@ -2487,6 +2492,9 @@ and `ParentMessageId` were not top-level keys on those captured `Source` objects
 extraction into the normalizer's input is not proven by this HAR. The core captured fields and
 source transformation align, while the component caller and follow-up history request remain
 untraced.
+
+**Update 2026-10-14:** a capture now shows the history read a click starts; see
+[Opening a hit](#opening-a-hit).
 
 The capture set contains no request to a message-history route and no event-level click trace, so
 the exact HTTP sequence started by these navigation commands remains unverified. The existing
@@ -2671,9 +2679,8 @@ can tie a hit to a message identity, conversation/thread identity, and timestamp
 provide a history-page number. The Web client's Message-result normalizer uses `InternetMessageId`
 as the UI result id and composes the exact-hit navigation fields described above. It also consumes
 `ThreadSubType` and `ParentMessageId`, whose extraction was not traced from the captured top-level
-`Source` schema. `InternetMessageId` has not yet been cross-checked against the IDs returned by
-Graph/Chat Service history, so direct reuse for connector context fetching remains an explicit
-validation step.
+`Source` schema. **Update 2026-10-14:** `InternetMessageId` equals the history message id
+([live checks](#search-v2-message-search)).
 
 The file hits exposed SharePoint-oriented identity/navigation fields. Common fields included
 `UniqueId`, `SiteId`, `WebId`, `ListId`/`ListID`, `SpWebUrl`, `Path`, and `LinkingUrl`; the 25-hit
@@ -2729,6 +2736,10 @@ followed, and no HTTP method, status, response shape, or standalone authenticati
 observed. Compare the reference with a sanitized browser network capture from the loaded transcript
 viewer. Do not infer that the embedded URI can be fetched by the connector or use it to bypass the
 separate download-permission restriction observed in the UI.
+
+**Update 2026-10-14:** the two extra segments are `versions/current`; the Teams Web bundle builds
+`…/versions/current/media/transcripts/{id}/streamContent` and lists transcripts at
+`…/media/transcripts` ([source review](#teams-web-source-build-26091712222)).
 
 ## Connector code-path audit and measurements (2026-10-10)
 
@@ -2893,14 +2904,14 @@ the Message `EntitySets[].ResultSets[].Results[]` envelope and normalizes observ
 The local service compares returned conversation identity candidates against exact IDs in the local
 catalog. It exposes `conversation_id` only on one exact known-ID match and never infers a match from
 display names. The Search v2 message reference is explicitly not treated as a `get_messages`
-`message_id`; that equivalence remains unverified. A matched conversation plus `DateTimeSent` can
+`message_id`; the equivalence was confirmed live on 2026-10-14, but the tool does not use it yet. A matched conversation plus `DateTimeSent` can
 anchor a bounded history read, but history does not expose a stable page number for the hit. The
 agent chooses whether to fetch that context or continue Search v2 paging.
 
 Synthetic tests cover the outgoing request contract, identity/preview/timestamp mapping, explicit
 continuation values, and a response without a Message result set. This documents the code path and
-the previous standalone evidence; the new MCP method has not been live-invoked from this connector
-branch. This is message discovery only. Transcript requests with empty or uninterpretable envelopes
+the previous standalone evidence. **Update 2026-10-14:** live calls through the connector are
+recorded under [Search v2 message search](#search-v2-message-search). This is message discovery only. Transcript requests with empty or uninterpretable envelopes
 remain inconclusive; global transcript-text search and recap discovery/retrieval are not implemented.
 
 ## Teams search and local cache findings (2026-10-11)
@@ -3055,9 +3066,9 @@ Moved from the Outlook connector's former cross-product index (`m365-search-find
 ### Teams and meeting endpoint inventory
 
 The Teams connector now exposes bounded online Message/Teams discovery through Search v2 and the
-shared `m365.search` profile. Request mapping and continuation have synthetic coverage; a live MCP
-call and direct hydration of a returned hit ID remain unverified. Recap and transcript capabilities
-remain separate open work. See the roadmap's [online search check](roadmap.md#p22d--online-message-search-through-the-connector),
+shared `m365.search` profile. Request mapping and continuation have synthetic coverage, and live
+calls on 2026-10-14 confirmed that a hit's id is the history message id. Recap and transcript
+capabilities remain separate open work. See the roadmap's [search improvements](roadmap.md#p22d--search-v2-message-search-improvements),
 [recaps and transcripts](roadmap.md#p22f--meeting-recaps-and-transcripts) and the
 [adapter research](#teams-online-message-search-adapter-2026-10-12).
 
@@ -3088,7 +3099,7 @@ remain separate open work. See the roadmap's [online search check](roadmap.md#p2
 | `POST /api/mt/part/{region}/beta/users/fetch` and `fetchShortProfile` | Middle Tier profile resolution; both took a JSON-array body and returned an object with a `value` array. | One HTTP 200 call per route in the Teams search capture. The `fetch` response included profile field names; these are lookup helpers, not free-form People Picker searches. |
 | `POST /api/mt/part/{region}/beta/users/fetchfeaturesettings` | Batch feature-setting lookup by `Mri`; returns an array with per-entry `status`. | Three HTTP 200 calls; values and status meaning were not retained or interpreted. |
 | `GET /api/mt/part/{region}/beta/users/{userId}/profilepicturev2/{mri}` and `GET /api/mt/part/{region}/beta/users/{userId}/mergedProfilePicturev2` | Profile-image hydration with display/size/etag query-key variants. | Successful image responses (JPEG/PNG); these hydrate People results and are not search calls. |
-| `/drives/{drive}/items/{item}/media/transcripts/{transcript}/content` | Transcript-content route assembled by the Teams client bundle. A chat-history embedded URI used two additional path segments. | Static source observation, not a captured request; method, auth, and response remain unverified. Do not treat as an endpoint contract yet. |
+| `/drives/{drive}/items/{item}/media/transcripts/{transcript}/content` | Transcript-content route assembled by the Teams client bundle. A chat-history embedded URI used two additional path segments. | Static source observation, not a captured request; method, auth, and response remain unverified. Do not treat as an endpoint contract yet. The two extra segments are `versions/current` (2026-10-14 source review). |
 | `/v1/objects/{object}/views/transcript`, `/v1/objects/{object}/views/transcript/status`, and `/MeetingIntelligence/TranscriptService/storage/{storage}/scope/{scope}/` | Legacy AMS and Meeting Intelligence transcript route families; the storage/scope builder adds `isChannel=true` for channel meetings. | Teams bundle source observations, not confirmed requests in the captured workflow. |
 | `https://teams.microsoft.com/l/message/{chatId}/{messageId}?context={...}` | Documented Teams deep link to a chat message. | Microsoft-documented navigation form. User-observed click-to-hit behavior is consistent with message-ID anchoring; the actual client click handler and follow-up network request were not captured. |
 | `https://teams.microsoft.com/l/message/{channelId}/{messageId}?tenantId=...&groupId=...&parentMessageId=...&teamName=...&channelName=...&createdTime=...` | Documented Teams deep link to a channel message. | Same limit: URL contract is documented; internal surrounding-window loading sequence is not captured. |
@@ -3097,7 +3108,7 @@ remain separate open work. See the roadmap's [online search check](roadmap.md#p2
 
 The observed product behavior jumps to the selected message in its conversation. The 2026-10-10 Teams bundle gives a concrete client-side explanation: the search result activation path parses the result's primary navigation reference and calls `chat.chatById` with `replyChainId`, `messageId`, `dateTimeSent`, a generated `searchSessionId`, and highlight text; the channel path calls `channel.channelMessagesById` with channel/team identity, `replyChainId`, `deepLinkId`/message identity, and highlight options. A separate deep-link handler uses `focusOnLoad=DeeplinkedMessage`. The client can therefore address the hit by identity and timestamp without a page number.
 
-No message-history HTTP call or event-level click trace appears in the supplied HARs. The exact request chain and the conversion of `dateTimeSent` to the existing Chat Service `startTime` parameter remain unverified. Treat the source-level navigation fields as established, and the timestamp-to-wire-query mapping as an inference. See [the Teams capture/source audit](https://github.com/lucasrhode95/lrh-teams-connector/blob/main/docs/api-research.md#search-result-activation-and-exact-message-navigation-source-2026-10-11-audit).
+No message-history HTTP call or event-level click trace appears in the 2026-10-10 HARs. **Update 2026-10-14:** the history read is now captured: Chat Service `messages` with a `startTime` before the hit ([Opening a hit](#opening-a-hit)). See [the Teams capture/source audit](https://github.com/lucasrhode95/lrh-teams-connector/blob/main/docs/api-research.md#search-result-activation-and-exact-message-navigation-source-2026-10-11-audit).
 
 The captured Teams Search v2 route and the message deep link serve different steps: Search v2 discovers results; the deep link identifies a destination message. They should not be collapsed into one endpoint. The in-pane transcript search is a third workflow whose request route remains unknown.
 
@@ -3117,4 +3128,119 @@ A synthetic SQLite FTS5 comparison across 14,720 and 100,000 messages found sele
 
 | Content | Graph Search API entity | What it searches | Status in this investigation |
 | --- | --- | --- | --- |
-| Teams messages and supported attachments | `chatMessage` | Message body and attachments; supported attachment file types match SharePoint Online search. Results identify the message, not a documented attachment-specific hit. | Graph `chatMessage` search was denied for the tested profile. The Teams connector instead implements the separately captured Search v2 Message/Teams route; live invocation through that connector remains unverified. |
+| Teams messages and supported attachments | `chatMessage` | Message body and attachments; supported attachment file types match SharePoint Online search. Results identify the message, not a documented attachment-specific hit. | Graph `chatMessage` search was denied for the tested profile. The Teams connector instead implements the separately captured Search v2 Message/Teams route; it was invoked live on 2026-10-14 (below). |
+
+# Live checks and Teams Web capture review (2026-10-14)
+
+**Evidence:** observed live through the connector's own sign-in, five Teams Web HARs taken around
+controlled actions, and the Teams Web bundle for build `26091712222`. One account; the user
+authorized every send. No names, message text beyond the synthetic test strings, or real ids are
+recorded; example ids below are synthetic.
+
+## Sending through Graph
+
+- `POST /chats/{id}/messages` was accepted for the self chat, a one-on-one chat and a group chat.
+  Channels and meeting chats were not tried.
+- The returned id equals the id Chat Service history returns, and it is the send time in epoch
+  milliseconds: a message sent at `2026-08-14T12:30:05.123Z` has id `1786710605123`.
+- Escaped markup stays literal: `<b>not bold</b> & done` displays as typed.
+- Chat Service stores a Graph-sent message as `<p>…</p>` with `messagetype: RichText/Html` and
+  `properties.s2spartnername: teamsgraph`. A two-line message displays as two lines in Teams; the
+  connector's text rendering returns it with a blank line between them.
+
+## Edit and delete
+
+Teams Web edits with `PUT {chatService}/v1/users/ME/conversations/{id}/messages/{messageId}`,
+sending the whole message with the new `content` and `properties.edittime`. It deletes with
+`DELETE …/messages/{messageId}?behavior=softDelete`; undo is
+`DELETE …/messages/{messageId}/properties?name=deletetime`.
+
+Afterwards, Chat Service history returns:
+
+| Message | `content` | Properties |
+|---|---|---|
+| Edited | the newest text only; no earlier version | `edittime` |
+| Deleted | empty | `deletetime` |
+
+Search v2 dropped the deleted message and the edited message's old text within minutes and found
+the new text. Teams therefore keeps no readable copy of deleted or replaced text; only a local
+archive can. The connector's archive kept the deleted text, as its retention rule says.
+
+## Search v2 message search
+
+**Through the connector (`search_remote_messages`, `m365.search` profile):**
+
+- A hit's `InternetMessageId` equals the history message id, in self, one-on-one and group chats.
+- Every hit matched its conversation. `ClientThreadId` is the conversation id; for the one-on-one
+  hit, `ClientConversationId` carried a `;messageid=<id>` suffix. The other candidates are Exchange
+  conversation ids.
+- Matching is by word and word prefix: `alpha7` found `alpha7q2`, but `pha7q2` found nothing. A quoted
+  phrase matches only in order. Teams Web gets the same results, so this is the service, not the
+  request shape.
+- New, edited and deleted messages were reflected within about six minutes.
+
+**Teams Web request shape (captures):**
+
+| Purpose | How Teams expresses it |
+|---|---|
+| One conversation ("Find in chat", "In" filter) | `clientthreadid:<conversation id>` in `queryString` |
+| Date range | `sent >= <ISO UTC> AND sent < <ISO UTC>` in `queryString` (local midnights) |
+| Chats only, not channels | `filter: {term: {conversationType: "OneToOne"}}` and `NOT (Extension_SkypeSpaces_ConversationPost_Extension_ThreadType_String:(topic OR space))`; channels are `(topic OR space)` |
+| Leave out deleted messages | `NOT (isClientSoftDeleted:TRUE)`, added by the client's query builder |
+| Person filter | the person's email added as a search term |
+| Paging | `from` 0, 25, 50 with `size` 25 |
+
+- Responses carry `Total` and `MoreResultsAvailable`. Totals moved slightly between pages (834,
+  833, 837).
+- **An empty result** has a result set with `Total: 0`, `MoreResultsAvailable: false` and no
+  `Results` key.
+- There is no sort option in the UI; requests send no sort.
+- `queryString` is KQL: a user search for `NOT IN THE CHAT` applied `NOT` as an operator.
+- Scoped searches reached messages months old (hits back to 2026-08 in one chat).
+- Request bodies use camel-case keys with `scenario.Name: powerbar` and dimensions such as
+  `QueryType: Messages` or `ContextualTypeahead`; the anchor header was `PUID:…@tenant` (the
+  connector's `Oid:…@tenant` also works).
+
+## Opening a hit
+
+Teams Web read the hit's conversation forward from a point before it:
+`GET {chatService}/v1/users/ME/conversations/{id}/messages?view=msnp24Equivalent|supportsMessageProperties&pageSize=200&startTime=<epoch ms>`.
+`startTime` was about 72 minutes before the hit. The page held the 23 messages from `startTime`
+onward, the hit included, and `_metadata` reported the segment's start and end times and a
+`syncState` link. This answers the earlier open question on how a hit becomes a history read.
+
+## Finding chats by person
+
+| Route | Token | Result |
+|---|---|---|
+| Suggestions, `EntityType: People` (`/search/api/v1/suggestions`) | `m365.search` | HTTP 200. `ExternalDirectoryObjectId` and `MRI` carry the person's object id, which is the peer half of the one-on-one chat id (`19:{a}_{b}@unq.gbl.spaces`). |
+| Suggestions, `EntityType: Chat` | `m365.search` | HTTP 500 "Chat entity type is not configured in response layout", whatever the scenario, dimensions or flags |
+| Suggestions, `EntityType: Chat` | Teams client, `https://substrate.office.com/.default` (silent) | HTTP 200, same results as Teams Web: 2 chats, matched by member |
+| Search v2 query, `entityType: Chat`, query = name or the person's email | either token | HTTP 200 with `Total`. Returned only named chats (named groups and meeting chats) with activity back about five months: 14 chats, none of them one-on-ones or unnamed groups |
+
+Teams Web's chat-by-member search (`chats_by_members_search` in telemetry) loads from a chunk the
+bundle did not contain.
+
+## Teams Web source (build 26091712222)
+
+- **Search token:** the search service is configured with token URL `https://outlook.office.com/`
+  and base URL `https://substrate.office.com`; Copilot routes use `https://substrate.office.com/M365.Access`.
+- **Search v2 Chat entity:** `{entityType: "Chat", contentSources: ["Teams"]}`; with a Person filter
+  the query is the person's email.
+- **Transcripts:** a recording's transcripts are listed at
+  `{site}/_api/v2.0/drives/{drive}/items/{item}/media/transcripts` (default flagged `isDefault`);
+  content is `…/media/transcripts/{id}/content` (`?format=docx`, or `?is=1` for VTT), or
+  `{site}/_api/v2.1/drives/{drive}/items/{item}/versions/current/media/transcripts/{id}/streamContent`.
+  The two unmapped segments in the meeting-chat transcript reference are `versions/current`.
+- **Presence:** Unified Presence `v1/presence/getpresence/`, plus `v1/pubsub/subscriptions/`.
+- **Sidebar folders:** `{csa}/api/v1/teams/users/me/conversationFolders`.
+
+## Sidebar folders, live
+
+`GET https://teams.microsoft.com/api/csa/api/v1/teams/users/me/conversationFolders` with the
+`teams.csa` credential returned `folderHierarchyVersion`, `conversationFolders`,
+`conversationFolderOrder`, `migratedPinnedToFavorites` and `isPartialResponse`. Folder types were
+`Favorites`, `RecentChats` and `TeamsAndChannels`; with
+`supportsAdditionalSystemGeneratedFolders=true` also `QuickViews`, `MeetingChats`, `MutedChats` and
+`EngageCommunities`. Each folder lists its items in `conversationFolderItems`; the Favorites folder
+held four. The catalog route (`…/users/me/updates`) carries no folders.

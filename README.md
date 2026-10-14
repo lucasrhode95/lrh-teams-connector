@@ -127,6 +127,10 @@ archive is local and is not application-encrypted; follow the storage rules for 
 are retained until the archive is removed. Generated exports and downloaded message attachments are
 cleaned up after seven days the next time their output directory is used.
 
+The message archive, `sync_archive`, `archive_status` and the `backup` command are planned for
+removal: Teams will be the only record of message content
+([requirements §6](docs/requirements.md#6-local-data-decided-2026-10-14), roadmap D2).
+
 Create a consistent online backup while connectors are running:
 
 ```powershell

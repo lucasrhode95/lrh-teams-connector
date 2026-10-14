@@ -20,9 +20,8 @@ The connector must:
 - find one-on-one, group, meeting, self and channel conversations with stable ids, useful names,
   correct types and honest catalog coverage;
 - read history with reliable paging and inclusive date and count filters;
-- search message text in a chosen scope, and discover messages online;
-- keep every message it fetches in an account-bound archive, filled by reads, searches, exports and
-  explicit syncs, never by a background collector;
+- search message text across Teams or in a chosen scope, on the server;
+- treat Teams as the record: keep no local copy of message content (§6);
 - send a text message the user explicitly authorized.
 
 Presence, Favorites, sender pictures, Markdown sends and a conversation viewer are optional extras,
@@ -41,7 +40,9 @@ endpoint does not change who owns a resource.
 
 - Scheduling, summarizing or delivering digests. Agents build these from the MCP tools.
 - A background sync process, watcher or collector.
-- Edit history. An edit overwrites the stored text.
+- Keeping messages Teams no longer returns: deleted text, earlier versions of edited messages, or
+  messages past the organization's retention policy (decided 2026-10-14).
+- Matching inside words. Teams search matches words, word prefixes and phrases only.
 - Teams writes other than sending a message: no edits, deletes, reactions or read-state changes.
 - Resuming an export after a process restart, or other export resilience machinery, unless a real
   failure calls for it.
@@ -90,29 +91,31 @@ broad heterogeneous search, and AMS media.
 - The catalog answers from the local store for up to ten minutes; an explicit refresh waits for
   Teams.
 
-## 6. Archive and retention
+## 6. Local data (decided 2026-10-14)
 
-Every message the connector fetches is kept in the account-bound SQLite archive until the user
-removes the archive.
+**Teams is the record.** The connector keeps no local copy of message content. Teams itself keeps
+no readable copy of deleted text or of an edited message's earlier version
+([research](api-research.md#edit-and-delete)), so the connector shows what Teams returns now: an
+edited message with its newest text and `edited_at`, and a deleted message marked deleted with
+`deleted_at` and no text.
 
-- **Edits** overwrite the stored text and keep `edited_at`. An older or unversioned record never
-  replaces a known edit.
-- **Soft deletes** keep the last known text and mark the row deleted with `deleted_at`. A later record
-  without the body never erases known text. A message first seen already deleted is stored without
-  invented text. A stale record does not restore a deleted message; a later edit does.
-- **Exports** label deleted messages so retained text cannot pass for a live message.
-- **Search** returns deleted messages with `is_deleted` and `deleted_at`.
+A small local cache of the chat list stays, holding no message text: the catalog sync token, the
+names worked out for untitled chats, the channels Graph's listing omits, and photo ids. It may also
+hold chat member lists, if participant search still needs them (roadmap P2.2b).
+
+The current code still keeps a message archive. Removing it is roadmap D2; until then the
+[architecture](architecture.md#requests-caching-and-storage) describes the archive as it is.
 
 ## 7. Search
-
-Four layers solve different problems and stay separate:
 
 | Layer | Surface | Behavior |
 |---|---|---|
 | Conversation filter | Local UI | Filters the loaded catalog in the browser. Typing never calls Teams. |
-| `search_chats` | MCP | Matches conversation names and indexed participant names. Refreshes the catalog by default; `refresh=false` searches the cache only. Reports roster coverage instead of syncing every roster. |
-| `search_messages` | MCP | The caller chooses chats and dates. The connector fetches that scope into the archive and matches locally, with explicit coverage. |
-| `search_remote_messages` | MCP | Online discovery of Teams messages through Search v2, one bounded page at a time. Returns pointers, not archived messages. |
+| Conversation search | MCP (`search_chats`) | Matches conversation names and participants. Refreshes the catalog by default; `refresh=false` searches the cache only. Reports what it could not cover. |
+| Message search | MCP | Search v2 on the server, across Teams or scoped to chosen conversations and dates. Matches words, word prefixes and quoted phrases; reports totals, pages, and a confirmed zero. |
+
+Until D2 lands, message search is split in two: `search_remote_messages` searches online across
+Teams, and `search_messages` fetches a chosen scope into the archive and matches it locally.
 
 Calendar events, meeting recaps, transcript lists, transcript content and transcript-text search are
 separate capabilities. Report each one as verified, blocked or unverified; message search alone never
@@ -129,4 +132,5 @@ counts as broad Microsoft 365 search.
   250 MiB per conversation. A failed download keeps the text and marks the attachment unavailable.
 - **Sending** needs the user's explicit authorization for both the recipient and the exact content.
   The current conversation name must match `expected_chat_name`. Text is escaped, sent once, and the
-  server message id is returned.
+  server message id is returned. Verified live for the self chat, one-on-one and group chats
+  (2026-10-14); channels and meeting chats are roadmap S3.

@@ -88,6 +88,9 @@ account's archive. SQLite WAL, busy timeouts, per-operation connections, and sho
 the MCP and UI processes to use the same account store. The local archive is not encrypted by this
 application. Message content is retained until the user removes the archive.
 
+The message archive is being removed (decided 2026-10-14; [requirements §6](requirements.md#6-local-data-decided-2026-10-14),
+roadmap D2). Only a small chat-list cache without message text will remain.
+
 Exports and downloaded attachments are written below the Teams data directory, are given exclusive
 filenames, and are removed after seven days when their output directory is next used. A failed or
 cancelled export does not publish a partial result. The `backup` command uses SQLite's online backup
@@ -116,8 +119,10 @@ does not receive a Microsoft token.
 `search_remote_messages` uses the shared Microsoft Search profile and the standalone Search v2
 endpoint for online Teams message discovery. It returns bounded message pointers, previews, timestamps,
 and conversation candidates; a conversation ID is attached only on an exact local-catalog match. The
-pointer is not yet proven equal to the history API's message ID. Agents decide whether to fetch
-surrounding history with `get_messages` or request another search page.
+pointer (`search_message_id`) equals the history API's message ID (verified 2026-10-14), but the tool
+does not yet return it as `message_id` (roadmap P2.2d). Search v2 matches words, word prefixes and
+quoted phrases, not the middle of words. Agents decide whether to fetch surrounding history with
+`get_messages` or request another search page.
 
 `search_messages` remains a separate local archive workflow. The caller chooses the conversation
 scope, inclusive date range, and matching mode. The connector retrieves that range in bounded page
@@ -172,8 +177,8 @@ Example arguments for a bounded history read:
 It does not fill or scan the local archive. Each hit preserves the Search v2 message reference,
 preview, sender, subject, timestamp, and conversation identity candidates supplied by the service.
 The connector sets `conversation_id` only when a candidate exactly equals a known local catalog ID.
-The search message reference has not been proven interchangeable with the `message_id` used by
-`get_messages`.
+The hit's `search_message_id` is the same id `get_messages` returns as `message_id` (verified
+2026-10-14). An empty search is currently reported as unconfirmed (roadmap B2).
 
 When a hit has a `conversation_id` and `sent_at`, use `get_messages` with a bounded `since`/`until`
 window around that timestamp to inspect surrounding context. History paging has no stable page number
@@ -189,7 +194,8 @@ bounded number of remote pages into the archive before matching. If `coverage.pr
 is false, repeat with the returned `cursor`. The response distinguishes incomplete retrieval from
 an empty match set and reports date coverage per conversation.
 
-The modes are `exact`, `substring` (the default), and `all_terms`. Matching is case-insensitive,
+The modes are `exact`, `substring` (the default), and `all_terms`. `exact` compares the whole
+message text, not a phrase within it (roadmap B1). Matching is case-insensitive,
 accents remain significant, and SQL wildcard characters in a query are literal. Local archive
 messages remain searchable after the remote service no longer returns them. This tool is not the
 Teams Web global-search endpoint and does not return a page number or a jump-to-message handle.
