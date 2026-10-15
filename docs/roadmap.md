@@ -22,23 +22,41 @@ Working behavior that could be cheaper, simpler or better informed.
 
 ### P1.5 — Send host files as attachments
 
-`send_message` sends text only. Graph documents a file send in two steps: upload the file to the
-sender's OneDrive, then post a chat message whose `attachments` entry references that drive item
-(`contentType: "reference"`) and whose body carries a matching `<attachment id="…">` tag
-([Graph: send chatMessage](https://learn.microsoft.com/en-us/graph/api/chatmessage-post?view=graph-rest-1.0)).
-The Teams client's Graph token held `Files.ReadWrite.All` on 2026-10-01. Not tried yet.
+`send_message` sends text only. Decided 2026-10-15:
 
-Settle before relying on it:
+- **Shape:** an optional list of host file paths on `send_message`, beside `text` or `html`. One
+  authorization covers the recipient, the text and the files. Any readable path the user approves.
+- **Automatic, like Teams:** the caller names files only. The connector uploads each one to the sender's
+  OneDrive `Microsoft Teams Chat Files` folder (renaming on a clash), grants the conversation's other members
+  access, and posts the message referencing the files
+  ([research](api-research.md#sending-files-not-used-by-the-connector)).
+- **Access:** the tenant default Teams reads for the file: for chats on 2026-10-15, edit rights for the
+  specific people in the chat. Keep this behind one policy setting so "anyone in the organization" or a
+  fixed "chat members only" can replace it.
+- **Several files, all or nothing:** every upload and grant finishes before the post. If one fails, nothing
+  is posted.
+- **Partial outcomes:** if the files were uploaded but the post failed or is uncertain, report the uploaded
+  files and their links. Never retry the post, and never delete the uploads.
+- **Order:** one-on-one and group chats first. Channels upload to the team's SharePoint folder instead and
+  come later. Pasted images (AMS upload, `<img>` in the HTML) follow files; until then, HTML sends keep
+  refusing `<img>`.
 
-- that a recipient can open the file; a successful upload is not proof of delivery;
-- what the user sees when the upload succeeds and the post fails: report the uploaded file, never
-  retry the post;
-- pasted images: Graph sends an inline image as a `hostedContents` entry with `<img
-  src="../hostedContents/1/$value">` in the body; Teams Web uploads to AMS and references the object. HTML
-  sends refuse `<img>` until one of these is implemented;
-- the Teams Web private path (chunked upload, `POST /v1/threads/{threadId}/files`,
-  `properties.files`; [research](api-research.md#sending-files-not-used-by-the-connector)) is a fallback only if Graph's path
-  loses something.
+**Next:**
+
+1. Choose the route. Graph documents upload, `driveItem/invite` and a `reference` attachment, and the Teams
+   client's Graph token held `Files.ReadWrite.All` (2026-10-01). Not yet known:
+   - whether the invite stays silent (`sendInvitation: false`);
+   - whether a `reference` attachment looks like a Teams file share to the recipient;
+   - how to read the tenant default without the SharePoint `commands` route.
+
+   Teams Web's own route needs a SharePoint-audience token for the OneDrive host and a Chat Service post
+   with `properties.files`.
+2. A probe needs the user's authorization for its destination, file and text. A real check needs a
+   recipient, because the self chat has no members to grant.
+3. Size: an 8 MB file uploaded in one PUT. Find the single-request limit before adding upload sessions.
+
+Validation: the 2026-10-15 captures don't show that recipients could open the files. Check that with the
+first connector send to a one-on-one and a group chat.
 
 ### P2.2f — Meeting recaps and transcripts
 

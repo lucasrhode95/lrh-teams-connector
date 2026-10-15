@@ -65,6 +65,7 @@ credential:
 | Substrate Chat suggestions | Teams client bearer for `https://substrate.office.com/.default` | Live, 2026-10-14 |
 | Graph | Teams client bearer for `https://graph.microsoft.com/.default` (`teams.graph`) | Live |
 | Middle Tier | Bearer `teams.spaces` | Live (`/beta/users/fetch`, 2026-09-29) |
+| OneDrive file sends | Teams Web client bearer for `https://<tenant>-my.sharepoint.com/.default`; not tried with the connector's client | Capture, 2026-10-15 |
 
 **Shared sign-in, live 2026-10-12:** `teams-connector auth` reused existing grants: no device code, no MFA
 prompt. Every Teams profile then acquired a token silently. A fresh account's consent has not been tried
@@ -240,7 +241,7 @@ The connector sends through Graph, which returns the new id in its body. Chat Se
 | `DELETE …/messages/{messageId}?behavior=softDelete` | Delete; undo is `DELETE …/messages/{messageId}/properties?name=deletetime` | Capture, 2026-10-14 |
 | `PUT` / `DELETE …/messages/{messageId}/properties?name=emotions` | Add or remove a reaction: `{"emotions": {"key": "like", "value": "<messageId>"}}` | Third party |
 | `POST /v1/users/ME/drafts` | Scheduled message: `draftType: "ScheduledDraft"`, `innerThreadId`, `draftDetails.sendAt` | Third party |
-| `POST /v1/threads/{threadId}/files` | Thread file reference, used by file sends | Source, 2026-10-01 |
+| `POST /v1/threads/{threadId}/files` | Thread file reference (Source, 2026-10-01); no file send called it ([sending files](#sending-files-not-used-by-the-connector)) | Capture, 2026-10-15 |
 | `GET /v1/users/ME/properties`, `GET /v1/threads/{id}/consumptionhorizons` | User properties; read horizons | Third party; Capture |
 
 ## Message content
@@ -362,13 +363,20 @@ pasted images in those chats: 171 on the first host, 1 on the second. With `Auth
 The connector's AMS reader downloaded the second-host image in full (200,914 bytes, JPEG). So the Skype token
 reads pasted-image views on either host.
 
-**Uploads (not used by the connector; third party and Source).** Teams Web uploads a pasted image to AMS
-before sending and references it from the message:
+**Uploads (not used by the connector; Capture 2026-10-15, one pasted PNG in a one-on-one).** Teams Web
+uploads a pasted image to AMS before sending and references it from the message:
 
-1. `POST <AMS host>/v1/objects/` with JSON `{"type": "pish/image", "permissions": {"<conversation id>":
-   ["read"]}, "sharingMode": "Attached", "filename": "image.png"}`; returns `{"id": …}`.
-2. `PUT …/v1/objects/{id}/content/imgpsh` with the raw bytes.
-3. The message HTML references the object, and `amsreferences` lists it.
+1. `POST <amsV2 host>/v1/objects/` with JSON `{"type": "pish/image", "permissions": {"<conversation id>":
+   ["read"]}, "sharingMode": "Inline", "filename": "MicrosoftTeams-image.png"}` → 201 `{"id": …}`.
+2. `PUT …/v1/objects/{id}/content/imgpsh` with the raw bytes → 201.
+3. The message is a Chat Service post:
+   - the `<img>` `src` is on the **first** host: `https://<ams host>/v1/objects/{id}/views/imgo`;
+   - the tag carries `itemtype="http://schema.skype.com/AMSImage"`, `itemid`, `itemscope="png"`, `width`,
+     `height` and `data-file-size`;
+   - `amsreferences` lists the id, `properties.files` is `[]`, and `properties.blurHash` holds a
+     placeholder.
+
+The capture strips credentials, so the upload's auth isn't shown; Source points to the Skype token.
 
 ## Unified Presence
 
@@ -539,17 +547,45 @@ a message is refused by `/shares` with HTTP 400, so it is a link, not a file.
 
 ### Sending files (not used by the connector)
 
-Teams Web, Source 2026-10-01; no file send was captured, so the token audience, call order and final message
-payload are unconfirmed:
+Teams Web, Capture 2026-10-15: a one-on-one and a four-member group chat, a repeated name, an 8 MB file and an
+existing OneDrive file. Channel sends were not captured. The OneDrive calls use a Teams Web client
+(`5e3ce6c0-2b1f-4285-8d4b-75ee78787346`) bearer for `https://<tenant>-my.sharepoint.com/.default`. The post
+uses Chat Service. `{my site}` is `https://<tenant>-my.sharepoint.com/personal/<user>`. Every send took
+three steps:
 
-- Small files: `PUT https://<tenant>-my.sharepoint.com/personal/<user>/_api/v2.0/drive/root:/Microsoft%20Teams%20Chat%20Files/{name}:/content?@name.conflictBehavior=rename&$select=*,sharepointIds,webDavUrl`
-  with the bytes (SharePoint bearer). Larger files use `StartUpload`, `ContinueUpload` and `FinishUpload`.
-- Chat Service records the file on the thread with `POST /v1/threads/{threadId}/files`, and the message
-  carries its metadata in `properties.files`.
-- Sharing links: `POST …/_api/v2.0/drive/items/{id}/createLink` with `{"type": "edit", "scope":
-  "organization"}` or `"scope": "users"` and `recipients`; returns `shareId` and `link.webUrl` (third party).
+1. **Upload** when the file is attached: `PUT {my site}/_api/v2.0/drive/root:/Microsoft%20Teams%20Chat%20Files/{name}:/content?@name.conflictBehavior=rename&$select=*,sharepointIds,webDavUrl`
+   with the raw bytes. 201 returns the drive item: `id`, `eTag`, `webUrl`, `parentReference.driveId`,
+   `sharepointIds.listItemUniqueId`. A repeated name became `name 1.txt`, then `name 2.txt`. The 8 MB file
+   went up in one PUT (about 3 s), so the switch to `StartUpload`/`ContinueUpload` (Source) happens above
+   that size.
+2. **Grant**, when Send is pressed:
+   - Teams first reads the tenant default with `GET {my site}/_api/v2.0/sites/root/items/{listItemUniqueId}/driveItem/commands`
+     and `Prefer: audienceType="chat"`. The reply was `invite.defaultScope: users` and `defaultType: edit`
+     ("People in this chat with the link can edit"). Source also knows `organization`, `anyone` and
+     `existing`.
+   - It then sends `POST …/driveItem/invite` with `Prefer: ReturnSpecificErrorCode,getDefaultLink` and
+     `{"recipients": [{"objectId": "<member>"}, …], "roles": ["write"]}`. The recipients are every member
+     except the sender: 1 in the one-on-one, 3 in the group.
+   - The reply is one permission: `id`, `shareId`, `roles`, `grantedToIdentitiesV2[]`, and `link`
+     (`scope: users`, `type: edit`, `webUrl`).
+   - An existing file returned its existing specific-people link, with every earlier grantee.
+3. **Post**: Chat Service `POST …/conversations/{id}/messages`, `RichText/Html`.
+   - `content` holds only the caption, which may be empty, with no attachment tag.
+   - `properties.files` is a JSON string with one entry per file: `itemid` and `id` (the
+     `listItemUniqueId`), `fileName`, `fileType`, `title`, `type`, `@type`, `version: 2`, `state: active`,
+     `baseUrl`, `objectUrl`, `permissionScope: SpecificPeople`, `sharepointIds` (with `driveId`) and
+     `fileInfo`.
+   - `fileInfo` holds `itemId` (the drive item id), `fileUrl`, `siteUrl`, and `shareUrl` and `shareId`
+     (the invite's `link.webUrl` and permission `id`).
 
-Graph's documented path (upload to OneDrive, then a `reference` attachment) is the one roadmap P1.5 plans.
+Not seen in any send: `createLink`, `POST /v1/threads/{id}/files`, or Graph. The **Manage access** dialog is
+SharePoint's own page (`sharedialog.aspx`, SharePoint REST `GetSharingInformation` and `ShareLink`), not
+part of a send.
+
+Graph documents the same three steps (upload to `/me/drive`, `driveItem/invite`, a chat message with a
+`reference` attachment) but has no route for the `commands` default. Not yet tried: whether Graph's invite
+stays silent with `sendInvitation: false`, and whether a Graph `reference` attachment looks the same to the
+recipient as a Teams file share.
 
 ## Meeting recaps and transcripts
 
