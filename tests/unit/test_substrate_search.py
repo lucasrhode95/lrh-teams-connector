@@ -106,3 +106,32 @@ async def test_missing_search_result_set_is_not_mistaken_for_zero_hits() -> None
     assert not result.result_set_found
     assert result.items == []
     assert result.more_results_available is None
+
+
+async def test_empty_search_answer_with_zero_total_is_a_confirmed_empty_page() -> None:
+    async def handle(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "EntitySets": [
+                    {"ResultSets": [{"Total": 0, "MoreResultsAvailable": False}]},
+                ]
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    transport = Transport(client=client)
+    try:
+        adapter = SubstrateSearch(transport, SearchCredential(), anchor_mailbox="Oid:synthetic@tenant")
+        result = await adapter.search_messages(
+            "synthetic absent term",
+            offset=0,
+            page_size=10,
+            cvid="synthetic-cvid",
+            logical_id="synthetic-logical-id",
+        )
+    finally:
+        await transport.aclose()
+
+    assert result.result_set_found and result.items == []
+    assert result.more_results_available is False

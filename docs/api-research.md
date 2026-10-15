@@ -3209,6 +3209,8 @@ archive can. The connector's archive kept the deleted text, as its retention rul
   `QueryType: Messages` or `ContextualTypeahead`; the anchor header was `PUID:…@tenant` (the
   connector's `Oid:…@tenant` also works).
 
+**Confirmed 2026-10-15 (live, read-only):** a query for a term that matches nothing returned `Total: 0`, `MoreResultsAvailable: false` and no `Results` key; the connector now reports it as a complete empty page (roadmap B2, done).
+
 ## Opening a hit
 
 Teams Web read the hit's conversation forward from a point before it:
