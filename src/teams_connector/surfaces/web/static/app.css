@@ -46,19 +46,27 @@ button:disabled { opacity: .52; cursor: not-allowed; }
 code { font-family: ui-monospace, Consolas, monospace; }
 .range-picker { position: relative; }
 .range-toggle { display: flex; align-items: center; justify-content: space-between; text-align: left; font-weight: 400; }
-.calendar { position: absolute; z-index: 5; top: calc(100% + 7px); left: 0; width: min(352px, calc(100vw - 72px)); padding: 14px; background: var(--surface); border: 1px solid var(--surface-border); border-radius: 8px; box-shadow: var(--shadow); }
+.range-control { position: relative; }
+.range-toggle > span:first-child { flex: 1; min-width: 0; padding-right: 30px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chevron { width: 14px; height: 14px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; transition: transform .15s; }
+.range-toggle[aria-expanded="true"] .chevron { transform: rotate(180deg); }
+.date-range-clear { position: absolute; top: 50%; right: 30px; display: grid; width: 24px; height: 24px; min-height: 0; place-items: center; padding: 0; transform: translateY(-50%); border-radius: 50%; color: var(--muted); background: transparent; font-size: 1.1rem; font-weight: 400; line-height: 1; }
+.date-range-clear:hover { color: var(--text); background: var(--button-bg); }
+.date-range-clear[hidden] { display: none; }
+.calendar { position: absolute; z-index: 5; top: calc(100% + 7px); left: 0; width: min(352px, calc(100vw - 72px)); padding: 14px; background: var(--surface); border: 1px solid var(--surface-border); border-radius: 8px; box-shadow: var(--shadow); touch-action: pan-y; }
+.calendar.align-right { right: 0; left: auto; }
 .calendar-header { display: grid; grid-template-columns: 36px 1fr 36px; align-items: center; gap: 8px; margin-bottom: 10px; text-align: center; }
 .calendar-header strong { font-size: .95rem; }
 .calendar-nav { min-height: 34px; padding: 4px; color: var(--teams-purple-dark); background: transparent; font-size: 1.2rem; }
 .weekdays, .calendar-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); justify-items: center; }
 .weekdays { margin-bottom: 4px; color: var(--muted); font-size: .75rem; font-weight: 600; }
 .calendar-day { display: grid; place-items: center; width: 38px; height: 38px; min-height: 0; padding: 0; border-radius: 50%; color: var(--text); background: transparent; font-weight: 400; }
-.calendar-day:hover { background: var(--hover); }
+.calendar-day:hover:not(:disabled) { background: var(--hover); }
 .calendar-day.outside-month { color: var(--muted); opacity: .65; }
+.calendar-day:disabled { color: var(--muted); opacity: .38; cursor: default; }
 .calendar-day.in-range { background: var(--teams-purple-light); border-radius: 0; }
 .calendar-day.range-start, .calendar-day.range-end { color: white; background: var(--teams-purple); font-weight: 650; }
 .calendar-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
-.calendar-hint { flex: 1; color: var(--muted); font-size: .72rem; line-height: 1.3; }
 .calendar-footer button { min-height: 32px; padding: 6px 9px; font-size: .8rem; }
 @media (max-width: 560px) { main { padding: 20px; } header { gap: 12px; } .account-info { max-width: 48%; overflow-wrap: anywhere; } .account-avatar { width: 34px; height: 34px; flex-basis: 34px; } .filters { grid-template-columns: 1fr; } .list-heading { align-items: stretch; flex-direction: column; } .list-heading label { max-width: none; } .actions { align-items: stretch; flex-direction: column-reverse; } .actions button { width: 100%; } }
 

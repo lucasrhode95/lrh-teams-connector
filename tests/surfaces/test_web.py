@@ -118,3 +118,11 @@ def test_checkbox_labels_lay_out_inline() -> None:
     checkbox_labels = re.findall(r'<label([^>]*)><input [^>]*type="checkbox"', page)
     assert checkbox_labels and all('class="check-label"' in attrs for attrs in checkbox_labels)
     assert ".check-label { display: flex; align-items: center;" in styles
+
+
+def test_date_picker_weeks_start_on_sunday_like_outlook() -> None:
+    page = (Path(routes.__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
+    weekdays = re.search(r'<div class="weekdays"[^>]*>(.*?)</div>', page)
+    assert weekdays and re.findall(r"<span>(\w)</span>", weekdays.group(1)) == list("SMTWTFS")
+    for control in ("today-date", "calendar-done", "clear-dates", "date-filter-clear"):
+        assert f'id="{control}"' in page

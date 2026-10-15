@@ -70,78 +70,92 @@ function formatCalendarDate(value) {
   return dateFromKey(value).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
-function updateRangeLabel() {
-  if (!fromDateInput.value) {
-    rangeLabel.textContent = "Unlimited";
-    return;
-  }
-  rangeLabel.textContent = fromDateInput.value === toDateInput.value
-    ? formatCalendarDate(fromDateInput.value)
-    : formatCalendarDate(fromDateInput.value) + " – " + formatCalendarDate(toDateInput.value);
-}
-
 function setDateRange(start, end) {
   fromDateInput.value = start || "";
   toDateInput.value = end || "";
-  updateRangeLabel();
+  rangeLabel.textContent = !start ? "Any date"
+    : start === end ? formatCalendarDate(start) : formatCalendarDate(start) + " – " + formatCalendarDate(end);
+  $("date-filter-clear").hidden = !start;
   renderCalendar();
 }
 
-function setCalendarOpen(open) {
+function focusCalendarDate(key) {
+  calendarDays.querySelector(`[data-date="${key}"]`)?.focus();
+}
+
+function setCalendarOpen(open, { restoreFocus = false } = {}) {
   calendar.hidden = !open;
   rangeToggle.setAttribute("aria-expanded", String(open));
-  if (open) {
-    calendarMonth = fromDateInput.value ? dateFromKey(fromDateInput.value) : new Date();
-    calendarMonth.setDate(1);
-    choosingEnd = false;
-    rangeStartDraft = null;
-    renderCalendar();
+  if (!open) {
+    if (restoreFocus) rangeToggle.focus();
+    return;
   }
+  // Open towards whichever side has room for the calendar.
+  const box = $("range-picker").getBoundingClientRect();
+  calendar.classList.toggle("align-right", box.left + 370 > window.innerWidth);
+  calendarMonth = fromDateInput.value ? dateFromKey(fromDateInput.value) : new Date();
+  calendarMonth.setDate(1);
+  choosingEnd = false;
+  rangeStartDraft = null;
+  renderCalendar();
+  focusCalendarDate(fromDateInput.value || dateKey(new Date()));
 }
 
 function renderCalendar() {
   calendarMonthLabel.textContent = calendarMonth.toLocaleDateString(undefined, { month: "long", year: "numeric" });
-  $("calendar-hint").textContent = choosingEnd
-    ? "Choose an end date, or press Done to keep one day."
-    : "Click once for one day; click again to set the end date.";
-  calendarDays.replaceChildren();
-  const firstOfMonth = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1);
-  const mondayOffset = (firstOfMonth.getDay() + 6) % 7;
-  const firstVisible = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1 - mondayOffset);
+  const first = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1);
+  const sundayOffset = first.getDay(); // weeks start on Sunday, as in the Outlook connector
+  const start = fromDateInput.value;
+  const end = toDateInput.value;
+  const today = dateKey(new Date());
+  const days = [];
   for (let index = 0; index < 42; index += 1) {
-    const day = new Date(firstVisible.getFullYear(), firstVisible.getMonth(), firstVisible.getDate() + index);
+    const day = new Date(first.getFullYear(), first.getMonth(), 1 - sundayOffset + index);
     const key = dateKey(day);
+    const inRange = Boolean(start && end && key >= start && key <= end);
     const button = document.createElement("button");
     button.type = "button";
     button.className = "calendar-day";
     button.textContent = String(day.getDate());
+    button.dataset.date = key;
     button.setAttribute("aria-label", day.toLocaleDateString(undefined, { dateStyle: "full" }));
+    button.setAttribute("aria-pressed", String(inRange));
+    button.disabled = key > today;
     if (day.getMonth() !== calendarMonth.getMonth()) button.classList.add("outside-month");
-    const start = fromDateInput.value;
-    const end = toDateInput.value;
-    if (start && end && key >= start && key <= end) button.classList.add("in-range");
+    if (inRange) button.classList.add("in-range");
     if (start && key === start) button.classList.add("range-start");
     if (end && key === end) button.classList.add("range-end");
     button.addEventListener("click", () => chooseCalendarDate(key));
-    calendarDays.appendChild(button);
+    days.push(button);
   }
+  calendarDays.replaceChildren(...days);
 }
 
+// The first click picks one day; the second makes the range between both clicks, in either order.
+// The calendar stays open until Done, Escape or a click outside it.
 function chooseCalendarDate(key) {
+  if (key > dateKey(new Date())) return;
   if (!choosingEnd) {
     rangeStartDraft = key;
     choosingEnd = true;
     setDateRange(key, key);
-    return;
+  } else {
+    setDateRange(key < rangeStartDraft ? key : rangeStartDraft, key < rangeStartDraft ? rangeStartDraft : key);
+    choosingEnd = false;
   }
-  if (key < rangeStartDraft) {
-    rangeStartDraft = key;
-    setDateRange(key, key);
-    return;
-  }
-  setDateRange(rangeStartDraft, key);
+  focusCalendarDate(key);
+}
+
+function changeCalendarMonth(offset) {
+  calendarMonth.setMonth(calendarMonth.getMonth() + offset);
+  renderCalendar();
+}
+
+function clearDateRange() {
   choosingEnd = false;
-  setCalendarOpen(false);
+  rangeStartDraft = null;
+  setDateRange("", "");
+  setCalendarOpen(false, { restoreFocus: true });
 }
 
 function browserUtcOffsetMinutes(value, endOfDay) {
@@ -481,20 +495,45 @@ messageLimitInput.addEventListener("input", () => {
   );
 });
 rangeToggle.addEventListener("click", () => setCalendarOpen(calendar.hidden));
-$("previous-month").addEventListener("click", () => { calendarMonth.setMonth(calendarMonth.getMonth() - 1); renderCalendar(); });
-$("next-month").addEventListener("click", () => { calendarMonth.setMonth(calendarMonth.getMonth() + 1); renderCalendar(); });
-$("clear-dates").addEventListener("click", () => {
-  choosingEnd = false;
-  rangeStartDraft = null;
-  setDateRange("", "");
-  setCalendarOpen(false);
+$("previous-month").addEventListener("click", () => changeCalendarMonth(-1));
+$("next-month").addEventListener("click", () => changeCalendarMonth(1));
+let wheelTimeout = null;
+calendar.addEventListener("wheel", (event) => {
+  if (calendar.hidden || event.deltaY === 0) return;
+  event.preventDefault();
+  if (wheelTimeout !== null) return;
+  changeCalendarMonth(event.deltaY < 0 ? -1 : 1);
+  wheelTimeout = setTimeout(() => { wheelTimeout = null; }, 220);
+}, { passive: false });
+let swipeStart = null;
+calendar.addEventListener("touchstart", (event) => {
+  swipeStart = event.touches.length === 1 ? { x: event.touches[0].clientX, y: event.touches[0].clientY } : null;
+}, { passive: true });
+calendar.addEventListener("touchend", (event) => {
+  const touch = event.changedTouches[0];
+  const begin = swipeStart;
+  swipeStart = null;
+  if (!begin || !touch) return;
+  const deltaX = touch.clientX - begin.x;
+  const deltaY = touch.clientY - begin.y;
+  if (Math.abs(deltaX) < 48 || Math.abs(deltaX) < Math.abs(deltaY) * 1.25) return;
+  changeCalendarMonth(deltaX > 0 ? -1 : 1);
+}, { passive: true });
+calendar.addEventListener("touchcancel", () => { swipeStart = null; }, { passive: true });
+$("clear-dates").addEventListener("click", clearDateRange);
+$("date-filter-clear").addEventListener("click", clearDateRange);
+$("today-date").addEventListener("click", () => {
+  const today = new Date();
+  calendarMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+  renderCalendar();
+  focusCalendarDate(dateKey(today));
 });
-$("calendar-done").addEventListener("click", () => setCalendarOpen(false));
+$("calendar-done").addEventListener("click", () => setCalendarOpen(false, { restoreFocus: true }));
 document.addEventListener("pointerdown", (event) => {
   if (!calendar.hidden && !$("range-picker").contains(event.target)) setCalendarOpen(false);
 });
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !calendar.hidden) setCalendarOpen(false);
+  if (event.key === "Escape" && !calendar.hidden) setCalendarOpen(false, { restoreFocus: true });
 });
 $("refresh").addEventListener("click", loadChats);
 downloadButton.addEventListener("click", downloadSelected);
