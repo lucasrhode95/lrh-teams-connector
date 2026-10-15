@@ -12,26 +12,36 @@ Snapshot **2026-10-15**.
 Write each bug as **Seen** (a synthetic example: the call and what came back), **Expected**,
 **Cause** and **Fix**.
 
+### R3 — Channel history is not in time order across pages (decision pending)
+
+**Seen:** `get_messages` on a channel with more than 50 active threads returns an old post with a new
+reply in its first pages, before newer posts of quieter threads; with `message_limit=100`, the "latest
+100" can include that old post and miss newer ones. Exports inherit the order.
+**Expected:** history newest first across pages, as for chats.
+**Cause:** Graph pages channel threads by their latest activity, and a page's messages are sorted only
+within it. `HistoryPage.floor` (every newer message is already delivered) is computed but unused since D2.
+**Fix (to decide):** present channel history as threads by latest activity, each thread in time order,
+and document `message_limit` for channels as "the messages of the most active threads"; or hold back
+messages older than each page's floor (complete in exports, which read every page; not possible across
+`get_messages` cursors without carrying messages in them).
+
 ## Improvements
 
 Working behavior that could be cheaper, simpler or better informed.
 
-### P2.2b — Find chats by participant (partial)
+### D3 — Organize the research by service (decision pending)
 
-Done 2026-10-15: route 2 (below) is in `search_chats` with `refresh=true`, and route 3 (names) already
-worked. Live check on 2026-10-15: a person's name matched 18 chats, 14 of them only through Teams'
-member match, which name matching in the catalog cannot find ([research](api-research.md#chat-search-by-member-2026-10-15)).
+`docs/api-research.md` (about 3,600 lines) keeps its findings in dated blocks; the owner index at its top
+groups the existing sections by service without moving them. Still to decide: move the sections under
+their owners (their anchors change, and links from other documents and the Outlook repository must follow),
+or keep the index and close D3.
 
-Still open, and the only remaining part:
+### N8 — AMS images on the newer media host
 
-1. **One-on-ones by person:** People suggestions would return the person's object id, which forms the
-   chat id `19:{a}_{b}@unq.gbl.spaces`. Blocked: on 2026-10-15 every People suggestion request tried
-   returned 400 (or 404 on another path), with the `m365.search` token and the captured request shapes.
-   Decide whether to find the working route and token, or to accept name matching for one-on-ones.
-2. **The uncovered case:** an older named chat where the person is a member but not in the title.
-   Teams' chat search covers only named group and meeting chats with recent activity, as the coverage
-   notes say. Decide whether the chat catalog should keep member lists for that case; until then, a chat
-   matched only through an older member may be missing from `search_chats`.
+Pasted images are fetched only from `*.asm.skype.com`, the host every inline image used on 2026-10-15
+(67 of 67). AuthZ also names `amsV2` (`*.asyncgw.teams.microsoft.com`), which recording cards already use.
+If an image arrives there, it shows its marker but is not downloadable. Allow that host for image views when
+one is seen.
 
 ## Enhancements
 
@@ -48,6 +58,9 @@ Settle before relying on it:
 - that a recipient can open the file; a successful upload is not proof of delivery;
 - what the user sees when the upload succeeds and the post fails: report the uploaded file, never
   retry the post;
+- pasted images: Graph sends an inline image as a `hostedContents` entry with `<img
+  src="../hostedContents/1/$value">` in the body; Teams Web uploads to AMS and references the object. HTML
+  sends refuse `<img>` until one of these is implemented;
 - the Teams Web private path (chunked upload, `POST /v1/threads/{threadId}/files`,
   `properties.files`; [research](api-research.md#upload-chat-file)) is a fallback only if Graph's path
   loses something.

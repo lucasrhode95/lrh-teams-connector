@@ -22,10 +22,13 @@ overview; this document records the rules and contracts they cannot show.
 | `remote/transport.py` | The only general HTTP client. Applies the allowlist, authentication, one-time 401 renewal, bounded idempotent retries, response limits, error mapping, and credential-free download redirects. |
 | `remote/chat_service.py`, `remote/csa.py` | Private Teams service adapters for the chat catalog, chat history, chat members, and CSA updates. Their endpoints are undocumented and described as private in the research record. |
 | `remote/graph.py`, `remote/graph_teams.py` | Microsoft Graph paging, batching, channel history, people/photos, file download, and the explicitly authorized message-send request. |
+| `remote/substrate_search.py` | Search v2 message search and named-chat matches, and Teams Web's search-box people suggestions (`substrate.office.com`), all with the `m365.search` token. |
+| `remote/presence.py`, `service/presence.py` | Presence of a one-on-one peer, read at the presence service AuthZ names (`presenceUPS`); the service keeps a result for a minute and fails open. |
 | `remote/inline_images.py`, `remote/image_readers.py` | Pasted images: the marker name and attachment record of each image in a message (`inline_images.py`, no network); the AMS full-size and Graph hosted-copy readers (`image_readers.py`). |
 | `remote/*_mapping.py` and `remote/teams_html.py` | Convert wire responses into domain records and readable message text. Wire-format field names remain inside this layer. |
 | `store/db.py` | Account-bound SQLite store for the chat catalog and account metadata only. Holds no message content and no tokens. |
 | `service/export/` | Text/JSONL formatting and safe output packaging. Exports read Teams page by page and spool to a temporary file, use exclusive temporary paths, and publish only after completion. |
+| `service/passive_html.py` | The passive check for HTML sends: refuses active content, embedded media, declarations and unfinished markup, and never rewrites the HTML. |
 | `service/localfiles.py` | Per-user output directories, retention cleanup, and collision-safe file creation. |
 | `src/teams_connector/config.py` | Product CLI/data names and fixed public service URLs. Tenant authority, client IDs, token profiles, scopes, and shared-cache configuration live in `lrh-m365-auth`. |
 
@@ -42,21 +45,22 @@ paths; each maps domain errors to its own responses.
 
 ## Services, ports and adapters
 
-Each surface calls a service. A service depends only on the ports it needs, and `bootstrap.py` wires one adapter per
-port. The table maps each MCP tool and UI route to the service that answers it, the ports it reads or writes through,
+Each surface calls a service. A service depends only on the ports it needs, and `bootstrap.py` wires an adapter to
+each port-typed role. A port can have several adapters in different roles: `HistoryReader` reads chats (`ChatService`)
+and channels (`GraphChannels`), `ImageReader` reads AMS images and Graph hosted copies. The table maps each MCP tool and UI route to the service that answers it, the ports it reads or writes through,
 and the adapters behind them. The split of backends (which private or public service backs each capability) is in
 [requirements §4](requirements.md#4-backend-choice).
 
 | Surface | Tool or route | Service | Ports | Adapters |
 |---|---|---|---|---|
 | MCP | `auth_status` | `TokenProvider` (shared auth package) | none | `TokenProvider` |
-| MCP | `list_chats` | `Catalog.list` | `ChatCatalog`, `ChannelDirectory`, `FavoriteFolders` | `CsaCatalog`, `GraphChannels` |
-| MCP | `search_chats` | `Catalog.search` | `ChatMemberSearch` | `SubstrateChatSearch` |
+| MCP | `list_chats` | `Catalog.list` (a refresh reads the self chat's newest message too) | `ChatCatalog`, `ChannelDirectory`, `FavoriteFolders`, `HistoryReader` | `CsaCatalog`, `GraphChannels`, `ChatService` |
+| MCP | `search_chats` | `Catalog.search` (with `refresh`, after a catalog refresh as `list_chats`) | `ChatMemberSearch` (named chats and people), and the refresh's ports | `SubstrateChatSearch`, and the refresh's adapters |
 | MCP | `get_messages` | `History.get_messages` | `HistoryReader` (chats and channels) | `ChatService`, `GraphChannels` |
 | MCP | `search_messages` | `Search.search_messages` | `MessageSearchReader` | `SubstrateSearch` |
 | MCP | `export_chats` | `Exports.export` | `HistoryReader` (`History.selection`), `FileReader` and `ImageReader` (`Files.save`) | `ChatService`, `GraphChannels`, `GraphFiles`, `AmsImages`, `GraphHostedImages` |
-| MCP | `download_attachment` | `Files.download_attachments` (`History.resolve`) | `ChatHistoryReader`, `HistoryReader`, `FileReader`, `ImageReader` | `ChatService`, `GraphChannels`, `GraphFiles`, `AmsImages`, `GraphHostedImages` |
-| MCP | `send_message` | `Sender.send` (and `Catalog.recipient`) | `ChatWriter`, `ChatCatalog` | `GraphWriter`, `CsaCatalog` |
+| MCP | `download_attachment` | `Files.download_attachments` (`History.resolve`) | `ChatHistoryReader` (finds the message, and a channel reply's thread), `ChannelHistoryReader`, `FileReader`, `ImageReader` | `ChatService`, `GraphChannels`, `GraphFiles`, `AmsImages`, `GraphHostedImages` |
+| MCP | `send_message` | `Sender.send` (and `Catalog.recipient`) | `ChatWriter`, `ChatCatalog` (chats), `ChannelDirectory` (channels) | `GraphWriter`, `CsaCatalog`, `GraphChannels` |
 | MCP | `get_presence` | `Presences.for_chat` | `PresenceReader` | `TeamsPresence` |
 | UI | `GET /api/status` | token status | none | `TokenProvider` |
 | UI | `GET /api/chats` | `Catalog.list` (or `ensure`) | as `list_chats` | as `list_chats` |
@@ -112,9 +116,8 @@ Owner metadata is verified on open; an account mismatch raises an error instead 
 account's store. SQLite WAL, busy timeouts, per-operation connections, and short transactions allow the
 MCP and UI processes to use the same account store. The store is not encrypted by this application.
 
-A store left by an earlier version that kept messages is moved, without deletion, into a
-`legacy-archive-<timestamp>` folder the first time this version opens the account; the catalog is then
-rebuilt from Teams. A damaged store is moved into a `corrupt-<timestamp>` folder the same way.
+A damaged store is moved, without deletion, into a `corrupt-<timestamp>` folder, and a new one is built
+from Teams.
 
 Exports and downloaded attachments are written below the Teams data directory and are removed after seven
 days when their folder is next used, subfolders included. Downloads are cached per source
@@ -171,9 +174,14 @@ diagnostics.
    `favorite` marks the chats in the Teams Favorites folder, read with each refresh; the setting is off by
    default.
 2. Use `search_chats` to match a conversation name. With `refresh=true` (the default) it also
-   asks Teams for named group and meeting chats that match a plain name or email, and lists the members
-   that matched. Read the coverage notes: one-on-one chats are matched by name, and a query with query
-   syntax is not sent to Teams.
+   asks Teams, for a plain name or email, for the named group and meeting chats with a matching member
+   (up to 100, read page by page) and for the people Teams suggests (Teams Web's search-box
+   suggestions); a one-on-one whose id names a suggested person matches. Each match lists the people
+   that matched, so an email, or a name written in another order, finds the one-on-one. Teams is asked
+   once per search: the cursor carries its matches. Read the coverage notes: a query with query syntax
+   is not sent to Teams, a cut answer is reported, and an older named chat whose member is not in its
+   title and has no recent activity is not covered (Teams' chat search covers recent chats only; the
+   catalog keeps no member lists).
 3. Call `get_messages` with the selected `conversation_id`. Pages are newest first; records within
    each page are oldest first. `since` and `until` are inclusive. `message_limit` caps the latest
    matching messages, while `page_size` is the most messages a page holds. A page also holds whole
@@ -195,7 +203,8 @@ Example arguments for a bounded history read:
 ### Presence
 
 `get_presence` reads the availability, activity, device type and last-active time of the other person in a
-one-on-one chat. It reads the regional Unified Presence host with the `teams.spaces` bearer, sends only the
+one-on-one chat. It reads Unified Presence where AuthZ names it for the account (`presenceUPS`, a
+`teams.microsoft.com/ups/<region>` route, as Teams Web does) with the `teams.spaces` bearer, sends only the
 person's id, keeps the result for a minute in the process, and never blocks the chat list. A failed read
 returns no presence and a reason. Other fields Teams returns (calendar, work location, capabilities) are not
 reported.
@@ -268,7 +277,11 @@ ends, so a failed export publishes nothing.
 one of `message_id`, or `sent_at` (the time exactly as the TXT export prints it). `names` selects files by
 their markers; all of them are saved when it is omitted. The message is read again from Teams: by id, or by
 time through Chat Service, and a channel message is then read through Graph, as `get_messages` reads it, so
-the names match the text. Several messages at the same time are refused with their ids. Each file is fetched
+the names match the text; a channel reply is read through its thread, which Chat Service names. Several
+messages at the same time are refused with their ids. A file that cannot be fetched is listed under
+`unavailable` with its reason while the others are saved; a call that saves none fails. A shared SharePoint
+page reads as `[Page: name] link`: it is opened, not downloaded. A meeting recording reads as
+`[Recording: title]` and its OneDrive or SharePoint link; recordings are not downloaded. Each file is fetched
 once into the download cache (see Storage), and the tool returns the local paths. General OneDrive and
 SharePoint discovery belongs to the SharePoint connector. Email attachments belong to Outlook.
 
@@ -279,7 +292,9 @@ and exact message content. Pass the current conversation name from `list_chats` 
 `expected_chat_name`; the service refreshes only that recipient (a chat's delta, or a channel's name from
 its team), then checks the name before sending. Pass exactly one of `text` (plain text; HTML
 characters are escaped) or `html` (HTML sent as written, after a passive check that refuses scripts, frames,
-form controls, event-handler attributes, `javascript:` and `vbscript:` URLs and unfinished markup). The
+form controls, event-handler attributes, `javascript:` and `vbscript:` URLs, images and other embedded
+media, declarations and CDATA sections, and unfinished markup). Teams shows only images it hosts, so an
+`<img>` is refused rather than sent; sending images is roadmap P1.5. The
 message is attempted once. A network failure after the request may leave the result uncertain, so
 inspect the conversation before deciding whether another send is needed. A search result or request
 to analyze a conversation does not authorize a send.

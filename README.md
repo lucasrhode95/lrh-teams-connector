@@ -89,11 +89,11 @@ The MCP server exposes the tools below. Each one's inputs, results and caveats a
 |---|---|---|
 | `auth_status` | shared auth provider | Read cached account/client credentials and resource-token expiry |
 | `list_chats` | [`service/catalog.py`](src/teams_connector/service/catalog.py) | List chats and channels by recent activity, with kind filters and paging; with `TEAMS_CONNECTOR_FAVORITES` set, a favorite flag |
-| `search_chats` | [`service/catalog.py`](src/teams_connector/service/catalog.py) | Match conversation names, and named group and meeting chats Teams matches by member (with a refresh) |
+| `search_chats` | [`service/catalog.py`](src/teams_connector/service/catalog.py) | Match conversation names, and with a refresh the named group and meeting chats Teams matches by member and the one-on-ones with the people Teams suggests |
 | `get_messages` | [`service/history.py`](src/teams_connector/service/history.py) | Read a conversation's history, newest pages first, with inclusive date bounds |
 | `search_messages` | [`service/search.py`](src/teams_connector/service/search.py) | Search Teams messages online through Microsoft Search v2: any of up to 25 terms, optionally within chosen chats and dates; one page of hits with message ids |
 | `export_chats` | [`service/export/`](src/teams_connector/service/export/) | Export conversations to `.txt`, `.jsonl` or `.zip`, with their attachments |
-| `download_attachment` | [`service/files.py`](src/teams_connector/service/files.py) | Save the files a message names (shared files and pasted images), by message id or by its arrival time |
+| `download_attachment` | [`service/files.py`](src/teams_connector/service/files.py) | Save the files a message names (shared files and pasted images), by message id or by its arrival time; lists those it could not fetch |
 | `get_presence` | [`service/presence.py`](src/teams_connector/service/presence.py) | Availability, activity, device and last-active time of the other person in a one-on-one chat; nothing richer |
 | `send_message` | [`service/send.py`](src/teams_connector/service/send.py) | Send one message (plain text, or HTML sent as written) after explicit authorization; the only write tool |
 
@@ -127,10 +127,6 @@ account and checks its stored owner before use; it is not application-encrypted,
 rules for the device. Generated exports and downloaded message attachments are cleaned up after seven
 days the next time their output directory is used. Downloads are cached per source under the data directory's
 `downloads` folder, so a file already there is returned without being fetched again.
-
-A store left by an earlier version that kept messages is moved, without deletion, into a
-`legacy-archive-<timestamp>` folder next to it the first time this version opens the account. The
-catalog is then rebuilt from Teams. Delete that folder when you no longer need it.
 
 ## Troubleshooting
 

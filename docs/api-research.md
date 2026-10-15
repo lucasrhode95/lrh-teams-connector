@@ -15,6 +15,7 @@ The sections below are grouped by the service that owns their evidence. Headings
 - [Sending through Graph](#sending-through-graph)
 - [Omitted channels by id, batched (2026-10-15)](#omitted-channels-by-id-batched-2026-10-15)
 - [Recipient refresh before a send (2026-10-15)](#recipient-refresh-before-a-send-2026-10-15)
+- [Channel replies by id (2026-10-15)](#channel-replies-by-id-2026-10-15)
 
 ### Teams private services (AuthZ, Chat Service, CSA, Middle Tier, AMS)
 - [Teams AuthZ / service discovery](#teams-authz--service-discovery)
@@ -33,6 +34,9 @@ The sections below are grouped by the service that owns their evidence. Headings
 - [Meeting and membership events](#meeting-and-membership-events)
 - [Whole-message history pages (2026-10-15)](#whole-message-history-pages-2026-10-15)
 - [Presence through the regional host (2026-10-15)](#presence-through-the-regional-host-2026-10-15)
+- [Presence through AuthZ presenceUPS (2026-10-15)](#presence-through-authz-presenceups-2026-10-15)
+- [Meeting recording cards (2026-10-15)](#meeting-recording-cards-2026-10-15)
+- [Line breaks in message HTML (2026-10-15)](#line-breaks-in-message-html-2026-10-15)
 - [Favorites folder through the catalog (2026-10-15)](#favorites-folder-through-the-catalog-2026-10-15)
 - [HTML sends, live check (2026-10-15)](#html-sends-live-check-2026-10-15)
 - [Unread state after reads (2026-10-15)](#unread-state-after-reads-2026-10-15)
@@ -43,6 +47,7 @@ The sections below are grouped by the service that owns their evidence. Headings
 - [Search v2 message search](#search-v2-message-search)
 - [One message search over Search v2 (2026-10-15)](#one-message-search-over-search-v2-2026-10-15)
 - [Chat search by member (2026-10-15)](#chat-search-by-member-2026-10-15)
+- [People suggestions with Teams Web's request (2026-10-15)](#people-suggestions-with-teams-webs-request-2026-10-15)
 - [Substrate people/chat search](#substrate-peoplechat-search)
 - [Other Teams search routes](#other-teams-search-routes)
 - [Opening a hit](#opening-a-hit)
@@ -67,6 +72,8 @@ The sections below are grouped by the service that owns their evidence. Headings
 - [Credential matrix](#credential-matrix)
 - [Authentication flow](#authentication-flow)
 - [Shared-auth live validation (2026-10-12)](#shared-auth-live-validation-2026-10-12)
+- [HTML send check and CDATA (2026-10-15)](#html-send-check-and-cdata-2026-10-15)
+- [Teams Web image names (2026-10-15)](#teams-web-image-names-2026-10-15)
 
 ### Cross-cutting: method, live checks and decisions
 - [Confidence legend](#confidence-legend)
@@ -3493,6 +3500,8 @@ to a person. The same query in quotes returned no rows. The one-on-one chat with
 | `substrate.office.com/search/api/v1/suggestions` | `peoplepicker.newChat`, with the captured body shape | 400 |
 
 The 2026-10-14 entry above says People suggestions succeeded with both tokens; this run did not reproduce it.
+Later the same day the captured Teams Web body answered 200; see
+[People suggestions with Teams Web's request](#people-suggestions-with-teams-webs-request-2026-10-15).
 The request shapes tried are those recorded earlier in this document.
 
 **Connector behavior:** `search_chats` with `refresh=true` now asks the Chat entity for a plain name or email and lists
@@ -3599,6 +3608,8 @@ Read-only, through the connector's own session. The Teams Web source names Unifi
 - Through the service on one one-on-one chat: the four fields were present, and no calendar, work-location or
   capability data reached the result.
 - The region is taken from the Chat Service host. Only the `emea` region was checked.
+- Superseded later the same day: AuthZ names the presence route, see
+  [Presence through AuthZ presenceUPS](#presence-through-authz-presenceups-2026-10-15).
 
 ## Unread state after reads (2026-10-15)
 
@@ -3610,3 +3621,120 @@ unread meeting chats; no unread one-on-one or group chat at the time).
 - A meeting chat with a downloadable file: one download of 144,830 bytes; the chat stayed unread on the next refresh.
 - Two unread meeting chats returned an upstream error on their history reads. Their causes were not inspected.
 - Not checked: whether the flag follows the Teams client after a chat is read there.
+
+## People suggestions with Teams Web's request (2026-10-15)
+
+**Evidence:** the Teams Web request in a browser capture of 2026-10-14 (read outside the repository; literals only),
+then read-only requests through the connector's sign-in. Statuses, counts and key names only.
+
+Teams Web sends, as the user types in the search box:
+
+```http
+POST https://substrate.office.com/search/api/v1/suggestions?scenario=powerbar&setflight=…
+X-AnchorMailbox: Oid:<user object id>@<tenant id>
+
+{"EntityRequests": [
+   {"EntityType": "People", "Size": 5, "From": 0,
+    "Query": {"QueryString": "<text>", "DisplayQueryString": "<text>", "NormalizedQueryString": "<text>"},
+    "Fields": ["Id", "MRI", "DisplayName", "EmailAddresses", "PeopleType", "PeopleSubtype", "UserPrincipalName",
+               "ExternalDirectoryObjectId", …],
+    "Filter": {"And": [{"Or": [{"Term": {"PeopleType": "Person"}}, {"Term": {"PeopleType": "Other"}}]},
+                       {"Or": [{"Term": {"PeopleSubtype": "OrganizationUser"}}, … "MTOUser", "PersonalContact", "Guest"]},
+                       {"Or": [{"Term": {"Flags": "NonHidden"}}]}]},
+    "Provenances": ["Mailbox", "Directory"]},
+   … File, Chat, Team, Channel, Text, Message, Event and App requests …],
+ "Scenario": {"Name": "powerbar",
+              "Dimensions": [{"DimensionName": "QueryType", "DimensionValue": "PeopleCentricSearch"}]},
+ "Cvid": "<guid>", "LogicalId": "<guid>", "AppName": "Microsoft Teams", "dataSource": "personScoped"}
+```
+
+The Teams Web bundle holds the same literals (`PCS_DATASOURCE: "personScoped"`, the `PeopleCentricSearch`
+dimension). The earlier 400s sent `Dimensions` as an object and no `dataSource` or filter.
+
+| Token | People request | People and Chat requests in one call |
+|---|---|---|
+| `m365.search` (Outlook Web client, `outlook.office.com/search` scope) | 200 | 500 |
+| Outlook Web client, `substrate.office.com/search` scope | 200 | 500 |
+| Teams client, `substrate.office.com/search` scope | 200 | 200 |
+
+All three tokens carried the same audience. The People group's suggestions carry `ExternalDirectoryObjectId`,
+`DisplayName`, `MRI`, `UserPrincipalName`, `EmailAddresses`, `PeopleType`, `PeopleSubtype`, `PropertyHits`,
+`QueryText`, `ReferenceId`, `Text` and `Id`; for a one-on-one peer's name, the peer was among them. The Chat group
+(Teams token only) carried `ThreadId`, `ThreadType`, `Name`, `ChatMembers`, `MatchingMembers`,
+`TotalChatMembersCount` and `LastMessageTime`; 2 of 2 rows were catalog chats.
+
+**Connector:** `search_chats` sends the People request alone, with `m365.search`, and matches each one-on-one whose
+id (`19:{a}_{b}@unq.gbl.spaces`) names a suggested person. On three one-on-ones, a query of the person's given
+and family name in that order did not match the chat name (stored family name first) in 3 of 3, and found the chat
+through the suggested person in 3 of 3, with complete coverage.
+
+## Presence through AuthZ presenceUPS (2026-10-15)
+
+Read-only, through the connector's session. AuthZ's `regionGtms` held 112 entries; for this account:
+
+| Entry | Value (host and path) |
+|---|---|
+| `unifiedPresence` | `presence.teams.microsoft.com` (the global host that redirects to the regional one) |
+| `presenceUPS` | `teams.microsoft.com/ups/emea` |
+| `ams` | `eu-api.asm.skype.com` |
+| `amsV2` | `eu-prod.asyncgw.teams.microsoft.com` |
+| `chatService` | `emea.ng.msg.teams.microsoft.com` |
+
+The Teams Web presence endpoint manager takes its base from `regionGtm("unifiedPresence")`, or from an AFD region
+route when its AFD setting is on, and appends `v1/presence/getpresence/`. `POST {presenceUPS}/v1/presence/getpresence/`
+with the `teams.spaces` bearer answered 200 with the requested row, and the connector now reads presence there:
+three one-on-ones read, each with an availability.
+
+## Meeting recording cards (2026-10-15)
+
+Read-only, the 25 most recent chats; element and attribute names, counts and host suffixes only. A recording is a
+`RichText/Media_CallRecording` message whose content is one `URIObject` of type `Video.2/CallRecording.1`:
+
+- `RecordingStatus` (`status` seen: `Initial`, `ChunkFinished`, `Success`), `SessionEndReason`, `ChunkEndReason`;
+- `Title` (text) and an `<a href>` to the OneDrive or SharePoint copy (`/:v:/` sharing link);
+- `OriginalName v=…` (the `.mp4` file name), organizer, initiator and call-processing ids, iCal uids,
+  `RecordingStorage`, `Identifiers`;
+- `RecordingContent` items: `amsVideo`, `amsTranscript`, `rosterevents` and thumbnail views on the AMS v2 host
+  (`*.asyncgw.teams.microsoft.com`), and `onedriveForBusinessVideo` and `onedriveForBusinessTranscript` on SharePoint.
+
+The message type carries no `html`, so these messages were read as plain text: the card's raw markup, AMS links and
+ids reached the text (23 messages showed AMS URLs). They now read as `[Recording: <title>]` and the SharePoint link
+when there is one: 91 markers in the same chats, 23 with a link, no AMS URL left in any text.
+
+## Line breaks in message HTML (2026-10-15)
+
+Read-only counts over 2,833 `RichText/Html` messages of 40 recent chats: adjacent paragraphs in 217, empty paragraphs
+in 126, `<br>` in 64, a `<br>` between two paragraphs in 17, and two `<br>` in a row in 11. The last two kinds read
+as a single line break before the fix; they now keep their blank line.
+
+## Channel replies by id (2026-10-15)
+
+Read-only, one reply in one of the ten most active channels:
+
+| Request | Result |
+|---|---|
+| Graph `GET /teams/{team}/channels/{channel}/messages/{reply id}` | 404 |
+| Graph `GET …/messages/{root id}/replies/{reply id}` | 200 |
+| Chat Service `GET …/conversations/{channel}/messages/{reply id}` | 200, with `rootMessageId` and `conversationLink` naming the root |
+| Chat Service time lookup (`startTime` = `endTime` = the reply's time) | the reply |
+
+The connector finds a channel message through Chat Service and reads a reply through Graph's replies route.
+
+## HTML send check and CDATA (2026-10-15)
+
+Offline. Python's `HTMLParser` reads `<![CDATA[ … ]]>` as one declaration, so `<![CDATA[ > <img src=x onerror=…> ]]>`
+reported no start tag and passed the passive HTML check in both connectors. A browser ends an unknown top-level
+declaration at its first `>`, which leaves the `img` live. The Teams check now refuses declarations, CDATA sections
+and processing instructions, and refuses `<img>` and other embedded media for the reason in
+[Teams Web image names](#teams-web-image-names-2026-10-15). The Outlook connector's reference rule set has the same
+gap.
+
+## Teams Web image names (2026-10-15)
+
+Teams Web bundle (the build extracted for this investigation). Saving an inline image uses the constant name `MicrosoftTeams-image.png`, also
+the default name of an uploaded pasted image. Image views are `v1/objects/{id}/views/imgo` (the preview the message
+references), `imgpsh_fullsize`, `imgpsh_fullsize_anim` and `imgpsh_mobile_save`, and `v1/objects/{id}/content/original`.
+A pasted image is uploaded to AMS before it is sent, and the message references the object; an `<img>` pointing
+elsewhere is not how Teams embeds images. Graph's documented equivalent is a `hostedContents` entry with a
+`../hostedContents/1/$value` source. The connector keeps object-id names (`{object id}.png`): unique and stable,
+where Teams' own name is the same for every image.
