@@ -25,14 +25,24 @@ Working behavior that could be cheaper, simpler or better informed.
 What files on `send_message` cannot do yet. One-on-one and group chats work
 ([architecture](architecture.md#send-a-message), [research](api-research.md#sending-files)).
 
-- **Files of 250 MiB or more:** refused today. A single PUT takes at most 262,143,999 bytes; larger files
-  need a Graph upload session (`createUploadSession`, then ranged PUTs to its `uploadUrl`).
-- **Pasted images:** `hostedContents` (`<img src="../hostedContents/1/$value">`) was stored as an AMS image,
-  as a paste is. Once implemented, HTML sends can stop refusing such an `<img>`.
-- **Other conversations:**
-  - Channels store files in the team's SharePoint folder instead.
-  - Meeting chats and the self chat are untried with Graph `reference` attachments; the self chat has no
-    one to share with.
+- **Files of 250 MiB or more:** refused today. A Graph upload session works
+  ([research](api-research.md#sending-files)): `createUploadSession`, then 10 MiB chunks PUT without
+  credentials to the SharePoint `uploadUrl`.
+  - The transport needs a narrow credential-free allowance for that URL.
+  - Read the file in chunks rather than all at once.
+  - Raise the size cap as a setting.
+  - Choose how a failed chunk is handled: fail the send and cancel the session (strict, within the
+    write-once rule), or resend the missing ranges (an explicit exception).
+- **Inline images:** proposed shape is an `images` list of local paths, with `<img src="name">` in `html`
+  naming an entry. The connector swaps in `../hostedContents/N/$value` and adds the bytes. An `<img>` that
+  names no entry is still refused, so remote images stay blocked.
+  - Only PNG and JPEG: refuse others before sending.
+  - The whole request is capped at about 4 MiB, so images total under about 3 MB per message.
+  - Images and files can share a message.
+- **Self chat:** files (no share step) and inline images worked there live, so the self chat can be
+  allowed.
+- **Channels and meeting chats:** channels store files in the team's SharePoint folder instead. Meeting
+  chats are untried.
 
 ### P1.7 — Delete the user's own messages
 

@@ -613,6 +613,29 @@ tenant, but nothing shows the two always agree.
 Both recipients opened every file, saw normal file cards and previews despite the empty `permissionScope`,
 and received no invitation email (`sendInvitation: false`). Confirmed by the recipients the same day.
 
+**More Graph sends, live 2026-10-15** (the self chat, and one message to a one-on-one chat; each write
+once):
+
+- **Inline images:**
+  - `hostedContents` accepts only `image/png` and `image/jpeg` (or `image/jpg`). GIF and SVG answered 400
+    "Unsupported content type in hostedContent".
+  - Two images in one message became two AMS images.
+  - The limit is on the whole request, at about 4 MiB: a 3.06 MB PNG (a 4.08 MB request) was accepted,
+    and a 4.47 MB request answered 400 "maximum number of bytes allowed to be read from the stream has
+    been exceeded". Base64 adds a third, so a message's images total under about 3 MB.
+- **Images and files together:** one message with `hostedContents` and a `reference` attachment worked.
+  The recipient of the one-on-one send saw the JPEG inline next to the file card.
+- **Self chat:** files (`reference` attachments, with no share step, since nobody else is in the chat) and
+  inline images both worked in `48:notes`.
+- **Upload session:** `POST /me/drive/root:/{folder}/{name}:/createUploadSession` with
+  `{"item": {"@microsoft.graph.conflictBehavior": "rename"}}` answered 200 with `uploadUrl`,
+  `expirationDateTime` (about 15 minutes ahead) and `nextExpectedRanges`.
+  - The `uploadUrl` is on the user's OneDrive SharePoint host and needs no `Authorization` header.
+  - A 300 MiB file went up in 10 MiB `PUT`s with `Content-Range` in about 47 s. Each chunk answered 202
+    with `nextExpectedRanges`; the last answered 201 with the drive item (`id`, `eTag`, `webUrl`,
+    `parentReference.driveId`, `name`), as a single PUT returns.
+  - Chunks must be multiples of 320 KiB.
+
 ## Meeting recaps and transcripts
 
 Not used by the connector; the starting point for roadmap P2.2f.
