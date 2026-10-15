@@ -102,6 +102,35 @@ the agent instructions change first.
 - **Result:** confirm with `get_messages`, which shows a deleted message as `is_deleted` with no text
   ([research](api-research.md#edits-and-deletes)).
 
+### N9 — Meeting notes from Loop pages
+
+When a meeting ends, a "Facilitator" bot posts a link to the meeting's Loop notes page: agenda and goal,
+notes, and a task table. Today the connector shows the sentence and the link only. Graph converts the page
+to HTML ([research](api-research.md#loop-pages-and-meeting-notes)).
+
+- **Reading (`get_messages`):** show a marker and fetch nothing, as for files: `[Meeting notes: <page
+  name>] <link>` instead of the bot's sentence. Detect it by the `FluidAutoEmbedLink` item with a `/:fl:/`
+  link.
+- **Exports and `download_attachment`:** fetch `content?format=html` once and keep only the valid content,
+  as plain text after the message:
+  - the agenda and goal;
+  - the notes, under their headings;
+  - each task with its assignee and due date.
+
+  Drop the AI disclaimer and its link, the empty paragraphs, the checkboxes and the "Task list category"
+  labels. `download_attachment` saves the cleaned notes as a text file.
+- **Failures:** a page that cannot be read (no access, deleted, a conversion error) is reported like an
+  unavailable attachment, and the message text stays.
+- **Freshness:** the page is live, so the export shows the notes as they are at export time; say so in the
+  output.
+- **Restrictions:** Teams Web checks `opStream/capabilities` (`canExport`, `canExtract`) before showing a
+  page. Respect them: a page that forbids export is reported, not fetched. Find out whether Graph's
+  `?format=html` already refuses such pages, or whether the connector must check, which needs a
+  SharePoint-audience token.
+- **Open:**
+  - Do Loop components that people paste into a chat use the same embed? Handle them the same way if so.
+  - Should the PDF (`?format=pdf`) be offered as the downloaded file instead of text?
+
 ### P2.2f — Meeting recaps and transcripts
 
 Four separate capabilities, none implemented: finding recaps, listing a meeting's transcripts,
@@ -117,7 +146,8 @@ reading a transcript, and searching transcript text. The Teams Web routes are no
   recording messages carry an `amsTranscript` item ([research](api-research.md#recording-cards)).
 
 **Next:** try the listing route with a SharePoint-audience token from the Teams client on one
-recording you choose. Graph's per-meeting transcript API needs `OnlineMeetingTranscript.Read.All`,
+recording you choose. The user named a recurring standup meeting chat whose recordings have
+transcripts (2026-10-15); it is also the chat behind N9's findings. Graph's per-meeting transcript API needs `OnlineMeetingTranscript.Read.All`,
 which requires admin consent
 ([research](api-research.md#transcripts)). Respect
 the download restriction the Teams UI showed for one meeting; a reference is not permission.
