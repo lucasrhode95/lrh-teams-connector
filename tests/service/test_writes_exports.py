@@ -21,9 +21,7 @@ CHANNEL = "19:general@thread.tacv2"
 
 
 async def test_send_checks_the_live_name_and_posts_escaped_html(services: Services, fake: FakeTeams) -> None:
-    result = await services.sender.send(
-        ONE, expected_chat_name=" pat  PEER ", text="a < b\nline 2", user_confirmation="user said: send it"
-    )
+    result = await services.sender.send(ONE, expected_chat_name=" pat  PEER ", text="a < b\nline 2")
     path, body = fake.sent[0]
     assert path == "/chats/19:one@unq.gbl.spaces/messages"
     assert body == {"body": {"contentType": "html", "content": "<p>a &lt; b<br>line 2</p>"}}
@@ -31,25 +29,17 @@ async def test_send_checks_the_live_name_and_posts_escaped_html(services: Servic
 
 
 async def test_channel_send_posts_to_the_team_channel(services: Services, fake: FakeTeams) -> None:
-    await services.sender.send(
-        CHANNEL, expected_chat_name="Platform · General", text="hi", user_confirmation="yes, post it"
-    )
+    await services.sender.send(CHANNEL, expected_chat_name="Platform · General", text="hi")
     assert fake.sent[0][0] == "/teams/team-1/channels/19:general@thread.tacv2/messages"
 
 
 async def test_send_refusals_never_reach_teams(services: Services, fake: FakeTeams) -> None:
     with pytest.raises(InvalidRequest, match="does not match"):
-        await services.sender.send(ONE, expected_chat_name="Someone else", text="hi", user_confirmation="ok")
-    with pytest.raises(InvalidRequest, match="user_confirmation"):
-        await services.sender.send(ONE, expected_chat_name="Pat Peer", text="hi", user_confirmation=" ")
+        await services.sender.send(ONE, expected_chat_name="Someone else", text="hi")
     with pytest.raises(InvalidRequest, match="10,000"):
-        await services.sender.send(
-            ONE, expected_chat_name="Pat Peer", text="x" * 10_001, user_confirmation="ok"
-        )
+        await services.sender.send(ONE, expected_chat_name="Pat Peer", text="x" * 10_001)
     with pytest.raises(NotFound):
-        await services.sender.send(
-            "19:nope@thread.v2", expected_chat_name="x", text="hi", user_confirmation="ok"
-        )
+        await services.sender.send("19:nope@thread.v2", expected_chat_name="x", text="hi")
     assert fake.sent == []
 
 
@@ -59,7 +49,7 @@ async def test_ambiguous_send_is_reported_and_not_retried(
 ) -> None:
     fake.fail_sends = failure
     with pytest.raises(WriteOutcomeUnknown):
-        await services.sender.send(ONE, expected_chat_name="Pat Peer", text="hi", user_confirmation="ok")
+        await services.sender.send(ONE, expected_chat_name="Pat Peer", text="hi")
     assert sum(c.startswith("POST graph.microsoft.com/v1.0/chats") for c in fake.calls) == 1
 
 
