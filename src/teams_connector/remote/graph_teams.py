@@ -17,8 +17,8 @@ from typing import Any
 from teams_connector.domain.errors import InvalidRequest, NotFound
 from teams_connector.domain.models import Chat, Message, Participant
 from teams_connector.remote import graph_mapping
-from teams_connector.remote.graph import MAX_DOWNLOAD_BYTES, Graph, relative, segment
-from teams_connector.remote.ports import HistoryPage, RemoteFile, SendReceipt
+from teams_connector.remote.graph import Graph, relative, segment, sub_failure
+from teams_connector.remote.ports import HistoryPage, RemoteFile, SendReceipt, SharedFile
 from teams_connector.remote.transport import operation
 
 CHANNEL_PAGE = 50  # threads per page (Graph maximum for channel messages)
@@ -57,24 +57,69 @@ class GraphChannels:
         return [chat for group in groups for chat in group]
 
     async def locate(self, channel_ids: list[str]) -> list[Chat]:
+        """Omitted channels by id: every joined team is asked about every channel, in Graph batches. A
+        channel is taken from the first team, in listing order, that answers for it."""
         if not channel_ids:
             return []
-        found: list[Chat] = []
         with operation("finding channels by id"):
             teams = await self._teams()
-            for channel_id in channel_ids:
-                for team in teams:
-                    try:
-                        row = await self._graph.get(
-                            f"/teams/{segment(team['id'])}/channels/{segment(channel_id)}",
-                            {"$select": "id,displayName,membershipType"},
-                        )
-                    except (NotFound, InvalidRequest):
-                        continue
-                    if row.get("id"):
-                        found.append(graph_mapping.channel(team, row))
-                        break
-        return found
+            pairs = [(team, channel_id) for channel_id in channel_ids for team in teams]
+            responses = await self._graph.batch(
+                {
+                    str(index): relative(
+                        f"/teams/{segment(team['id'])}/channels/{segment(channel_id)}",
+                        {"$select": "id,displayName,membershipType"},
+                    )
+                    for index, (team, channel_id) in enumerate(pairs)
+                }
+            )
+            found: dict[str, Chat] = {}
+            for index, (team, channel_id) in enumerate(pairs):
+                if channel_id in found:
+                    continue
+                response = responses[str(index)]
+                if response.ok and response.body.get("id"):
+                    found[channel_id] = graph_mapping.channel(team, response.body)
+                elif response.status not in (400, 404):  # not in this team: keep looking
+                    raise sub_failure(response, detail="while finding channels by id")
+        return list(found.values())
+
+    async def channel(self, team_id: str, channel_id: str) -> Chat | None:
+        """One channel read in its team. The team's name comes from the joined-teams listing, because a
+        channel's listed name includes it. None when the team or the channel is no longer reachable."""
+        team = next((t for t in await self._teams() if t.get("id") == team_id), None)
+        if team is None:
+            return None
+        with operation("reading one channel"):
+            try:
+                row = await self._graph.get(
+                    f"/teams/{segment(team_id)}/channels/{segment(channel_id)}",
+                    {"$select": "id,displayName,membershipType"},
+                )
+            except (NotFound, InvalidRequest):
+                return None
+        return graph_mapping.channel(team, row) if row.get("id") else None
+
+    async def message(self, chat: Chat, message_id: str) -> Message:
+        """One channel post (a thread's root) by id, read in its team. Replies have their own route."""
+        if not chat.team_id:
+            raise InvalidRequest(f"Channel {chat.id} has no team; refresh the chat list.")
+        with operation("reading one channel message"):
+            data = await self._graph.get(
+                f"/teams/{segment(chat.team_id)}/channels/{segment(chat.id)}/messages/{segment(message_id)}"
+            )
+        return graph_mapping.to_message(data, chat.id)
+
+    async def reply(self, chat: Chat, root_id: str, message_id: str) -> Message:
+        """One reply by id, read through its thread's root post."""
+        if not chat.team_id:
+            raise InvalidRequest(f"Channel {chat.id} has no team; refresh the chat list.")
+        with operation("reading one channel reply"):
+            data = await self._graph.get(
+                f"/teams/{segment(chat.team_id)}/channels/{segment(chat.id)}/messages/{segment(root_id)}"
+                f"/replies/{segment(message_id)}"
+            )
+        return graph_mapping.to_message(data, chat.id)
 
     async def page(
         self,
@@ -188,15 +233,20 @@ class GraphPeople:
         return content, kind
 
 
+def _paragraph(text: str) -> str:
+    """Plain text as one paragraph: escaped, with each line break kept as ``<br>``."""
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    return "<p>" + "<br>".join(html.escape(line, quote=False) for line in lines) + "</p>"
+
+
 class GraphWriter:
     """ChatWriter over Graph: chats via /chats/{id}/messages, channel posts via the team channel."""
 
     def __init__(self, graph: Graph) -> None:
         self._graph = graph
 
-    async def send(self, chat: Chat, text: str) -> SendReceipt:
-        lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-        content = "<p>" + "<br>".join(html.escape(line, quote=False) for line in lines) + "</p>"
+    async def send(self, chat: Chat, content: str, *, as_html: bool) -> SendReceipt:
+        body = content if as_html else _paragraph(content)
         if chat.kind == "channel":
             if not chat.team_id:
                 raise InvalidRequest(f"Channel {chat.id} has no team; refresh the chat list.")
@@ -205,7 +255,7 @@ class GraphWriter:
             path = f"/chats/{segment(chat.id)}/messages"
         with operation("sending the message"):
             data, _ = await self._graph.post(
-                path, {"body": {"contentType": "html", "content": content}}, idempotent=False
+                path, {"body": {"contentType": "html", "content": body}}, idempotent=False
             )
         message_id = data.get("id")
         return SendReceipt(
@@ -220,23 +270,36 @@ class GraphFiles:
     def __init__(self, graph: Graph) -> None:
         self._graph = graph
 
-    async def download(self, url: str, dest: Path, *, max_bytes: int | None = None) -> RemoteFile:
-        if not url.lower().startswith("https://"):
-            raise InvalidRequest("Only https sharing URLs can be downloaded.")
-        share = "u!" + base64.urlsafe_b64encode(url.encode()).decode().rstrip("=")
-        with operation("downloading a shared file"):
-            item = await self._graph.get(f"/shares/{share}/driveItem", {"$select": "name,size,file,folder"})
-            if item.get("folder") is not None:
-                raise InvalidRequest("The link points to a folder, not a file.")
-            content_type, size = await self._graph.download(
-                f"/shares/{share}/driveItem/content",
-                dest,
-                max_bytes=MAX_DOWNLOAD_BYTES if max_bytes is None else max_bytes,
+    async def describe(self, url: str) -> SharedFile:
+        share = _share_id(url)
+        with operation("describing a shared file"):
+            item = await self._graph.get(
+                f"/shares/{share}/driveItem", {"$select": "id,name,size,folder,eTag"}
             )
-        mime = (item.get("file") or {}).get("mimeType") if isinstance(item.get("file"), dict) else None
-        name = item.get("name")
-        return RemoteFile(
+        if item.get("folder") is not None:
+            raise InvalidRequest("The link points to a folder, not a file.")
+        item_id = item.get("id")
+        if not isinstance(item_id, str) or not item_id:
+            raise NotFound("Graph returned no file for the link.")
+        name, etag, size = item.get("name"), item.get("eTag"), item.get("size")
+        return SharedFile(
+            item_id=item_id,
             name=name if isinstance(name, str) else None,
-            content_type=mime or content_type,
-            size=size,
+            version=etag if isinstance(etag, str) else "",
+            size=size if isinstance(size, int) else None,
         )
+
+    async def download(self, url: str, dest: Path, *, max_bytes: int) -> RemoteFile:
+        share = _share_id(url)
+        with operation("downloading a shared file"):
+            content_type, size = await self._graph.download(
+                f"/shares/{share}/driveItem/content", dest, max_bytes=max_bytes
+            )
+        return RemoteFile(name=None, content_type=content_type, size=size)
+
+
+def _share_id(url: str) -> str:
+    """Graph's share identifier for a sharing URL: ``u!`` and the URL-safe base64 of the URL, unpadded."""
+    if not url.lower().startswith("https://"):
+        raise InvalidRequest("Only https sharing URLs can be downloaded.")
+    return "u!" + base64.urlsafe_b64encode(url.encode()).decode().rstrip("=")

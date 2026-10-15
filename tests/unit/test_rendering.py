@@ -81,7 +81,7 @@ def test_attachment_and_image_markers() -> None:
         },
         "c",
     )  # fmt: skip
-    assert "[Attachment: report.xlsx]" in message.text and "https://files.example.test/report" in message.text
+    assert "[File: report.xlsx]" in message.text and "https://files.example.test/report" not in message.text
     assert "[Image: https://images.example.test/one.png]" in message.text
     assert message.attachments[0].url == "https://files.example.test/report"
 
@@ -152,10 +152,7 @@ def test_chat_service_record_fields() -> None:
     deleted = chat_service_mapping.to_message({"id": "1", "messagetype": "MessageDelete"}, "c")
     assert deleted.is_deleted and deleted.system_event is None and deleted.text == ""
     event = chat_service_mapping.to_message({"id": "2", "messagetype": "ThreadActivity/AddMember"}, "c")
-    assert (
-        event.system_event == "ThreadActivity/AddMember"
-        and event.text == "[System message: ThreadActivity/AddMember]"
-    )
+    assert event.system_event == "ThreadActivity/AddMember" and event.text == "[Member added]"
 
 
 def test_graph_message_mapping() -> None:
@@ -188,7 +185,7 @@ def test_graph_message_mapping() -> None:
     }
     message = graph_mapping.to_message(raw, "19:c@thread.tacv2")
     assert message.text.startswith("@(Example, User) see")
-    assert "Poll" in message.text and "[Attachment: deck.pptx]" in message.text
+    assert "Poll" in message.text and "[File: deck.pptx]" in message.text
     assert message.author_id == "aaaaaaaa-0000-0000-0000-000000000001" and message.reply_to_id == "6"
     assert message.subject == "Plan" and message.edited_at and message.attachments[0].url
 

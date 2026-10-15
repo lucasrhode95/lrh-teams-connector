@@ -12,7 +12,6 @@ def test_cli_has_one_canonical_name_and_no_legacy_application_commands() -> None
     assert parser.parse_args(["auth"]).command == "auth"
     assert parser.parse_args(["mcp"]).command == "mcp"
     assert parser.parse_args(["ui"]).command == "ui"
-    assert parser.parse_args(["backup", "archive.sqlite3"]).command == "backup"
 
 
 def test_status_reports_the_shared_profile_catalog_without_connecting(capsys) -> None:

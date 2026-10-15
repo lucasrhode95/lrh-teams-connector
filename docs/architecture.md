@@ -14,17 +14,21 @@ overview; this document records the rules and contracts they cannot show.
 
 | Layer | Responsibility |
 |---|---|
-| `src/teams_connector/__main__.py` | Canonical CLI (`teams-connector`) for shared sign-in, profile status, MCP, UI, and account-bound archive backup. Loads MCP and web dependencies only for those commands. |
+| `src/teams_connector/__main__.py` | Canonical CLI (`teams-connector`) for shared sign-in, profile status, MCP, and UI. Loads MCP and web dependencies only for those commands. |
 | `surfaces/mcp_main.py` | Typed MCP tools over the service layer. Keeps stdio free of logs; `send_message` is the only Teams write tool. |
 | `surfaces/web/` | Starlette app, static local export page, and loopback UI launcher. Uses a per-run session token, Host validation, and an idle timeout. |
-| `service/` | Domain behavior for the catalog, message history, local matching, archive sync, exports, attachment downloads, profile photos, and sending. MCP and UI share these operations. |
+| `service/` | Domain behavior for the catalog, message history, exports, attachment downloads, profile photos, and sending. MCP and UI share these operations. |
 | `remote/ports.py` | Interfaces used by services; service code does not depend on concrete HTTP adapters. |
 | `remote/transport.py` | The only general HTTP client. Applies the allowlist, authentication, one-time 401 renewal, bounded idempotent retries, response limits, error mapping, and credential-free download redirects. |
-| `remote/chat_service.py`, `remote/csa.py` | Private Teams service adapters for chat catalog/history/rosters and CSA updates. Their endpoints are undocumented and described as private in the research record. |
+| `remote/chat_service.py`, `remote/csa.py` | Private Teams service adapters for the chat catalog, chat history, chat members, and CSA updates. Their endpoints are undocumented and described as private in the research record. |
 | `remote/graph.py`, `remote/graph_teams.py` | Microsoft Graph paging, batching, channel history, people/photos, file download, and the explicitly authorized message-send request. |
+| `remote/substrate_search.py` | Search v2 message search and named-chat matches, and Teams Web's search-box people suggestions (`substrate.office.com`), all with the `m365.search` token. |
+| `remote/presence.py`, `service/presence.py` | Presence of a one-on-one peer, read at the presence service AuthZ names (`presenceUPS`); the service keeps a result for a minute and fails open. |
+| `remote/inline_images.py`, `remote/image_readers.py` | Pasted images: the marker name and attachment record of each image in a message (`inline_images.py`, no network); the AMS full-size and Graph hosted-copy readers (`image_readers.py`). |
 | `remote/*_mapping.py` and `remote/teams_html.py` | Convert wire responses into domain records and readable message text. Wire-format field names remain inside this layer. |
-| `store/db.py` | Account-bound SQLite archive for the catalog, message history, participant rosters, and resumable sync progress. Contains no tokens or authorization headers. |
-| `service/export/` | Text/JSONL formatting and safe output packaging. Exports stream from the archive, use exclusive temporary paths, and publish only after completion. |
+| `store/db.py` | Account-bound SQLite store for the chat catalog and account metadata only. Holds no message content and no tokens. |
+| `service/export/` | Text/JSONL formatting and safe output packaging. Exports read Teams page by page and spool to a temporary file, use exclusive temporary paths, and publish only after completion. |
+| `service/passive_html.py` | The passive check for HTML sends: refuses active content, embedded media, declarations and unfinished markup, and never rewrites the HTML. |
 | `service/localfiles.py` | Per-user output directories, retention cleanup, and collision-safe file creation. |
 | `src/teams_connector/config.py` | Product CLI/data names and fixed public service URLs. Tenant authority, client IDs, token profiles, scopes, and shared-cache configuration live in `lrh-m365-auth`. |
 
@@ -38,6 +42,30 @@ export packaging and domain errors. Each surface keeps its own protocol work: th
 dates with the browser's UTC offset while MCP takes ISO 8601 timestamps; the UI guards Host headers
 and a session token while MCP runs over stdio; the UI streams downloads while MCP returns local
 paths; each maps domain errors to its own responses.
+
+## Services, ports and adapters
+
+Each surface calls a service. A service depends only on the ports it needs, and `bootstrap.py` wires an adapter to
+each port-typed role. A port can have several adapters in different roles: `HistoryReader` reads chats (`ChatService`)
+and channels (`GraphChannels`), `ImageReader` reads AMS images and Graph hosted copies. The table maps each MCP tool and UI route to the service that answers it, the ports it reads or writes through,
+and the adapters behind them. The split of backends (which private or public service backs each capability) is in
+[requirements §4](requirements.md#4-backend-choice).
+
+| Surface | Tool or route | Service | Ports | Adapters |
+|---|---|---|---|---|
+| MCP | `auth_status` | `TokenProvider` (shared auth package) | none | `TokenProvider` |
+| MCP | `list_chats` | `Catalog.list` (a refresh reads the self chat's newest message too) | `ChatCatalog`, `ChannelDirectory`, `FavoriteFolders`, `HistoryReader` | `CsaCatalog`, `GraphChannels`, `ChatService` |
+| MCP | `search_chats` | `Catalog.search` (with `refresh`, after a catalog refresh as `list_chats`) | `ChatMemberSearch` (named chats and people), and the refresh's ports | `SubstrateChatSearch`, and the refresh's adapters |
+| MCP | `get_messages` | `History.get_messages` | `HistoryReader` (chats and channels) | `ChatService`, `GraphChannels` |
+| MCP | `search_messages` | `Search.search_messages` | `MessageSearchReader` | `SubstrateSearch` |
+| MCP | `export_chats` | `Exports.export` | `HistoryReader` (`History.selection`), `FileReader` and `ImageReader` (`Files.save`) | `ChatService`, `GraphChannels`, `GraphFiles`, `AmsImages`, `GraphHostedImages` |
+| MCP | `download_attachment` | `Files.download_attachments` (`History.resolve`) | `ChatHistoryReader` (finds the message, and a channel reply's thread), `ChannelHistoryReader`, `FileReader`, `ImageReader` | `ChatService`, `GraphChannels`, `GraphFiles`, `AmsImages`, `GraphHostedImages` |
+| MCP | `send_message` | `Sender.send` (and `Catalog.recipient`) | `ChatWriter`, `ChatCatalog` (chats), `ChannelDirectory` (channels) | `GraphWriter`, `CsaCatalog`, `GraphChannels` |
+| MCP | `get_presence` | `Presences.for_chat` | `PresenceReader` | `TeamsPresence` |
+| UI | `GET /api/status` | token status | none | `TokenProvider` |
+| UI | `GET /api/chats` | `Catalog.list` (or `ensure`) | as `list_chats` | as `list_chats` |
+| UI | `GET /api/photos/{user_id}` | `Photos.photo` | `People` | `GraphPeople` |
+| UI | `POST /api/exports` and its job routes | `Exports.export` in a background job | as `export_chats` | as `export_chats` |
 
 ## Authentication and account boundaries
 
@@ -78,23 +106,24 @@ Ctrl+C, or its idle timeout. There is no recurring sync task, watcher, remote li
 refresh process.
 
 The chat catalog may be reused for up to ten minutes. Explicit refresh waits for the remote read.
-History, participant rosters, and sync continuation state are persisted in SQLite. Searches fetch
-the requested conversation/date scope in bounded calls and match the stored messages; `coverage`
-explains which chats/ranges were actually fetched. This is not a remote global-keyword search.
+The local store holds the chat and channel catalog (names, kinds, last activity, photo ids, and the
+channels that Graph's team listing omits), the catalog's sync token and refresh time, and the owning
+account. It holds no message content and no chat member lists. Teams is the record: every history read,
+search, export and download reads Teams again ([requirements §6](requirements.md#6-local-data-decided-2026-10-14)).
 
 The database lives below `<Teams data directory>/accounts/<account fingerprint>/teams.sqlite3`.
 Owner metadata is verified on open; an account mismatch raises an error instead of reusing another
-account's archive. SQLite WAL, busy timeouts, per-operation connections, and short transactions allow
-the MCP and UI processes to use the same account store. The local archive is not encrypted by this
-application. Message content is retained until the user removes the archive.
+account's store. SQLite WAL, busy timeouts, per-operation connections, and short transactions allow the
+MCP and UI processes to use the same account store. The store is not encrypted by this application.
 
-The message archive is being removed (decided 2026-10-14; [requirements §6](requirements.md#6-local-data-decided-2026-10-14),
-roadmap D2). Only a small chat-list cache without message text will remain.
+A damaged store is moved, without deletion, into a `corrupt-<timestamp>` folder, and a new one is built
+from Teams.
 
-Exports and downloaded attachments are written below the Teams data directory, are given exclusive
-filenames, and are removed after seven days when their output directory is next used. A failed or
-cancelled export does not publish a partial result. The `backup` command uses SQLite's online backup
-API and refuses to replace an existing destination unless `--overwrite` is explicit.
+Exports and downloaded attachments are written below the Teams data directory and are removed after seven
+days when their folder is next used, subfolders included. Downloads are cached per source
+(`downloads/<source>/<key>/`: AMS and Graph images by object id, data images by digest, shared files by drive
+item and version), so a file already there is returned without fetching its content. A failed or cancelled
+export publishes nothing.
 
 ## HTTP and safety rules
 
@@ -110,29 +139,21 @@ to that host. Downloads have caller-supplied byte limits and are streamed to tem
 publication. URLs, query strings, bodies, authorization headers, message content, and search terms
 are omitted from operational logs; credential-like values are redacted as another safeguard.
 
+Pasted images are fetched only from the URL their message names: AMS full-size views from `*.asm.skype.com`
+with the session's Skype token, and Graph's hosted copies of channel images with the Graph token. Nothing is
+downloaded while a message is read.
+
 The local UI rejects non-local Host headers and requires a random per-process token on API calls.
 It uses a restrictive Content Security Policy and renders message content as text. The browser page
 does not receive a Microsoft token.
 
 ## Search behavior and boundaries
 
-`search_remote_messages` uses the shared Microsoft Search profile and the standalone Search v2
-endpoint for online Teams message discovery. It returns bounded message pointers, previews, timestamps,
-and conversation candidates; a conversation ID is attached only on an exact local-catalog match. The
-pointer (`search_message_id`) equals the history API's message ID (verified 2026-10-14), but the tool
-does not yet return it as `message_id` (roadmap P2.2d). Search v2 matches words, word prefixes and
-quoted phrases, not the middle of words. Agents decide whether to fetch surrounding history with
-`get_messages` or request another search page.
-
-`search_messages` remains a separate local archive workflow. The caller chooses the conversation
-scope, inclusive date range, and matching mode. The connector retrieves that range in bounded page
-requests, stores it, matches messages locally, and returns explicit preparation and per-conversation
-coverage. Neither message search discovers transcript or recap text, and there is no stable history
-page number for a search hit.
-
-Reverse-engineered endpoint shapes, source audits, and dated confidence notes are maintained in
-[Teams API research](api-research.md). Treat successful browser behavior as evidence, not a
-guarantee that the connector's app-owned token has the same access.
+`search_messages` is the one Teams message search. It sends one Microsoft Search v2 query on the shared
+Microsoft Search profile for each page. Search reads no history and writes nothing: each hit is a
+pointer, and `get_messages` reads the history around it. Search v2 matches whole words and word prefixes,
+and a quoted phrase matches its words in order; it does not match the middle of a word. Agents decide
+whether to fetch surrounding history or request another page.
 
 ## Logging
 
@@ -149,14 +170,23 @@ diagnostics.
 1. Call `list_chats` to browse current chats and channels. It returns up to 50 items by default,
    supports `limit` up to 200 and opaque continuation `cursor`, and can filter by `kind`. A cached
    catalog up to ten minutes old may answer unless `refresh=true`. `coverage.source` identifies
-   whether the response used the local catalog or a refresh.
-2. Use `search_chats` to match a conversation name or participant name. Participant names are
-   available only after rosters have been indexed by `sync_archive`; read roster coverage.
+   whether the response used the local catalog or a refresh. With `TEAMS_CONNECTOR_FAVORITES` set to `1`,
+   `favorite` marks the chats in the Teams Favorites folder, read with each refresh; the setting is off by
+   default.
+2. Use `search_chats` to match a conversation name. With `refresh=true` (the default) it also
+   asks Teams, for a plain name or email, for the named group and meeting chats with a matching member
+   (up to 100, read page by page) and for the people Teams suggests (Teams Web's search-box
+   suggestions); a one-on-one whose id names a suggested person matches. Each match lists the people
+   that matched, so an email, or a name written in another order, finds the one-on-one. Teams is asked
+   once per search: the cursor carries its matches. Read the coverage notes: a query with query syntax
+   is not sent to Teams, a cut answer is reported, and an older named chat whose member is not in its
+   title and has no recent activity is not covered (Teams' chat search covers recent chats only; the
+   catalog keeps no member lists).
 3. Call `get_messages` with the selected `conversation_id`. Pages are newest first; records within
    each page are oldest first. `since` and `until` are inclusive. `message_limit` caps the latest
-   matching messages, while `page_size` controls the returned page. Follow `cursor` to get older
-   messages. If a message body has `text_truncated=true`, call `get_message_content` with its ID and
-   the indicated continuation offset.
+   matching messages, while `page_size` is the most messages a page holds. A page also holds whole
+   messages up to `max_chars` (at least one), so no message text is cut; follow `cursor` to get the
+   older messages.
 
 Example arguments for a bounded history read:
 
@@ -170,77 +200,101 @@ Example arguments for a bounded history read:
 }
 ```
 
-### Online Teams message discovery
+### Presence
 
-`search_remote_messages` calls Microsoft Search v2 for Teams messages and returns one bounded page
-(up to 25 hits; query text is limited to 512 characters).
-It does not fill or scan the local archive. Each hit preserves the Search v2 message reference,
-preview, sender, subject, timestamp, and conversation identity candidates supplied by the service.
-The connector sets `conversation_id` only when a candidate exactly equals a known local catalog ID.
-The hit's `search_message_id` is the same id `get_messages` returns as `message_id` (verified
-2026-10-14). An empty search is currently reported as unconfirmed (roadmap B2).
+`get_presence` reads the availability, activity, device type and last-active time of the other person in a
+one-on-one chat. It reads Unified Presence where AuthZ names it for the account (`presenceUPS`, a
+`teams.microsoft.com/ups/<region>` route, as Teams Web does) with the `teams.spaces` bearer, sends only the
+person's id, keeps the result for a minute in the process, and never blocks the chat list. A failed read
+returns no presence and a reason. Other fields Teams returns (calendar, work location, capabilities) are not
+reported.
 
-When a hit has a `conversation_id` and `sent_at`, use `get_messages` with a bounded `since`/`until`
-window around that timestamp to inspect surrounding context. History paging has no stable page number
-for a search result. The agent decides whether to expand context or follow the search `cursor`; each
-cursor requests only the next bounded Search v2 page. This operation does not discover recap or
-transcript text. Those capabilities remain separate and unresolved.
+### Message search
 
-### Search message text in a chosen scope
+`search_messages` takes `terms`: one to 25 phrases, each at most 200 characters, with no double quotes and no
+control characters. A message matches when any term matches. Each term is sent as one quoted phrase, so it
+is never split on its spaces and never read as query syntax. Search v2 matches the words of a phrase in
+order, so `budget review` needs both words in that order, and `budget` also finds `budgets`.
 
-`search_messages` performs local matching. Choose exactly one scope: a list of
-`conversation_ids` or `all_chats=true`, and provide both `since` and `until`. Each call fetches a
-bounded number of remote pages into the archive before matching. If `coverage.preparation_complete`
-is false, repeat with the returned `cursor`. The response distinguishes incomplete retrieval from
-an empty match set and reports date coverage per conversation.
+The connector builds one Search v2 query from the terms and the optional scope and dates:
 
-The modes are `exact`, `substring` (the default), and `all_terms`. `exact` compares the whole
-message text, not a phrase within it (roadmap B1). Matching is case-insensitive,
-accents remain significant, and SQL wildcard characters in a query are literal. Local archive
-messages remain searchable after the remote service no longer returns them. This tool is not the
-Teams Web global-search endpoint and does not return a page number or a jump-to-message handle.
+- `conversation_ids` (up to 100, from `list_chats` or `search_chats`) become `clientthreadid:` clauses,
+  joined with OR;
+- `since` and `until` become `sent >=` and `sent <=` clauses, written to the millisecond in UTC; both
+  bounds are inclusive;
+- soft-deleted messages are always left out (`NOT (isClientSoftDeleted:TRUE)`);
+- the terms form one OR group of quoted phrases.
 
-Example search across one explicitly selected conversation and month:
+The whole query is limited to 1,000 characters; a longer one is refused with a request to use fewer terms or
+conversations. Without a scope, the search covers every chat and channel the signed-in user can read.
+
+Each call returns one page of up to 25 hits (`limit`). A hit carries `message_id`, the history id that
+`get_messages` reads (the hit's `InternetMessageId`, verified 2026-10-14); `conversation_id` and
+`conversation_name` only when the hit's conversation matches a known chat exactly; `sent_at`, `sender`,
+`subject` and a `preview`. A hit without a `message_id` is reported in the coverage notes.
+
+`coverage` reports `complete` (the result set was interpreted and no further page exists), `offset`,
+`page_size`, `more_results_available`, and `total`, Search v2's count for the query. `total` is approximate and
+can move between pages. A search with no hits is a confirmed empty page when Search v2 reports `Total: 0`;
+a missing result set is never reported as zero (live check 2026-10-15). Follow `cursor` only while more
+matches are useful. A cursor carries the query and paging, so its terms, scope and dates are not repeated.
+Search v2 refuses pages that start beyond its offset limit; the connector stops with a note at that
+point.
+
+To read around a hit, call `get_messages` with its `conversation_id` (when present) and a bounded
+`since`/`until` window around `sent_at`.
+
+Example request for one conversation and a month:
 
 ```json
 {
-  "query": "budget review",
+  "terms": ["budget review", "forecast"],
+  "conversation_ids": ["19:sample@thread.v2"],
   "since": "2026-08-01T00:00:00Z",
   "until": "2026-08-31T23:59:59Z",
-  "conversation_ids": ["19:sample@thread.v2"],
-  "match_mode": "substring",
-  "limit": 20,
-  "max_pages": 10
+  "limit": 25
 }
 ```
 
-### Sync, archive status, and exports
+This operation does not discover recap or transcript text; those capabilities remain separate.
 
-`sync_archive` explicitly fetches history and optional participant rosters in bounded resumable
-batches. It does not run in the background. Repeated calls rotate fairly across chats and resume
-each chat's saved continuation. `archive_status` reports total messages and the history, date-range,
-and roster coverage for the selected conversations.
+### Exports
 
-`export_chats` writes `.txt` by default or `.jsonl` when requested. Set `include_attachments=false`
-to omit linked files. A single conversation with selected attachments returns a ZIP containing a
-folder with the text export and files; without selected attachments it returns the plain text/JSONL
-file. Multiple conversations always return an outer ZIP of each conversation's artifact, so chats
-with attachments have an inner ZIP and chats without them have a plain file. Apply inclusive date
-bounds and a latest-
-message limit per chat. The result contains a local path; use the MCP client's local file-reading
-capability to inspect it. Exporting fetches the selected remote history first and can take time for a
-large selection.
+`export_chats` writes `.txt` by default or `.jsonl` when requested, with inclusive date bounds and an optional
+latest-message limit per conversation. Each conversation becomes one artifact. When its text refers to linked
+files and `include_attachments` is true (the default), the artifact is a ZIP holding a folder with the text and
+the files that could be retrieved; otherwise it is the plain text or JSONL file. Several conversations are
+wrapped in one outer ZIP, `teams-conversations.zip`. A conversation retrieves at most 200 files, 100 MiB per
+file and 250 MiB in total. Later references and failed downloads stay in the text as
+`[Attachment unavailable: …]`. The result contains a local path; use the MCP client's local file-reading
+capability to inspect it.
 
-`download_attachment` saves a file linked from a message already in the archive. Pass `name` when
-the message has multiple downloadable files. Downloads stream to an exclusive local file and have
-a size bound; the tool returns the saved path. General OneDrive and SharePoint discovery belongs to
-the SharePoint connector. Email attachments belong to Outlook.
+An export reads each conversation from Teams page by page, newest first, and spools the pages to a temporary
+file; the text is then written oldest first from those pages. The temporary folder is removed when the export
+ends, so a failed export publishes nothing.
+
+`download_attachment` saves the files a message names: its shared files and its pasted images. Pass exactly
+one of `message_id`, or `sent_at` (the time exactly as the TXT export prints it). `names` selects files by
+their markers; all of them are saved when it is omitted. The message is read again from Teams: by id, or by
+time through Chat Service, and a channel message is then read through Graph, as `get_messages` reads it, so
+the names match the text; a channel reply is read through its thread, which Chat Service names. Several
+messages at the same time are refused with their ids. A file that cannot be fetched is listed under
+`unavailable` with its reason while the others are saved; a call that saves none fails. A shared SharePoint
+page reads as `[Page: name] link`: it is opened, not downloaded. A meeting recording reads as
+`[Recording: title]` and its OneDrive or SharePoint link; recordings are not downloaded. Each file is fetched
+once into the download cache (see Storage), and the tool returns the local paths. General OneDrive and
+SharePoint discovery belongs to the SharePoint connector. Email attachments belong to Outlook.
 
 ### Send a message
 
 `send_message` is the only Teams write tool. The user must explicitly authorize both the recipient
 and exact message content. Pass the current conversation name from `list_chats` as
-`expected_chat_name`; the service checks it before sending. HTML characters are escaped and the
+`expected_chat_name`; the service refreshes only that recipient (a chat's delta, or a channel's name from
+its team), then checks the name before sending. Pass exactly one of `text` (plain text; HTML
+characters are escaped) or `html` (HTML sent as written, after a passive check that refuses scripts, frames,
+form controls, event-handler attributes, `javascript:` and `vbscript:` URLs, images and other embedded
+media, declarations and CDATA sections, and unfinished markup). Teams shows only images it hosts, so an
+`<img>` is refused rather than sent; sending images is roadmap P1.5. The
 message is attempted once. A network failure after the request may leave the result uncertain, so
 inspect the conversation before deciding whether another send is needed. A search result or request
 to analyze a conversation does not authorize a send.

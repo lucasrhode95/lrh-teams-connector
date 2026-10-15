@@ -6,16 +6,14 @@ Unknown fields are ignored; missing optional fields become None.
 from __future__ import annotations
 
 import json
-import re
 from datetime import datetime
 from typing import Any
 
 from teams_connector.domain.models import Attachment, Chat, Message, Participant
 from teams_connector.remote import teams_html
-from teams_connector.remote.chat_service_mapping import attachment_markers, mapping, parse_time
+from teams_connector.remote.chat_service_mapping import file_markers, mapping, parse_time, shared_file
 from teams_connector.remote.csa_mapping import channel_name
 
-_IMAGE_NAME = re.compile(r"(?i)\.(png|jpe?g|gif|bmp|webp|heic|svg)$")
 _CARD = "application/vnd.microsoft.card."
 
 
@@ -58,9 +56,13 @@ def to_message(raw: dict[str, Any], conversation_id: str) -> Message:
     raw_content = body.get("content")
     content = raw_content if isinstance(raw_content, str) else ""
     is_html = str(body.get("contentType", "")).lower() == "html"
-    text = teams_html.render_body(teams_html.graph_html(content) if is_html else content, is_html=is_html)
-
-    attachments: list[Attachment] = []
+    rendered = teams_html.render_message(
+        teams_html.graph_html(content) if is_html else content, is_html=is_html
+    )
+    text = rendered.text
+    attachments: list[Attachment] = list(rendered.images)
+    used = {image.name.casefold() for image in attachments}
+    files: list[Attachment] = []
     card_text: list[str] = []
     for item in raw.get("attachments") or []:
         if not isinstance(item, dict):
@@ -69,13 +71,8 @@ def to_message(raw: dict[str, Any], conversation_id: str) -> Message:
         if content_type == "reference":
             name = str(item.get("name") or "file")
             url = item.get("contentUrl")
-            attachments.append(
-                Attachment(
-                    name=name,
-                    kind="image" if _IMAGE_NAME.search(name) else "file",
-                    url=url if isinstance(url, str) and url else None,
-                )
-            )
+            link = url if isinstance(url, str) and url else None
+            files.append(shared_file(name, link, used))
         elif content_type.startswith(_CARD):
             card = item.get("content")
             if isinstance(card, str):
@@ -84,7 +81,8 @@ def to_message(raw: dict[str, Any], conversation_id: str) -> Message:
                 except json.JSONDecodeError:
                     card = None
             card_text.extend(teams_html.adaptive_card_text(card))
-    parts = [text, "\n".join(card_text), "\n".join(attachment_markers(attachments))]
+    attachments.extend(files)
+    parts = [text, "\n".join(card_text), "\n".join(file_markers(files))]
     text = "\n\n".join(part for part in parts if part)
 
     system_event = None

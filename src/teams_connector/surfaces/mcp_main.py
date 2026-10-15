@@ -19,23 +19,20 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from teams_connector.bootstrap import AppContext, Services
+from teams_connector.domain.errors import InvalidRequest
 from teams_connector.domain.models import (
-    ArchiveStatus,
     ChatKind,
     ChatPage,
     ChatSearchResult,
+    DownloadedFiles,
     ExportArtifact,
     ExportFormat,
     ExportProgress,
     ExportRequest,
-    MatchMode,
-    MessageContent,
     MessagePage,
-    RemoteMessageSearchResult,
-    SavedFile,
-    SearchResult,
+    MessageSearchResult,
+    PresenceResult,
     SendResult,
-    SyncResult,
 )
 
 log = logging.getLogger(__name__)
@@ -46,24 +43,17 @@ authorized message-send tool.
 
 - Finding conversations: list_chats lists chats and channels by recent activity (kind: one_on_one, \
 group, meeting, channel, or self for the user's own notes chat). search_chats finds conversations by \
-name or by an indexed participant's name (rosters are indexed by sync_archive; read its coverage).
+name, and with refresh by the members Teams matches for a plain name or email; read its coverage. \
+When the operator enables Favorites, favorite is true for the chats in the Teams Favorites folder.
 - Reading: get_messages returns a conversation's history newest pages first, oldest first within a \
-page, with optional since/until and a total message_limit. Follow `cursor` for older messages. Long \
-texts are shortened to fit the response (text_truncated); get_message_content continues one. \
+page, with optional since/until and a total message_limit. Follow `cursor` for older messages. A \
+page holds whole messages up to max_chars (at least one), so no message text is cut. \
 is_self marks the user's own messages: use it rather than matching names.
-- Searching message content: search_messages needs an explicit date range and a scope \
-(conversation_ids, or all_chats=true). It first fetches that scope from Teams into the local archive \
-(bounded per call: follow the cursor while preparation_complete is false), then matches literally \
-(exact, substring or all_terms; case-insensitive, accents significant). Read coverage before treating \
-results as complete.
-- Online message discovery: search_remote_messages queries Teams message content through Microsoft \
-Search v2 (at most 25 hits, query length up to 512 characters) and returns one bounded page of \
-message pointers, previews, timestamps, and conversation identity candidates. It sets \
-conversation_id only when a candidate exactly matches the local catalog. The \
-catalog. The Search v2 message id is not yet proven interchangeable with get_messages message_id. \
-For a matched conversation, use sent_at with get_messages since/until to inspect surrounding history; \
-follow the returned search cursor only when more hits are useful. This tool does not discover \
-transcripts or meeting recaps.
+- Searching message content: search_messages takes terms (1 to 25 phrases; a message matches when any \
+term matches), optionally scoped by conversation_ids and since/until. Each term is one phrase, matched on \
+whole words and word prefixes; it is never split on its spaces or read as query syntax. Hits are pointers: \
+message_id is the id get_messages reads, and conversation_id is set when it matches a known chat. total is \
+approximate. Read coverage before treating results as complete.
 - Exporting: export_chats returns a local artifact path. One conversation without selected \
 attachments returns a plain .txt/.jsonl file; with attachments it returns a .zip containing one \
 conversation-named folder with the text export and retrieved files. Several conversations return one \
@@ -71,17 +61,22 @@ outer .zip, with an inner .zip for each conversation with attachments and a plai
 without them. Attachments are included by default; set include_attachments=false to omit them. Date \
 bounds and latest-N message_limit apply per conversation; export fetches the selected history, \
 so a long selection takes a while. Read the returned file path with your file tools.
-- Attachments: download_attachment saves a message's shared file (from get_messages) and returns its \
-local path.
-- The archive retains every message the connector has read, indefinitely. Messages with is_deleted=true \
-were deleted in Teams and are shown from retention; edited ones show their newest text. sync_archive \
-fetches history and rosters in bounded, resumable batches; archive_status reports coverage.
+- Presence: get_presence reads the other person's availability in a one-on-one chat only. It is read-only, \
+and when it returns no presence it says why.
+- Attachments: download_attachment saves the files a message names (its shared files and pasted images, \
+shown as [File: name] and [Image: name] markers) and returns their local paths. Pass the message_id from \
+get_messages, or the message's sent_at time instead.
+- Messages are read from Teams on each call; nothing is kept locally. Messages with is_deleted=true were \
+deleted in Teams, and Teams keeps no text for them; edited ones show their newest text.
 - Times are UTC; a date-time without an offset is taken as UTC.
 - Sending: never call send_message unless the user explicitly authorized sending that content to that \
 chat, in the current request or by confirming after you asked. If authorization is missing or \
-ambiguous, ask and wait. user_confirmation records the authorization; it is not permission by itself. \
-One authorization is not ongoing consent. Search, summaries and exports never imply permission to \
-send. A send is attempted once: if its outcome is unknown, check the chat before trying again.
+ambiguous, ask and wait. One authorization is not ongoing consent. Search, summaries and exports \
+never imply permission to send. A send is attempted once: if its outcome is unknown, check the chat \
+before trying again.
+- Pass text (plain, escaped) or html (sent as written: bold, lists, links, code) to send_message, never \
+both. Active HTML (scripts, forms, event handlers, javascript: links), images and other embedded media, \
+declarations and unfinished markup are refused.
 - If a tool says sign-in is required, ask the user to run the quoted `teams-connector auth` command in \
 a terminal; never attempt to sign in yourself. "Access denied" errors are about that item, not the \
 sign-in.
@@ -174,22 +169,18 @@ def build_server(context: AppContext) -> FastMCP:
         limit: Annotated[int, Field(ge=1, le=100)] = 25,
         cursor: str | None = None,
     ) -> ChatSearchResult:
-        """Conversations whose name, or an indexed participant's name, contains the query."""
+        """Conversations whose name contains the query. With refresh (the default), also the named
+        group and meeting chats that Teams matches by a member's name or email, with the members
+        that matched."""
         return await (await services()).catalog.search(query, refresh=refresh, limit=limit, cursor=cursor)
 
     @mcp.tool(annotations=READ_ONLY)
     @_logged
-    async def search_remote_messages(
-        query: Annotated[
-            str,
-            Field(max_length=512, description="Text to search online in Teams messages."),
-        ],
-        limit: Annotated[int, Field(ge=1, le=25, description="Hits returned in this online page.")] = 20,
-        cursor: str | None = None,
-    ) -> RemoteMessageSearchResult:
-        """Search Teams messages online through Microsoft Search v2. Returns pointers and one page;
-        it does not download or search the local archive. Follow the cursor only when more hits help."""
-        return await (await services()).search.search_remote_messages(query, limit=limit, cursor=cursor)
+    async def get_presence(conversation_id: ConversationId) -> PresenceResult:
+        """Availability, activity, last-active time and device of the other person in a one-on-one chat.
+        Nothing richer is returned: no status note and no calendar text. A failed read returns no presence
+        and a reason."""
+        return await (await services()).presence.for_chat(conversation_id)
 
     @mcp.tool(annotations=READ_ONLY)
     @_logged
@@ -202,14 +193,19 @@ def build_server(context: AppContext) -> FastMCP:
         ] = None,
         page_size: Annotated[int, Field(ge=1, le=50)] = 25,
         max_chars: Annotated[
-            int, Field(ge=4_000, le=100_000, description="Text budget for the page.")
+            int,
+            Field(
+                ge=4_000,
+                le=100_000,
+                description="Text budget: whole messages up to this many characters, at least one.",
+            ),
         ] = 30_000,
         cursor: Annotated[
             str | None,
             Field(description="Continuation; it restores the original options, which are then ignored."),
         ] = None,
     ) -> MessagePage:
-        """One page of a conversation's history (Teams merged with the local archive), oldest first within
+        """One page of a conversation's history ), oldest first within
         the page; the cursor continues with older messages."""
         return await (await services()).history.get_messages(
             conversation_id,
@@ -223,45 +219,36 @@ def build_server(context: AppContext) -> FastMCP:
 
     @mcp.tool(annotations=READ_ONLY)
     @_logged
-    async def get_message_content(
-        conversation_id: ConversationId,
-        message_id: str,
-        offset: Annotated[int, Field(ge=0)] = 0,
-        max_chars: Annotated[int, Field(ge=1, le=100_000)] = 50_000,
-    ) -> MessageContent:
-        """A character range of one archived message's text (continue a text_truncated message)."""
-        return (await services()).history.content(
-            conversation_id, message_id, offset=offset, max_chars=max_chars
-        )
-
-    @mcp.tool(annotations=READ_ONLY)
-    @_logged
     async def search_messages(
-        query: Annotated[str, Field(description="Text to find in message text.")],
+        terms: Annotated[
+            list[str] | None,
+            Field(
+                description="1 to 25 phrases; a message matches when ANY term matches (OR). Each term is "
+                "one phrase: never split on its spaces, never read as query syntax, and no double quotes. "
+                "Search v2 matches whole words and word prefixes: 'budget' also finds 'budgets', 'udget' "
+                "finds nothing, and 'budget review' needs those words in that order. Omit only when "
+                "continuing with a cursor."
+            ),
+        ] = None,
+        conversation_ids: Annotated[
+            list[str] | None,
+            Field(description="Scope: up to 100 conversation ids from list_chats or search_chats."),
+        ] = None,
         since: Since = None,
         until: Until = None,
-        conversation_ids: Annotated[
-            list[str] | None, Field(description="Scope: up to 100 conversations (or set all_chats).")
-        ] = None,
-        all_chats: Annotated[bool, Field(description="Scope: every conversation in the catalog.")] = False,
-        match_mode: MatchMode = "substring",
-        limit: Annotated[int, Field(ge=1, le=50, description="Matches returned per call.")] = 20,
-        max_matches: Annotated[int, Field(ge=1, description="Total matches across calls.")] = 1000,
-        max_pages: Annotated[int, Field(ge=1, le=100, description="Remote pages fetched per call.")] = 10,
+        limit: Annotated[int, Field(ge=1, le=25, description="Hits per page, 1 to 25.")] = 25,
         cursor: str | None = None,
-    ) -> SearchResult:
-        """Fetch a date range of the scoped conversations into the archive, then match it literally.
-        since and until are required. Repeat with the cursor while preparation is incomplete."""
+    ) -> MessageSearchResult:
+        """Search Teams messages online through Microsoft Search v2, across all chats or within the chosen
+        conversations and dates. Hits are pointers: message_id is the id get_messages reads, and
+        conversation_id is set when it matches a known chat. total is approximate. Follow cursor only when
+        more hits help; with a cursor, terms, scope and dates come from it."""
         return await (await services()).search.search_messages(
-            query,
+            terms,
+            conversation_ids=conversation_ids,
             since=_utc(since),
             until=_utc(until),
-            conversation_ids=conversation_ids,
-            all_chats=all_chats,
-            mode=match_mode,
             limit=limit,
-            max_matches=max_matches,
-            max_pages=max_pages,
             cursor=cursor,
         )
 
@@ -330,48 +317,28 @@ def build_server(context: AppContext) -> FastMCP:
     @_logged
     async def download_attachment(
         conversation_id: ConversationId,
-        message_id: str,
-        name: Annotated[
-            str | None, Field(description="Attachment name, when the message has several.")
+        message_id: Annotated[
+            str | None, Field(description="The message's id, from get_messages or search_messages.")
         ] = None,
-    ) -> SavedFile:
-        """Save one shared file attached to an archived message as a local file and return its path."""
-        return await (await services()).files.download_attachment(conversation_id, message_id, name)
-
-    @mcp.tool(annotations=READ_ONLY)
-    @_logged
-    async def sync_archive(
-        conversation_id: Annotated[str | None, Field(description="Just this conversation.")] = None,
-        max_chats: Annotated[int, Field(ge=1, le=200)] = 25,
-        max_pages: Annotated[int, Field(ge=1, le=200)] = 20,
-        include_rosters: bool = True,
-        refresh_latest: Annotated[
-            bool, Field(description="Also re-read the newest page of complete chats.")
-        ] = True,
-    ) -> SyncResult:
-        """Fetch history and rosters into the archive in bounded batches; repeated calls resume each chat
-        and rotate fairly across chats. Reads Teams; changes nothing there."""
-        return await (await services()).archive.sync(
-            conversation_id=conversation_id,
-            max_chats=max_chats,
-            max_pages=max_pages,
-            include_rosters=include_rosters,
-            refresh_latest=refresh_latest,
-        )
-
-    @mcp.tool(annotations=READ_ONLY)
-    @_logged
-    async def archive_status(
-        conversation_id: str | None = None,
-        since: Since = None,
-        until: Until = None,
-        limit: Annotated[int, Field(ge=1, le=200)] = 50,
-        cursor: str | None = None,
-    ) -> ArchiveStatus:
-        """Per-conversation archive coverage: history completeness, archived span, rosters, and whether
-        the requested range is fully archived."""
-        return (await services()).archive.status(
-            conversation_id=conversation_id, since=_utc(since), until=_utc(until), limit=limit, cursor=cursor
+        sent_at: Annotated[
+            datetime | None,
+            Field(description="The message's time, exactly as the TXT export prints it, instead of its id."),
+        ] = None,
+        names: Annotated[
+            list[str] | None,
+            Field(
+                description="The files to save, by the names their markers show; all of them when omitted."
+            ),
+        ] = None,
+    ) -> DownloadedFiles:
+        """Save the files a message names (shared files and pasted images) as local files and return their
+        paths. Pass exactly one of message_id or sent_at. A file that cannot be fetched is listed under
+        unavailable with its reason; the others are still saved. SharePoint pages ([Page: …]) are links."""
+        if (message_id is None) == (sent_at is None):
+            raise InvalidRequest("Pass exactly one of message_id or sent_at.")
+        when = _utc(sent_at) if sent_at is not None else None
+        return await (await services()).files.download_attachments(
+            conversation_id, message_id=message_id, sent_at=when, names=names
         )
 
     @mcp.tool(annotations=SEND)
@@ -381,22 +348,26 @@ def build_server(context: AppContext) -> FastMCP:
         expected_chat_name: Annotated[
             str, Field(description="The chat's exact current name from list_chats; checked before sending.")
         ],
-        text: Annotated[str, Field(description="Plain text, up to 10,000 characters (HTML is escaped).")],
-        user_confirmation: Annotated[
-            str,
+        text: Annotated[
+            str | None,
+            Field(description="Plain text, up to 10,000 characters; HTML characters are escaped. Or html."),
+        ] = None,
+        html: Annotated[
+            str | None,
             Field(
-                description="A short quote or record of the user's explicit authorization for this recipient "
-                "and content. Never invent or infer it; it does not authorize anything by itself."
+                description="HTML, up to 10,000 characters, sent as written (bold, lists, links, code). "
+                "Active content, images and unfinished markup are refused. Pass exactly one of text or html."
             ),
-        ],
+        ] = None,
     ) -> SendResult:
-        """Send one plain-text message to a chat or channel. External side effect: only with the user's
-        explicit authorization for this recipient and content. Attempted once, never retried."""
+        """Send one message to a chat or channel, as plain text or as HTML sent as written. External side
+        effect: only with the user's explicit authorization for this recipient and content. Attempted once,
+        never retried."""
         return await (await services()).sender.send(
             conversation_id,
             expected_chat_name=expected_chat_name,
             text=text,
-            user_confirmation=user_confirmation,
+            html=html,
         )
 
     return mcp

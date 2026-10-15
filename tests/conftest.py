@@ -7,7 +7,7 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Every test gets its own data directory; nothing touches the real token cache or archive."""
+    """Every test gets its own data directory; nothing touches the real token cache or store."""
     home = tmp_path / "home"
     monkeypatch.setenv("TEAMS_CONNECTOR_HOME", str(home))
     return home

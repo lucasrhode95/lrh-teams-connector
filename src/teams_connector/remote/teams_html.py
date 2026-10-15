@@ -12,14 +12,22 @@ import binascii
 import html
 import json
 import re
+from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any
+from urllib.parse import urlsplit
+
+from teams_connector.domain.models import Attachment
+from teams_connector.remote import inline_images
 
 _URI_OBJECT_RE = re.compile(
     r"<URIObject\b(?P<attributes>[^>]*)>(?P<content>.*?)</URIObject\s*>",
     re.IGNORECASE | re.DOTALL,
 )
 _TAG_RE = re.compile(r"<Swift\b[^>]*>", re.IGNORECASE)
+_RECORDING_TYPE = "video.2/callrecording"
+_RECORDING_TITLE_RE = re.compile(r"<Title\b[^>]*>(.*?)</Title\s*>", re.IGNORECASE | re.DOTALL)
+_RECORDING_LINK_RE = re.compile(r"<a\b[^>]*\bhref=\"([^\"]+)\"", re.IGNORECASE)
 _TAG_END_RE = re.compile(r"</Swift\s*>", re.IGNORECASE)
 
 
@@ -200,6 +208,10 @@ def _rewrite_swift_uriobjects(source: str, *, as_html: bool) -> tuple[str, bool]
         nonlocal found
         outer_attrs = _tag_attributes(match.group("attributes"), "URIObject")
         inner = match.group("content")
+        if outer_attrs.get("type", "").casefold().startswith(_RECORDING_TYPE):
+            found = True
+            marker = _recording_marker(inner)
+            return html.escape(marker, quote=False) if as_html else marker
         visible_source, encoded_payloads = _remove_swift_payload_elements(inner)
         if outer_attrs.get("type", "").casefold() != "swift.1":
             # Even if a non-card URIObject has a Swift field, never print its
@@ -238,6 +250,22 @@ def _rewrite_swift_uriobjects(source: str, *, as_html: bool) -> tuple[str, bool]
     return rewritten, found or bool(orphan_payloads)
 
 
+def _recording_marker(inner: str) -> str:
+    """A meeting recording card as one line: its title and the link Teams shows to play it (the OneDrive or
+    SharePoint copy). The card's other fields (media-service views, meeting and call ids) are left out."""
+    title_match = _RECORDING_TITLE_RE.search(inner)
+    title = (
+        " ".join(html.unescape(re.sub(r"<[^>]*>", "", title_match.group(1))).split()) if title_match else ""
+    )
+    marker = f"[Recording: {title}]" if title else "[Recording]"
+    link_match = _RECORDING_LINK_RE.search(inner)
+    link = html.unescape(link_match.group(1)).strip() if link_match else ""
+    host = (urlsplit(link).hostname or "").casefold() if link.startswith("https://") else ""
+    if host == "sharepoint.com" or host.endswith(".sharepoint.com"):
+        return f"{marker} {link}"
+    return marker
+
+
 class TeamsHtmlParser(HTMLParser):
     """Convert common Teams rich-text markup into readable Markdown-like text."""
 
@@ -256,6 +284,9 @@ class TeamsHtmlParser(HTMLParser):
         self.mention_join_snapshots: list[tuple[list[str], int] | None] = []
         self.last_mention_content_start: int | None = None
         self.last_mention_close_index: int | None = None
+        self.paragraph_starts: list[int] = []
+        self.images: list[Attachment] = []
+        self.image_names: set[str] = set()
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attributes = {name.lower(): value or "" for name, value in attrs}
@@ -268,27 +299,21 @@ class TeamsHtmlParser(HTMLParser):
             if join_snapshot is None:
                 self.parts.append("@(")
             self.mention_content_starts.append(len(self.parts))
-        if "amsimage" in item_type:
-            image_url = (
-                attributes.get("src")
-                or attributes.get("data-src")
-                or attributes.get("itemid")
-                or attributes.get("alt")
-            )
-            if image_url or tag == "img":
-                self._newline(1)
-                self.parts.append(f"[Image: {image_url or 'inline image'}]")
-                if tag == "img":
-                    return
+        if tag == "img" and not self.ignored_depth:
+            self._image(attributes)
+            return
         if tag in {"script", "style"}:
             self.ignored_depth += 1
             return
         if self.ignored_depth:
             return
-        if tag in self.BLOCK_TAGS:
+        if tag == "p":
+            self.paragraph_starts.append(len(self.parts))
+            self._newline(1)
+        elif tag in self.BLOCK_TAGS:
             self._newline(2)
         elif tag == "br":
-            self._newline(1)
+            self.parts.append("\n")  # hard break: two in a row, or one after a paragraph, leave a blank line
         elif tag in {"ul", "ol"}:
             self.list_stack.append({"tag": tag, "next": self._positive_int(attributes.get("start"), 1)})
         elif tag == "li":
@@ -319,17 +344,6 @@ class TeamsHtmlParser(HTMLParser):
             self.pre_depth += 1
         elif tag == "code" and not self.pre_depth:
             self.parts.append("`")
-        elif tag == "img":
-            item_type = attributes.get("itemtype", "").lower()
-            if "amsimage" in item_type or attributes.get("src"):
-                image_url = (
-                    attributes.get("src")
-                    or attributes.get("data-src")
-                    or attributes.get("itemid")
-                    or attributes.get("alt")
-                )
-                self._newline(1)
-                self.parts.append(f"[Image: {image_url or 'inline image'}]")
 
     def handle_endtag(self, tag: str) -> None:
         if self.mention_tags and tag == self.mention_tags[-1]:
@@ -356,7 +370,9 @@ class TeamsHtmlParser(HTMLParser):
             return
         if self.ignored_depth:
             return
-        if tag in self.BLOCK_TAGS or tag == "li":
+        if tag == "p":
+            self._end_paragraph()
+        elif tag in self.BLOCK_TAGS or tag == "li":
             self._newline(2 if tag in self.BLOCK_TAGS else 1)
         elif tag in {"ul", "ol"}:
             if self.list_stack:
@@ -389,6 +405,10 @@ class TeamsHtmlParser(HTMLParser):
     def handle_data(self, data: str) -> None:
         if self.ignored_depth:
             return
+        has_line_break = "\n" in data.replace("\r", "\n")
+        if not self.pre_depth and not data.strip() and has_line_break and self._at_line_start():
+            # Teams stores a line break between two paragraphs as whitespace; at a line start it is layout.
+            return
         if not self.mention_tags and data.strip():
             self.last_mention_content_start = None
             self.last_mention_close_index = None
@@ -398,6 +418,19 @@ class TeamsHtmlParser(HTMLParser):
                 data = data[:leading_whitespace] + data[leading_whitespace + 1 :]
             self.suppress_leading_mention_at = False
         self.parts.append(data)
+
+    def _image(self, attributes: dict[str, str]) -> None:
+        image = inline_images.inline_image(attributes)
+        if image.name is None:
+            if image.own_line:
+                self._newline(1)
+            self.parts.append(image.text)
+            return
+        name = inline_images.unique_name(image.name, self.image_names)
+        self._newline(1)
+        self.parts.append(f"[Image: {name}]")
+        if image.attachment is not None:
+            self.images.append(image.attachment.model_copy(update={"name": name}))
 
     def _join_previous_mention(self) -> tuple[list[str], int] | None:
         close_index = self.last_mention_close_index
@@ -426,6 +459,18 @@ class TeamsHtmlParser(HTMLParser):
         text = "".join(parts).replace("\xa0", " ")
         text = re.sub(r"[*_`]+", "", text)
         return text.strip()
+
+    def _end_paragraph(self) -> None:
+        """Consecutive paragraphs read as consecutive lines, as Teams shows them. An empty paragraph
+        (no text, or only a line break) keeps its blank line."""
+        start = self.paragraph_starts.pop() if self.paragraph_starts else len(self.parts)
+        self._newline(1)
+        if not "".join(self.parts[start:]).strip():
+            self._newline(2)
+
+    def _at_line_start(self) -> bool:
+        current = "".join(self.parts)
+        return not current or current.endswith("\n")
 
     def _newline(self, count: int) -> None:
         current = "".join(self.parts)
@@ -480,8 +525,21 @@ def adaptive_card_text(payload: Any) -> list[str]:
     return _adaptive_card_text(payload)
 
 
+@dataclass(frozen=True)
+class RenderedBody:
+    """A message body's readable text, and its inline images as attachments, named as the text names them."""
+
+    text: str
+    images: list[Attachment]
+
+
 def render_body(content: str, *, is_html: bool) -> str:
     """Readable text for one Teams message body (HTML or plain text)."""
+    return render_message(content, is_html=is_html).text
+
+
+def render_message(content: str, *, is_html: bool) -> RenderedBody:
+    """Readable text for one Teams message body (HTML or plain text), with its inline images."""
     decoded_content = html.unescape(content)
     if not re.search(r"<URIObject\b", content, re.IGNORECASE) and re.search(
         r"<URIObject\b", decoded_content, re.IGNORECASE
@@ -489,16 +547,16 @@ def render_body(content: str, *, is_html: bool) -> str:
         content = decoded_content
     content, _ = _rewrite_swift_uriobjects(content, as_html=is_html)
     if not content:
-        return ""
+        return RenderedBody("", [])
     if not is_html:
-        return normalize_plain_text(content)
+        return RenderedBody(normalize_plain_text(content), [])
     parser = TeamsHtmlParser()
     try:
         parser.feed(content)
         parser.close()
-        return parser.text()
+        return RenderedBody(parser.text(), parser.images)
     except Exception:
-        return _render_visible_html(content)
+        return RenderedBody(_render_visible_html(content), [])
 
 
 def graph_html(content: str) -> str:

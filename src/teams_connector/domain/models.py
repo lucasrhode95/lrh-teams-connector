@@ -13,7 +13,6 @@ from pydantic import BaseModel, Field, SerializerFunctionWrapHandler, model_seri
 
 # one_on_one: two people (or a person and an app); self: the user's own notes chat.
 ChatKind = Literal["one_on_one", "group", "meeting", "channel", "self"]
-MatchMode = Literal["exact", "substring", "all_terms"]
 ExportFormat = Literal["txt", "jsonl"]
 
 
@@ -49,11 +48,31 @@ class Chat(Compact):
     unread: bool | None = None
     is_empty: bool | None = None  # the catalog reports no messages
     photo_user_id: str | None = None  # the person whose photo represents the chat (self, one-on-one peer)
+    favorite: bool | None = (
+        None  # in the Teams Favorites folder; reported only when TEAMS_CONNECTOR_FAVORITES is on
+    )
 
 
 class Participant(Compact):
     id: str | None = None  # Microsoft Entra object id for people, app id for bots
     name: str | None = None
+
+
+class Presence(Compact):
+    """One person's Teams presence: availability and activity, when they were last active, and their device.
+    No status note and no calendar text."""
+
+    availability: str | None = None
+    activity: str | None = None
+    last_active_at: datetime | None = None
+    device_type: str | None = None
+
+
+class PresenceResult(Compact):
+    """The presence of the other person in a one-on-one chat. ``reason`` says why there is none."""
+
+    presence: Presence | None = None
+    reason: str | None = None
 
 
 class CatalogCoverage(Compact):
@@ -80,14 +99,11 @@ class ChatMatch(Compact):
     matched_participants: list[Participant] = Field(default_factory=list)
 
 
-class RosterCoverage(Compact):
-    """How far participant search can be trusted: rosters are indexed by sync_archive."""
+class ChatSearchCoverage(Compact):
+    """Whether Teams' chat search answered for this query. Names are always searched from the catalog."""
 
-    complete: bool
-    chats: int
-    rosters_indexed: int
-    rosters_missing: int
-    unresolved_participants: int = 0
+    complete: bool  # Teams answered for a plain name or email; member matches are then as complete as Teams
+    chats: int  # chats in the local catalog
     notes: list[str] = Field(default_factory=list)
 
 
@@ -95,18 +111,24 @@ class ChatSearchResult(Compact):
     query: str
     items: list[ChatMatch]
     cursor: str | None = None
-    coverage: RosterCoverage
+    coverage: ChatSearchCoverage
 
 
 # ---------------------------------------------------------------------------------------------- messages
 
 
 class Attachment(Compact):
+    """A file or image a message carries. ``name`` is the marker the text shows. ``source`` says how its bytes
+    are fetched; ``None`` means the marker is all there is to show."""
+
     name: str
     kind: Literal["file", "image", "link"] = "file"
-    url: str | None = None  # sharing or web URL; files can be downloaded with download_attachment
+    source: Literal["sharepoint", "ams", "graph", "data"] | None = None
+    url: str | None = None  # sharing URL (sharepoint), full-size AMS or Graph hosted-content URL (ams, graph)
+    source_id: str | None = None  # AMS object id (ams, graph) or SHA-256 of the decoded bytes (data)
     content_type: str | None = None
     size: int | None = None
+    payload: bytes | None = Field(default=None, exclude=True)  # decoded data: image bytes, never serialized
 
 
 class Message(Compact):
@@ -124,9 +146,6 @@ class Message(Compact):
     is_deleted: bool = False
     deleted_at: datetime | None = None
     attachments: list[Attachment] = Field(default_factory=list)
-    # per result: the text was shortened to fit the response (continue with get_message_content)
-    text_truncated: bool = False
-    text_chars: int | None = None
 
 
 class HistoryCoverage(Compact):
@@ -135,8 +154,6 @@ class HistoryCoverage(Compact):
     complete: bool  # nothing more matches the selection (otherwise follow the cursor)
     remote_complete: bool  # the remote traversal reached the end of the selection
     remote_pages: int  # remote pages fetched so far for this selection
-    archive_only: int = 0  # messages in this page known only from local retention
-    truncated_texts: int = 0
     message_limit_reached: bool = False
     notes: list[str] = Field(default_factory=list)
 
@@ -148,113 +165,33 @@ class MessagePage(Compact):
     coverage: HistoryCoverage
 
 
-class MessageContent(Compact):
-    message: Message  # without text
-    text: str
-    offset: int
-    total_chars: int
-    next_offset: int | None = None
+class MessageHit(Compact):
+    """One Teams message found by Search v2. ``message_id`` is the id get_messages returns for it."""
 
-
-class SearchHit(Compact):
-    chat_name: str
-    message: Message  # text is an excerpt around the match
-
-
-class ChatPreparation(Compact):
-    conversation_id: str
-    pages_fetched: int
-    complete: bool
-    error: str | None = None
-
-
-class SearchCoverage(Compact):
-    complete: bool  # every chat of the scope was fetched for the range and all matches were returned
-    preparation_complete: bool
-    chats_in_scope: int
-    chats_prepared: int
-    pages_fetched_this_call: int
-    since: datetime
-    until: datetime
-    prepared_this_call: list[ChatPreparation] = Field(default_factory=list)
-    results_truncated: bool = False
-    notes: list[str] = Field(default_factory=list)
-
-
-class SearchResult(Compact):
-    query: str
-    items: list[SearchHit]
-    cursor: str | None = None
-    coverage: SearchCoverage
-
-
-class RemoteMessageHit(Compact):
-    """A Teams Search v2 pointer, with a local conversation only when ids match exactly."""
-
-    search_message_id: str | None = None
-    message_id_kind: str | None = None
+    message_id: str | None = None  # the hit's InternetMessageId; None when Search v2 sent none
     conversation_id: str | None = None  # set only for an exact local catalog-id match
     conversation_name: str | None = None
-    conversation_id_candidates: list[str] = Field(default_factory=list)
+    conversation_id_candidates: list[str] = Field(default_factory=list, exclude=True)
     sent_at: datetime | None = None
     sender: str | None = None
     subject: str | None = None
     preview: str | None = None
 
 
-class RemoteSearchCoverage(Compact):
+class MessageSearchCoverage(Compact):
     complete: bool
     offset: int
     page_size: int
     more_results_available: bool | None = None
+    total: int | None = None  # Search v2's count for the query; approximate, it can move between pages
     notes: list[str] = Field(default_factory=list)
 
 
-class RemoteMessageSearchResult(Compact):
-    query: str
-    items: list[RemoteMessageHit]
+class MessageSearchResult(Compact):
+    query: str  # the query sent to Search v2: quoted terms, with the scope and dates as clauses
+    items: list[MessageHit]
     cursor: str | None = None
-    coverage: RemoteSearchCoverage
-
-
-# ---------------------------------------------------------------------------------------------- archive
-
-
-class ChatArchiveState(Compact):
-    conversation_id: str
-    name: str
-    history_complete: bool  # the archive holds the chat's whole history (as of synced_at)
-    messages_stored: int
-    oldest_message_at: datetime | None = None
-    newest_message_at: datetime | None = None
-    synced_at: datetime | None = None
-    roster_complete: bool = False
-    unresolved_participants: int = 0
-    range_covered: bool | None = None  # status only: the requested range is fully in the archive
-    messages_added: int | None = None  # sync only
-    pages_fetched: int | None = None  # sync only
-    error: str | None = None
-
-
-class ArchiveTotals(Compact):
-    chats: int
-    messages: int
-    participants: int
-    complete_histories: int
-    complete_rosters: int
-
-
-class SyncResult(Compact):
-    items: list[ChatArchiveState]
-    pages_left: int
-    totals: ArchiveTotals
-
-
-class ArchiveStatus(Compact):
-    items: list[ChatArchiveState]
-    cursor: str | None = None
-    covered: int | None = None  # chats whose requested range is fully archived
-    totals: ArchiveTotals
+    coverage: MessageSearchCoverage
 
 
 # ---------------------------------------------------------------------------------------------- writes
@@ -277,6 +214,19 @@ class SavedFile(Compact):
     name: str
     content_type: str | None = None
     size: int
+
+
+class UnavailableFile(Compact):
+    name: str
+    reason: str
+
+
+class DownloadedFiles(Compact):
+    """The files one download call saved, in the order of the message's attachments, and those it could
+    not fetch. A call that saves none fails instead."""
+
+    files: list[SavedFile]
+    unavailable: list[UnavailableFile] = Field(default_factory=list)
 
 
 class ExportRequest(BaseModel):

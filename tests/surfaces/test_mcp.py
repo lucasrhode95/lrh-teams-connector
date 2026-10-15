@@ -26,14 +26,11 @@ async def test_mcp_exposes_current_contract_and_reads_synthetic_chats(context: A
             "auth_status",
             "list_chats",
             "search_chats",
-            "search_remote_messages",
             "get_messages",
-            "get_message_content",
             "search_messages",
             "export_chats",
             "download_attachment",
-            "sync_archive",
-            "archive_status",
+            "get_presence",
             "send_message",
         }
         assert all(isinstance(tool.inputSchema, dict) for tool in tools.values())
@@ -41,7 +38,7 @@ async def test_mcp_exposes_current_contract_and_reads_synthetic_chats(context: A
         assert all(tool.outputSchema is not None for tool in tools.values())
         assert tools["send_message"].annotations.readOnlyHint is False
         assert tools["send_message"].annotations.destructiveHint is True
-        assert tools["search_remote_messages"].annotations.readOnlyHint is True
+        assert tools["search_messages"].annotations.readOnlyHint is True
 
         auth_status = await client.call_tool("auth_status", {})
         assert not auth_status.isError and auth_status.structuredContent is not None
@@ -57,18 +54,19 @@ async def test_mcp_exposes_current_contract_and_reads_synthetic_chats(context: A
         assert "19:one@unq.gbl.spaces" in {row["id"] for row in result.structuredContent["items"]}
 
 
-async def test_mcp_rejects_unscoped_search_and_unconfirmed_send(context: AppContext, fake: FakeTeams) -> None:
+async def test_mcp_rejects_an_empty_search_and_a_send_to_a_misnamed_chat(
+    context: AppContext, fake: FakeTeams
+) -> None:
     async with create_connected_server_and_client_session(build_server(context)) as client:
-        search = await client.call_tool("search_messages", {"query": "synthetic marker"})
+        search = await client.call_tool("search_messages", {"terms": []})
         assert search.isError
 
         send = await client.call_tool(
             "send_message",
             {
                 "conversation_id": "19:one@unq.gbl.spaces",
-                "expected_chat_name": "Pat Peer",
+                "expected_chat_name": "Someone else",
                 "text": "synthetic message",
-                "user_confirmation": "",
             },
         )
         assert send.isError

@@ -21,14 +21,16 @@ from teams_connector.remote.csa import CsaCatalog
 from teams_connector.remote.csa_mapping import Me
 from teams_connector.remote.graph import Graph
 from teams_connector.remote.graph_teams import GraphChannels, GraphFiles, GraphPeople, GraphWriter
-from teams_connector.remote.substrate_search import SubstrateSearch
+from teams_connector.remote.image_readers import AmsCredential, AmsImages, GraphHostedImages
+from teams_connector.remote.presence import TeamsPresence
+from teams_connector.remote.substrate_search import SubstrateChatSearch, SubstrateSearch
 from teams_connector.remote.teams_session import TeamsSession
 from teams_connector.remote.transport import Bearer, Transport
-from teams_connector.service.archive import Archive
 from teams_connector.service.catalog import Catalog
 from teams_connector.service.export.orchestrator import Exports
 from teams_connector.service.files import Files, Photos
 from teams_connector.service.history import History
+from teams_connector.service.presence import Presences
 from teams_connector.service.search import Search
 from teams_connector.service.send import Sender
 from teams_connector.store.db import Store, store_path
@@ -42,11 +44,11 @@ class Services:
     catalog: Catalog
     history: History
     search: Search
-    archive: Archive
     exports: Exports
     sender: Sender
     files: Files
     photos: Photos
+    presence: Presences
 
 
 class AppContext:
@@ -101,14 +103,32 @@ class AppContext:
         catalog_source = CsaCatalog(transport, session, account_tokens, people, chat_service, me)
 
         store = Store(store_path(account.fingerprint), account.fingerprint)
-        catalog = Catalog(store, catalog_source, channels, chat_service)
-        history = History(store, catalog, chat_service, channels, account.object_id)
+        member_search = SubstrateChatSearch(
+            transport,
+            Bearer(account_tokens, "m365.search"),
+            anchor_mailbox=f"Oid:{account.object_id}@{account.tenant_id}",
+            me_id=account.object_id,
+        )
+        catalog = Catalog(
+            store,
+            catalog_source,
+            channels,
+            chat_service,
+            members=member_search,
+            favorites=catalog_source,
+        )
+        history = History(catalog, chat_service, channels, account.object_id)
         search_source = SubstrateSearch(
             transport,
             Bearer(account_tokens, "m365.search"),
             anchor_mailbox=f"Oid:{account.object_id}@{account.tenant_id}",
         )
-        files = Files(store, GraphFiles(graph))
+        files = Files(
+            history,
+            GraphFiles(graph),
+            AmsImages(transport, AmsCredential(session)),
+            GraphHostedImages(graph),
+        )
         person = Participant(id=account.object_id, name=name)
         return Services(
             account=account,
@@ -116,12 +136,14 @@ class AppContext:
             store=store,
             catalog=catalog,
             history=history,
-            search=Search(store, catalog, history, search_source),
-            archive=Archive(store, catalog, history, chat_service, channels, person),
-            exports=Exports(store, catalog, history, files),
+            search=Search(store, search_source),
+            exports=Exports(catalog, history, files),
             sender=Sender(catalog, GraphWriter(graph)),
             files=files,
             photos=Photos(people),
+            presence=Presences(
+                catalog, TeamsPresence(transport, session, Bearer(account_tokens, "teams.spaces"))
+            ),
         )
 
     async def aclose(self) -> None:

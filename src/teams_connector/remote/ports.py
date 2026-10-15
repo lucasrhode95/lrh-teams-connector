@@ -4,9 +4,11 @@ Adapters (wired in bootstrap.py):
 
 - ChatCatalog: remote/csa.py (Teams Chat Service Aggregator; Graph cannot list chats for this client).
 - ChannelDirectory: remote/graph_teams.py (Graph joined teams and channels).
-- HistoryReader: remote/chat_service.py for chats, remote/graph_teams.py for channels.
+- HistoryReader: remote/chat_service.py for chats (ChatHistoryReader), remote/graph_teams.py for channels
+  (ChannelHistoryReader).
 - MemberReader: remote/chat_service.py for chats, remote/graph_teams.py for channels.
-- People, ChatWriter, FileReader: remote/graph_teams.py.
+- People, ChatWriter, FileReader: remote/graph_teams.py. ImageReader: remote/image_readers.py.
+- PresenceReader: remote/presence.py. FavoriteFolders: remote/csa.py (the sidebar folders).
 
 Swapping an adapter (another tenant, a policy change) must not change anything above this file.
 """
@@ -18,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
-from teams_connector.domain.models import Chat, Message, Participant, RemoteMessageHit
+from teams_connector.domain.models import Chat, Message, MessageHit, Participant, Presence
 
 
 @dataclass
@@ -60,17 +62,24 @@ class RemoteFile:
 
 
 @dataclass
-class RemoteMessageSearchPage:
+class MessageSearchPage:
     """Normalized result of one Search v2 page."""
 
-    items: list[RemoteMessageHit]
+    items: list[MessageHit]
     more_results_available: bool | None
     result_set_found: bool
+    total: int | None  # Search v2's count for the query, when it sent one
 
 
 class ChatCatalog(Protocol):
     async def updates(self, sync_token: str | None) -> CatalogUpdate:
         """A delta since ``sync_token``, or a full snapshot when it is None or no longer accepted."""
+        ...
+
+
+class FavoriteFolders(Protocol):
+    async def favorite_ids(self) -> set[str]:
+        """The ids of the chats in the Favorites sidebar folder. A read only."""
         ...
 
 
@@ -81,6 +90,38 @@ class ChannelDirectory(Protocol):
 
     async def locate(self, channel_ids: list[str]) -> list[Chat]:
         """Channels the listing omits (e.g. some shared channels), found by id in the joined teams."""
+        ...
+
+    async def channel(self, team_id: str, channel_id: str) -> Chat | None:
+        """One channel with its current name, read in its team; None when it is no longer reachable."""
+        ...
+
+
+@dataclass(frozen=True)
+class ChatMemberHit:
+    """A named chat Teams matched for a plain name or email, with the members that matched."""
+
+    chat_id: str
+    matching_members: list[Participant]
+
+
+@dataclass(frozen=True)
+class ChatMemberResult:
+    """Teams' named-chat matches for one query. ``truncated``: Teams matched more than were read."""
+
+    hits: list[ChatMemberHit]
+    truncated: bool
+
+
+class ChatMemberSearch(Protocol):
+    async def named_chats(self, text: str) -> ChatMemberResult:
+        """Named group and meeting chats matched by a plain name or email, with their matching members.
+        One-on-one chats are not included: ``people`` finds them."""
+        ...
+
+    async def people(self, text: str) -> list[Participant]:
+        """The people Teams suggests for a plain name or email, by Entra object id; never the signed-in
+        user. A one-on-one chat's id names both of its people."""
         ...
 
 
@@ -95,6 +136,23 @@ class HistoryReader(Protocol):
         link: str | None,
     ) -> HistoryPage:
         """One page of history, newest first across pages. ``link`` continues a previous page."""
+        ...
+
+    async def message(self, chat: Chat, message_id: str) -> Message:
+        """One message of the chat, read from Teams by its id."""
+        ...
+
+
+class ChatHistoryReader(HistoryReader, Protocol):
+    async def messages_at(self, chat: Chat, sent_at: datetime) -> list[Message]:
+        """The messages that arrived at exactly ``sent_at``: one lookup by time, in chats and channels."""
+        ...
+
+
+class ChannelHistoryReader(HistoryReader, Protocol):
+    async def reply(self, chat: Chat, root_id: str, message_id: str) -> Message:
+        """One reply in a channel thread, read through its root post: the root-message route does not
+        answer for replies."""
         ...
 
 
@@ -112,15 +170,42 @@ class People(Protocol):
         ...
 
 
-class ChatWriter(Protocol):
-    async def send(self, chat: Chat, text: str) -> SendReceipt:
-        """Send plain text once. Never retried: an ambiguous outcome raises WriteOutcomeUnknown."""
+class PresenceReader(Protocol):
+    async def presence(self, user_id: str) -> Presence | None:
+        """One person's presence by Entra object id, or None when Teams reports none. A read only."""
         ...
 
 
+class ChatWriter(Protocol):
+    async def send(self, chat: Chat, content: str, *, as_html: bool) -> SendReceipt:
+        """Send once: ``content`` as plain text, or as HTML sent as written when ``as_html``. Never retried:
+        an ambiguous outcome raises WriteOutcomeUnknown."""
+        ...
+
+
+@dataclass(frozen=True)
+class SharedFile:
+    """A SharePoint or OneDrive file as Graph describes it. ``item_id`` and ``version`` key its cache."""
+
+    item_id: str
+    name: str | None
+    version: str
+    size: int | None
+
+
 class FileReader(Protocol):
-    async def download(self, url: str, dest: Path, *, max_bytes: int | None = None) -> RemoteFile:
-        """Download a shared file (SharePoint/OneDrive sharing or web URL) into ``dest``."""
+    async def describe(self, url: str) -> SharedFile:
+        """The drive item behind a sharing URL, without its content."""
+        ...
+
+    async def download(self, url: str, dest: Path, *, max_bytes: int) -> RemoteFile:
+        """Download a shared file's content (a SharePoint/OneDrive sharing URL) into ``dest``."""
+        ...
+
+
+class ImageReader(Protocol):
+    async def download(self, url: str, dest: Path, *, max_bytes: int) -> RemoteFile:
+        """Download a pasted image's full-size content (an AMS view or a Graph hosted copy) into ``dest``."""
         ...
 
 
@@ -133,6 +218,6 @@ class MessageSearchReader(Protocol):
         page_size: int,
         cvid: str,
         logical_id: str,
-    ) -> RemoteMessageSearchPage:
+    ) -> MessageSearchPage:
         """Search Teams message content via the standalone Microsoft Search v2 route."""
         ...

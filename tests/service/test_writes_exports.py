@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import zipfile
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -10,9 +11,9 @@ import pytest
 
 from teams_connector.bootstrap import Services
 from teams_connector.domain.errors import InvalidRequest, NotFound, WriteOutcomeUnknown
-from teams_connector.domain.models import Attachment, ExportProgress, ExportRequest
+from teams_connector.domain.models import ExportProgress, ExportRequest
 from teams_connector.service import localfiles
-from teams_connector.service.export import packaging
+from teams_connector.service.export import orchestrator, packaging
 from tests.fakes.teams_fake import FakeTeams, cs_message
 
 ONE = "19:one@unq.gbl.spaces"
@@ -20,9 +21,7 @@ CHANNEL = "19:general@thread.tacv2"
 
 
 async def test_send_checks_the_live_name_and_posts_escaped_html(services: Services, fake: FakeTeams) -> None:
-    result = await services.sender.send(
-        ONE, expected_chat_name=" pat  PEER ", text="a < b\nline 2", user_confirmation="user said: send it"
-    )
+    result = await services.sender.send(ONE, expected_chat_name=" pat  PEER ", text="a < b\nline 2")
     path, body = fake.sent[0]
     assert path == "/chats/19:one@unq.gbl.spaces/messages"
     assert body == {"body": {"contentType": "html", "content": "<p>a &lt; b<br>line 2</p>"}}
@@ -30,25 +29,17 @@ async def test_send_checks_the_live_name_and_posts_escaped_html(services: Servic
 
 
 async def test_channel_send_posts_to_the_team_channel(services: Services, fake: FakeTeams) -> None:
-    await services.sender.send(
-        CHANNEL, expected_chat_name="Platform · General", text="hi", user_confirmation="yes, post it"
-    )
+    await services.sender.send(CHANNEL, expected_chat_name="Platform · General", text="hi")
     assert fake.sent[0][0] == "/teams/team-1/channels/19:general@thread.tacv2/messages"
 
 
 async def test_send_refusals_never_reach_teams(services: Services, fake: FakeTeams) -> None:
     with pytest.raises(InvalidRequest, match="does not match"):
-        await services.sender.send(ONE, expected_chat_name="Someone else", text="hi", user_confirmation="ok")
-    with pytest.raises(InvalidRequest, match="user_confirmation"):
-        await services.sender.send(ONE, expected_chat_name="Pat Peer", text="hi", user_confirmation=" ")
+        await services.sender.send(ONE, expected_chat_name="Someone else", text="hi")
     with pytest.raises(InvalidRequest, match="10,000"):
-        await services.sender.send(
-            ONE, expected_chat_name="Pat Peer", text="x" * 10_001, user_confirmation="ok"
-        )
+        await services.sender.send(ONE, expected_chat_name="Pat Peer", text="x" * 10_001)
     with pytest.raises(NotFound):
-        await services.sender.send(
-            "19:nope@thread.v2", expected_chat_name="x", text="hi", user_confirmation="ok"
-        )
+        await services.sender.send("19:nope@thread.v2", expected_chat_name="x", text="hi")
     assert fake.sent == []
 
 
@@ -58,7 +49,7 @@ async def test_ambiguous_send_is_reported_and_not_retried(
 ) -> None:
     fake.fail_sends = failure
     with pytest.raises(WriteOutcomeUnknown):
-        await services.sender.send(ONE, expected_chat_name="Pat Peer", text="hi", user_confirmation="ok")
+        await services.sender.send(ONE, expected_chat_name="Pat Peer", text="hi")
     assert sum(c.startswith("POST graph.microsoft.com/v1.0/chats") for c in fake.calls) == 1
 
 
@@ -113,28 +104,19 @@ async def test_unavailable_attachment_keeps_export_and_reports_failure(
     assert "[Attachment unavailable: notes.txt]" in text
 
 
-async def test_jsonl_attachment_rewriting_preserves_valid_json_for_special_names(
-    services: Services, tmp_path: Path
-) -> None:
-    url_attachment = Attachment(name='quote"\nline.txt', url="https://files.example.invalid/synthetic")
-    marker_attachment = Attachment(name='image"\nline.png', kind="image")
-    url_replacement = f"[Attachment unavailable: {url_attachment.name}]"
-    marker_key = services.exports._attachment_marker(marker_attachment)
-    marker_replacement = f"[Attachment unavailable: {marker_attachment.name}]"
+async def test_marker_rewriting_keeps_jsonl_valid_for_special_names(tmp_path: Path) -> None:
+    name = 'quote"\nline.png'
+    marker = f"[Image: {name}]"
     path = tmp_path / "synthetic.jsonl"
     path.write_text(
-        json.dumps({"text": f"{url_attachment.url} {marker_key}"}, ensure_ascii=False) + "\n",
-        encoding="utf-8",
+        json.dumps({"text": f"{marker} [File: {name}]"}, ensure_ascii=False) + "\n", encoding="utf-8"
     )
 
-    services.exports._rewrite_asset_references(
-        path,
-        {url_attachment.url: url_attachment, marker_key: marker_attachment},
-        {url_attachment.url: url_replacement, marker_key: marker_replacement},
-    )
+    orchestrator._mark_unavailable(path, [name])
 
     records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-    assert records == [{"text": f"{url_replacement} {marker_replacement}"}]
+    replacement = f"[Attachment unavailable: {name}]"
+    assert records == [{"text": f"{replacement} {replacement}"}]
 
 
 async def test_attachment_name_cannot_overwrite_the_conversation_export(
@@ -143,6 +125,10 @@ async def test_attachment_name_cannot_overwrite_the_conversation_export(
     chat = await services.catalog.get(ONE)
     transcript_name = f"{packaging.filename_stem(chat)}.txt"
     fake.files["https://tenant.sharepoint.com/s/notes"] = (transcript_name, b"attachment")
+    message = next(m for m in fake.chats[ONE].messages if m["id"] == "1003")
+    files = json.loads(message["properties"]["files"])
+    files[0]["fileName"] = transcript_name
+    message["properties"]["files"] = json.dumps(files)
 
     artifact = await services.exports.export(ExportRequest(conversation_ids=[ONE]))
 
@@ -168,7 +154,9 @@ async def test_latest_n_and_dates_and_deleted_marker(services: Services, fake: F
     )
     text = Path(artifact.path).read_text(encoding="utf-8")
     assert "First hello" not in text and artifact.message_count == 2
-    assert "[Soft deleted at 2026-09-04T00:00:00.000Z]" in text and "notes.txt" in text  # retained text
+    assert (
+        "[Soft deleted at 2026-09-04T00:00:00.000Z]" in text and "notes.txt" not in text
+    )  # Teams keeps no text
 
 
 async def test_several_chats_always_return_outer_zip_and_jsonl(services: Services) -> None:
@@ -193,12 +181,12 @@ async def test_several_chats_always_return_outer_zip_and_jsonl(services: Service
     assert [r["id"] for r in lines] == ["5003", "5001", "5002"] and lines[2]["reply_to_id"] == "5001"
 
 
-async def test_download_attachment_of_an_archived_message(services: Services) -> None:
-    await services.history.get_messages(ONE)
-    saved = await services.files.download_attachment(ONE, "1003")
+async def test_download_attachment_reads_its_message_from_teams(services: Services) -> None:
+    downloaded = await services.files.download_attachments(ONE, message_id="1003", sent_at=None, names=None)
+    (saved,) = downloaded.files
     assert Path(saved.path).read_bytes() == b"shared notes" and saved.name == "notes.txt"
     with pytest.raises(NotFound):
-        await services.files.download_attachment(ONE, "1001")
+        await services.files.download_attachments(ONE, message_id="1001", sent_at=None, names=None)
 
 
 async def test_cancelled_export_during_fetch_publishes_no_file(
@@ -206,19 +194,25 @@ async def test_cancelled_export_during_fetch_publishes_no_file(
 ) -> None:
     entered = asyncio.Event()
     export_dir = tmp_path / "exports"
-    monkeypatch.setattr(localfiles, "kept_dir", lambda _: export_dir)
 
-    async def wait_for_cancel(*_: object, **__: object) -> None:
+    def kept(_: str) -> Path:
+        export_dir.mkdir(parents=True, exist_ok=True)
+        return export_dir
+
+    monkeypatch.setattr(localfiles, "kept_dir", kept)
+
+    async def wait_for_cancel(*_: object, **__: object) -> AsyncIterator[list[object]]:
         entered.set()
         await asyncio.Future()
+        yield []  # never reached: the read waits until the export is cancelled
 
-    monkeypatch.setattr(services.history, "fetch_range", wait_for_cancel)
+    monkeypatch.setattr(services.history, "selection", wait_for_cancel)
     task = asyncio.create_task(services.exports.export(ExportRequest(conversation_ids=[ONE])))
     await entered.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert not export_dir.exists()
+    assert list(export_dir.iterdir()) == []
 
 
 def test_failed_zip_packaging_removes_the_partial_output(
