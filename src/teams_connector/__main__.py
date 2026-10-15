@@ -138,7 +138,6 @@ def _auth(provider: TokenProvider, args: argparse.Namespace) -> int:
     return EXIT_AUTH_REQUIRED if isinstance(first_error, AuthenticationRequired) else EXIT_ERROR
 
 
-
 def _status(provider: TokenProvider, args: argparse.Namespace) -> int:
     status = provider.status()
     checks: dict[str, dict[str, object]] = {}

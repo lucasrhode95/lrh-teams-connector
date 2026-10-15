@@ -27,5 +27,3 @@ def test_archive_is_bound_to_its_account(tmp_path: Path, monkeypatch: pytest.Mon
     assert reopened.message("chat-one", "message-one").text == "Synthetic content"  # type: ignore[union-attr]
     with pytest.raises(AccountMismatch, match="different Microsoft account"):
         Store(first_path, "account-two")
-
-
