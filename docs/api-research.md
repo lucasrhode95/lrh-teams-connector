@@ -1765,6 +1765,18 @@ binary image data
 
 ---
 
+**Live check, 2026-10-15** (read-only, the 25 most recent chats; no ids, bodies or bytes kept). AuthZ names
+two AMS hosts: `ams` (`eu-api.asm.skype.com`) and `amsV2` (`eu-prod.asyncgw.teams.microsoft.com`). The 172
+pasted images in those chats: 171 on the first host, 1 on the second. With `Authorization: skype_token <token>`:
+
+- `views/imgpsh_fullsize` on the `amsV2` host answered 200 `image/png` for all 10 objects first posted on the
+  first host, and 200 `image/jpeg` for the one image posted on the `amsV2` host;
+- the same view without credentials answered 401 on the `amsV2` host;
+- `GET /v1/objects/{id}` on the `amsV2` host answered 200 for all 10 objects.
+
+The connector's AMS reader downloaded the `amsV2` image in full (200,914 bytes, JPEG). So the Skype token reads
+pasted-image views on either host.
+
 ## POST AMS object
 
 Used when uploading inline images.

@@ -120,11 +120,3 @@ a refusal is reported clearly.
 The 2026-10-12 shared-auth check reused existing grants
 ([research](api-research.md#shared-auth-live-validation-2026-10-12)). A new account's consent for the
 Teams profiles and `m365.search` has not been tried.
-
-### N8 — Pasted images on the `amsV2` host (validation)
-
-The connector now reads a pasted image from `*.asm.skype.com` or `*.asyncgw.teams.microsoft.com`
-(AuthZ's `ams` and `amsV2`) with the Skype token. Every pasted image seen on 2026-10-15 was on the first
-host (67 of 67), so the second is untested. Check the first image that arrives there: the Skype token must
-fetch its `views/imgpsh_fullsize`. If it does not, the image shows its marker only, and the second host
-comes out of `AMS_HOSTS`.
