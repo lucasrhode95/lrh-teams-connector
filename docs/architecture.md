@@ -14,17 +14,17 @@ overview; this document records the rules and contracts they cannot show.
 
 | Layer | Responsibility |
 |---|---|
-| `src/teams_connector/__main__.py` | Canonical CLI (`teams-connector`) for shared sign-in, profile status, MCP, UI, and account-bound archive backup. Loads MCP and web dependencies only for those commands. |
+| `src/teams_connector/__main__.py` | Canonical CLI (`teams-connector`) for shared sign-in, profile status, MCP, and UI. Loads MCP and web dependencies only for those commands. |
 | `surfaces/mcp_main.py` | Typed MCP tools over the service layer. Keeps stdio free of logs; `send_message` is the only Teams write tool. |
 | `surfaces/web/` | Starlette app, static local export page, and loopback UI launcher. Uses a per-run session token, Host validation, and an idle timeout. |
-| `service/` | Domain behavior for the catalog, message history, archive sync, exports, attachment downloads, profile photos, and sending. MCP and UI share these operations. |
+| `service/` | Domain behavior for the catalog, message history, exports, attachment downloads, profile photos, and sending. MCP and UI share these operations. |
 | `remote/ports.py` | Interfaces used by services; service code does not depend on concrete HTTP adapters. |
 | `remote/transport.py` | The only general HTTP client. Applies the allowlist, authentication, one-time 401 renewal, bounded idempotent retries, response limits, error mapping, and credential-free download redirects. |
-| `remote/chat_service.py`, `remote/csa.py` | Private Teams service adapters for chat catalog/history/rosters and CSA updates. Their endpoints are undocumented and described as private in the research record. |
+| `remote/chat_service.py`, `remote/csa.py` | Private Teams service adapters for the chat catalog, chat history, chat members, and CSA updates. Their endpoints are undocumented and described as private in the research record. |
 | `remote/graph.py`, `remote/graph_teams.py` | Microsoft Graph paging, batching, channel history, people/photos, file download, and the explicitly authorized message-send request. |
 | `remote/*_mapping.py` and `remote/teams_html.py` | Convert wire responses into domain records and readable message text. Wire-format field names remain inside this layer. |
-| `store/db.py` | Account-bound SQLite archive for the catalog, message history, participant rosters, and resumable sync progress. Contains no tokens or authorization headers. |
-| `service/export/` | Text/JSONL formatting and safe output packaging. Exports stream from the archive, use exclusive temporary paths, and publish only after completion. |
+| `store/db.py` | Account-bound SQLite store for the chat catalog and account metadata only. Holds no message content and no tokens. |
+| `service/export/` | Text/JSONL formatting and safe output packaging. Exports read Teams page by page and spool to a temporary file, use exclusive temporary paths, and publish only after completion. |
 | `service/localfiles.py` | Per-user output directories, retention cleanup, and collision-safe file creation. |
 | `src/teams_connector/config.py` | Product CLI/data names and fixed public service URLs. Tenant authority, client IDs, token profiles, scopes, and shared-cache configuration live in `lrh-m365-auth`. |
 
@@ -78,23 +78,23 @@ Ctrl+C, or its idle timeout. There is no recurring sync task, watcher, remote li
 refresh process.
 
 The chat catalog may be reused for up to ten minutes. Explicit refresh waits for the remote read.
-History, participant rosters, and sync continuation state are persisted in SQLite. Searches fetch
-the requested conversation/date scope in bounded calls and match the stored messages; `coverage`
-explains which chats/ranges were actually fetched. This is not a remote global-keyword search.
+The local store holds the chat and channel catalog (names, kinds, last activity, photo ids, and the
+channels that Graph's team listing omits), the catalog's sync token and refresh time, and the owning
+account. It holds no message content and no chat member lists. Teams is the record: every history read,
+search, export and download reads Teams again ([requirements §6](requirements.md#6-local-data-decided-2026-10-14)).
 
 The database lives below `<Teams data directory>/accounts/<account fingerprint>/teams.sqlite3`.
 Owner metadata is verified on open; an account mismatch raises an error instead of reusing another
-account's archive. SQLite WAL, busy timeouts, per-operation connections, and short transactions allow
-the MCP and UI processes to use the same account store. The local archive is not encrypted by this
-application. Message content is retained until the user removes the archive.
+account's store. SQLite WAL, busy timeouts, per-operation connections, and short transactions allow the
+MCP and UI processes to use the same account store. The store is not encrypted by this application.
 
-The message archive is being removed (decided 2026-10-14; [requirements §6](requirements.md#6-local-data-decided-2026-10-14),
-roadmap D2). Only a small chat-list cache without message text will remain.
+A store left by an earlier version that kept messages is moved, without deletion, into a
+`legacy-archive-<timestamp>` folder the first time this version opens the account; the catalog is then
+rebuilt from Teams. A damaged store is moved into a `corrupt-<timestamp>` folder the same way.
 
 Exports and downloaded attachments are written below the Teams data directory, are given exclusive
 filenames, and are removed after seven days when their output directory is next used. A failed or
-cancelled export does not publish a partial result. The `backup` command uses SQLite's online backup
-API and refuses to replace an existing destination unless `--overwrite` is explicit.
+cancelled export publishes nothing.
 
 ## HTTP and safety rules
 
@@ -138,10 +138,10 @@ diagnostics.
    supports `limit` up to 200 and opaque continuation `cursor`, and can filter by `kind`. A cached
    catalog up to ten minutes old may answer unless `refresh=true`. `coverage.source` identifies
    whether the response used the local catalog or a refresh.
-2. Use `search_chats` to match a conversation name or participant name. With `refresh=true` it also
+2. Use `search_chats` to match a conversation name. With `refresh=true` (the default) it also
    asks Teams for named group and meeting chats that match a plain name or email, and lists the members
-   that matched; participants from indexed rosters (`sync_archive`) still count. Read roster coverage and
-   the notes: one-on-one chats are matched by name, and a query with query syntax is not sent to Teams.
+   that matched. Read the coverage notes: one-on-one chats are matched by name, and a query with query
+   syntax is not sent to Teams.
 3. Call `get_messages` with the selected `conversation_id`. Pages are newest first; records within
    each page are oldest first. `since` and `until` are inclusive. `message_limit` caps the latest
    matching messages, while `page_size` is the most messages a page holds. A page also holds whole
@@ -209,27 +209,26 @@ Example request for one conversation and a month:
 
 This operation does not discover recap or transcript text; those capabilities remain separate.
 
-### Sync, archive status, and exports
+### Exports
 
-`sync_archive` explicitly fetches history and optional participant rosters in bounded resumable
-batches. It does not run in the background. Repeated calls rotate fairly across chats and resume
-each chat's saved continuation. `archive_status` reports total messages and the history, date-range,
-and roster coverage for the selected conversations.
+`export_chats` writes `.txt` by default or `.jsonl` when requested, with inclusive date bounds and an optional
+latest-message limit per conversation. Each conversation becomes one artifact. When its text refers to linked
+files and `include_attachments` is true (the default), the artifact is a ZIP holding a folder with the text and
+the files that could be retrieved; otherwise it is the plain text or JSONL file. Several conversations are
+wrapped in one outer ZIP, `teams-conversations.zip`. A conversation retrieves at most 200 files, 100 MiB per
+file and 250 MiB in total. Later references and failed downloads stay in the text as
+`[Attachment unavailable: …]`. The result contains a local path; use the MCP client's local file-reading
+capability to inspect it.
 
-`export_chats` writes `.txt` by default or `.jsonl` when requested. Set `include_attachments=false`
-to omit linked files. A single conversation with selected attachments returns a ZIP containing a
-folder with the text export and files; without selected attachments it returns the plain text/JSONL
-file. Multiple conversations always return an outer ZIP of each conversation's artifact, so chats
-with attachments have an inner ZIP and chats without them have a plain file. Apply inclusive date
-bounds and a latest-
-message limit per chat. The result contains a local path; use the MCP client's local file-reading
-capability to inspect it. Exporting fetches the selected remote history first and can take time for a
-large selection.
+An export reads each conversation from Teams page by page, newest first, and spools the pages to a temporary
+file; the text is then written oldest first from those pages. The temporary folder is removed when the export
+ends, so a failed export publishes nothing.
 
-`download_attachment` saves a file linked from a message already in the archive. Pass `name` when
-the message has multiple downloadable files. Downloads stream to an exclusive local file and have
-a size bound; the tool returns the saved path. General OneDrive and SharePoint discovery belongs to
-the SharePoint connector. Email attachments belong to Outlook.
+`download_attachment` saves one file linked from a message. It reads that message again from Teams by its id
+(`message_id`), and `name` selects one file when the message has several. The file streams to a temporary file
+with a byte limit and is published under its file name, numbered if the name is taken, once it is complete.
+General OneDrive and SharePoint discovery belongs to the SharePoint connector. Email attachments belong to
+Outlook.
 
 ### Send a message
 

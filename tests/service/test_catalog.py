@@ -83,7 +83,7 @@ async def test_partial_snapshot_is_completed_from_the_chat_service_listing(
     fake.chats["19:one@unq.gbl.spaces"].in_csa = False
     await services.catalog.refresh()
     chat = services.store.chat("19:one@unq.gbl.spaces")
-    assert chat is not None and chat.name == "Pat Peer"  # named from its roster
+    assert chat is not None and chat.name == "Pat Peer"  # named from its members
 
 
 async def test_empty_chats_and_kind_filters_and_paging(services: Services) -> None:

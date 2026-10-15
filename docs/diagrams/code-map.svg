@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="2600" height="3610" viewBox="0 0 2600 3610" role="img" aria-labelledby="title description">
   <title id="title">Teams connector code map</title>
-  <desc id="description">The Teams connector's main classes and who calls whom. The command line starts the MCP server or the export UI, prepares sign-in, shows status, or backs up the archive. Both surfaces call service classes: Catalog, History, Search, Archive, Exports, Sender, Files and Photos. The service depends on the ports in remote/ports.py. CsaCatalog, ChatService and TeamsSession implement the Teams-service ports; GraphChannels, GraphPeople, GraphWriter and GraphFiles implement the Graph ports; SubstrateSearch implements message search. Every remote request goes through one Transport with tokens from the shared TokenProvider. The archive is an account-bound SQLite Store. AppContext in bootstrap.py builds the services once per process. Hover an item for details.</desc>
+  <desc id="description">The Teams connector's main classes and who calls whom. The command line starts the MCP server or the export UI, prepares sign-in, or shows status. Both surfaces call service classes: Catalog, History, Search, Exports, Sender, Files and Photos. The service depends on the ports in remote/ports.py. CsaCatalog, ChatService and TeamsSession implement the Teams-service ports; GraphChannels, GraphPeople, GraphWriter and GraphFiles implement the Graph ports; SubstrateSearch implements message search. Every remote request goes through one Transport with tokens from the shared TokenProvider. The store is an account-bound SQLite Store that holds the chat catalog only. AppContext in bootstrap.py builds the services once per process. Hover an item for details.</desc>
   <defs>
     <style>
       text { font-family: Arial, Helvetica, sans-serif; }
@@ -55,10 +55,6 @@
 <text class="group-title" x="1145" y="316">Calls</text>
 <g><title>Offline view of the cache: no network calls, no token values.</title><text class="detail small" x="1145" y="346">• <tspan class="code">TokenProvider.status</tspan></text></g>
 <g><title>With --check only: silent acquisition per profile.</title><text class="detail small" x="1145" y="373">• <tspan class="code">TokenProvider.get_token</tspan></text></g>
-<rect x="1472" y="244" width="328" height="170" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
-<text class="section-title code" x="1488" y="279" style="font-size:20px">teams-connector backup</text>
-<text class="group-title" x="1488" y="316">Calls</text>
-<g><title>Finds the signed-in account's archive and copies it with SQLite's online backup API; refuses to overwrite unless --overwrite.</title><text class="detail small" x="1488" y="346">• <tspan class="code">Store.backup_to(path)</tspan></text></g>
 <path class="call-flow" d="M263 434 V490"/>
 <path class="call-flow" d="M606 434 V462 H1395 V490"/>
 
@@ -66,25 +62,21 @@
 <rect x="80" y="494" width="850" height="366" rx="14" fill="#f7f9fc" stroke="#c7d5e2" stroke-width="1.5"/>
 <path d="M80 568 V508 Q80 494 94 494 H916 Q930 494 930 508 V568 Z" fill="#183153"/>
 <text class="card-title" x="100" y="527">MCP SERVER</text>
-<text class="card-subtitle" x="100" y="551"><tspan class="code">surfaces/mcp_main.py</tspan> · <tspan class="code">build_server(AppContext)</tspan> · 12 FastMCP tools</text>
+<text class="card-subtitle" x="100" y="551"><tspan class="code">surfaces/mcp_main.py</tspan> · <tspan class="code">build_server(AppContext)</tspan> · 8 FastMCP tools</text>
 <rect x="100" y="588" width="810" height="252" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
 <text class="group-title" x="118" y="626">Conversations</text>
 <g><title>Chats and channels by recent activity, with kind filters and paging. → Catalog.list</title><text class="detail small" x="118" y="656">• <tspan class="code">list_chats</tspan></text></g>
-<g><title>Conversation names, and participant names indexed by sync_archive. → Catalog.search</title><text class="detail small" x="118" y="683">• <tspan class="code">search_chats</tspan></text></g>
+<g><title>Conversation names, and, with a refresh, members that Teams matches. → Catalog.search</title><text class="detail small" x="118" y="683">• <tspan class="code">search_chats</tspan></text></g>
 <g><title>One bounded page of a conversation, newest pages first. → History.get_messages</title><text class="detail small" x="118" y="710">• <tspan class="code">get_messages</tspan></text></g>
-<g><title>Continue a long message's text. → History.content</title><text class="detail small" x="118" y="737">• <tspan class="code">get_message_content</tspan></text></g>
+<g><title>Save one file linked from a message, read again from Teams. → Files.download_attachment</title><text class="detail small" x="118" y="737">• <tspan class="code">download_attachment</tspan></text></g>
 <text class="group-title" x="118" y="776">Account</text>
 <g><title>The active account and each profile's cached credential and token expiry. → TokenProvider.status</title><text class="detail small" x="118" y="806">• <tspan class="code">auth_status</tspan></text></g>
 <text class="group-title" x="360" y="626">Search</text>
-<g><title>Online discovery through Microsoft Search v2: one bounded page. → Search.search_remote_messages</title><text class="detail small" x="360" y="656">• <tspan class="code">search_remote_messages</tspan></text></g>
-<g><title>Local matching in chosen chats and dates, preparing history first. → Search.search_messages</title><text class="detail small" x="360" y="683">• <tspan class="code">search_messages</tspan></text></g>
+<g><title>One page of Search v2 message hits for the terms, scope and dates. → Search.search_messages</title><text class="detail small" x="360" y="656">• <tspan class="code">search_messages</tspan></text></g>
 <text class="group-title" x="360" y="722">Write</text>
 <g><title>Send one message after explicit authorization; checks the live chat name; sent once. → Sender.send</title><text class="detail small" x="360" y="752">• <tspan class="code">send_message</tspan></text></g>
-<text class="group-title" x="668" y="626">Archive and files</text>
-<g><title>Fetch history and rosters in bounded, resumable batches. → Archive.sync</title><text class="detail small" x="668" y="656">• <tspan class="code">sync_archive</tspan></text></g>
-<g><title>Which histories, date ranges and rosters are covered. → Archive.status</title><text class="detail small" x="668" y="683">• <tspan class="code">archive_status</tspan></text></g>
-<g><title>Export conversations to .txt, .jsonl or a .zip with attachments. → Exports.export</title><text class="detail small" x="668" y="710">• <tspan class="code">export_chats</tspan></text></g>
-<g><title>Save a file linked from an archived message. → Files.download_attachment</title><text class="detail small" x="668" y="737">• <tspan class="code">download_attachment</tspan></text></g>
+<text class="group-title" x="668" y="626">Export</text>
+<g><title>Export conversations to .txt, .jsonl or a .zip with attachments. → Exports.export</title><text class="detail small" x="668" y="656">• <tspan class="code">export_chats</tspan></text></g>
 
 <!-- Local UI. -->
 <rect x="970" y="494" width="850" height="366" rx="14" fill="#f7f9fc" stroke="#c7d5e2" stroke-width="1.5"/>
@@ -122,37 +114,37 @@
 <g><title>A page of chats and channels by recent activity.</title><text class="detail" x="118" y="1197">• <tspan class="code">list(...)</tspan></text></g>
 <g><title>Conversation and participant name matches.</title><text class="detail" x="380" y="1116">• <tspan class="code">search(...)</tspan></text></g>
 <g><title>What the catalog answer covers, and how fresh it is.</title><text class="detail" x="380" y="1143">• <tspan class="code">coverage(...)</tspan></text></g>
-<g><title>Which chats have indexed rosters.</title><text class="detail" x="380" y="1170">• <tspan class="code">roster_coverage</tspan></text></g>
+<g><title>Refreshes the chat or channel a send targets, then returns it. → Catalog.recipient</title><text class="detail" x="380" y="1170">• <tspan class="code">recipient(...)</tspan></text></g>
 <text class="muted" x="118" y="1298">uses <tspan class="code">Store</tspan> · <tspan class="code">ChatCatalog</tspan> · <tspan class="code">ChannelDirectory</tspan></text>
 
 <rect x="673" y="1014" width="553" height="300" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
 <text class="section-title" x="691" y="1049"><tspan class="code">History</tspan><tspan class="detail" dx="12">history.py</tspan></text>
 <text class="group-title" x="691" y="1086">Methods</text>
-<g><title>One bounded page, newest pages first and oldest first within a page; fetches what the archive lacks.</title><text class="detail" x="691" y="1116">• <tspan class="code">get_messages(...)</tspan></text></g>
-<g><title>A character range of one archived message's text.</title><text class="detail" x="691" y="1143">• <tspan class="code">content(...)</tspan></text></g>
-<g><title>Fetch a conversation's date range into the archive in bounded remote pages.</title><text class="detail" x="691" y="1170">• <tspan class="code">fetch_range(...)</tspan></text></g>
+<g><title>One bounded page, newest pages first and oldest first within a page; read from Teams.</title><text class="detail" x="691" y="1116">• <tspan class="code">get_messages(...)</tspan></text></g>
+<g><title>One message read again from Teams by id, for its files. → History.message</title><text class="detail" x="691" y="1143">• <tspan class="code">message(...)</tspan></text></g>
+<g><title>The messages to export: newest first, read in bounded remote pages. → History.selection</title><text class="detail" x="691" y="1170">• <tspan class="code">selection(...)</tspan></text></g>
 <g><title>The HistoryReader for a conversation: Chat Service for chats, Graph for channels.</title><text class="detail" x="691" y="1197">• <tspan class="code">reader(chat)</tspan></text></g>
 <text class="group-title" x="691" y="1236">Rules</text>
-<text class="detail" x="691" y="1266">remote pages are merged into the archive</text>
+<text class="detail" x="691" y="1266">pages are read from Teams, never stored</text>
 <text class="muted" x="691" y="1298">uses <tspan class="code">Store</tspan> · <tspan class="code">Catalog</tspan> · <tspan class="code">HistoryReader</tspan></text>
 
 <rect x="1247" y="1014" width="553" height="300" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
 <text class="section-title" x="1265" y="1049"><tspan class="code">Search</tspan><tspan class="detail" dx="12">search.py</tspan></text>
 <text class="group-title" x="1265" y="1086">Methods</text>
-<g><title>Microsoft Search v2 for Teams messages; a conversation id only on an exact catalog match.</title><text class="detail" x="1265" y="1116">• <tspan class="code">search_remote_messages(...)</tspan></text></g>
-<g><title>Prepare the chosen chats and dates in bounded calls, then match locally (exact, substring, all terms).</title><text class="detail" x="1265" y="1143">• <tspan class="code">search_messages(...)</tspan></text></g>
+<g><title>One Search v2 query from the terms, scope and dates; a conversation id only on an exact catalog match. → build_query</title><text class="detail" x="1265" y="1116">• <tspan class="code">build_query(...)</tspan></text></g>
+<g><title>One page of message hits for the terms, scope and dates; a cursor continues the search.</title><text class="detail" x="1265" y="1143">• <tspan class="code">search_messages(...)</tspan></text></g>
 <text class="group-title" x="1265" y="1182">Rules</text>
 <text class="detail" x="1265" y="1212">online: one bounded page per call</text>
-<text class="detail" x="1265" y="1239">local: preparation coverage per chat</text>
-<text class="muted" x="1265" y="1298">uses <tspan class="code">History</tspan> · <tspan class="code">MessageSearchReader</tspan></text>
+<text class="detail" x="1265" y="1239">terms: one OR group of quoted phrases</text>
+<text class="muted" x="1265" y="1298">uses <tspan class="code">Store</tspan> · <tspan class="code">MessageSearchReader</tspan></text>
 
 <rect x="100" y="1334" width="553" height="280" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
-<text class="section-title" x="118" y="1369"><tspan class="code">Archive</tspan><tspan class="detail" dx="12">archive.py</tspan></text>
-<text class="group-title" x="118" y="1406">Methods</text>
-<g><title>Bounded, resumable history and roster batches; repeated calls rotate fairly across chats.</title><text class="detail" x="118" y="1436">• <tspan class="code">sync(...)</tspan></text></g>
-<g><title>Total messages, and history, date-range and roster coverage per chat.</title><text class="detail" x="118" y="1463">• <tspan class="code">status(...)</tspan></text></g>
-<g><title>A conversation's participants: Chat Service for chats, Graph for channels.</title><text class="detail" x="118" y="1490">• <tspan class="code">members(chat)</tspan></text></g>
-<text class="muted" x="118" y="1598">uses <tspan class="code">Store</tspan> · <tspan class="code">History</tspan> · <tspan class="code">MemberReader</tspan></text>
+<text class="section-title" x="118" y="1369"><tspan class="code">Coverage</tspan><tspan class="detail" dx="12">models.py</tspan></text>
+<text class="group-title" x="118" y="1406">Types</text>
+<g><title>What a chat listing covers: its source, completeness and scope. → domain/models.py</title><text class="detail" x="118" y="1436">• <tspan class="code">CatalogCoverage</tspan></text></g>
+<g><title>Chat search: completeness, counts and notes. → domain/models.py</title><text class="detail" x="118" y="1463">• <tspan class="code">ChatSearchCoverage</tspan></text></g>
+<g><title>Message search: completeness, offset, total and more results. → domain/models.py</title><text class="detail" x="118" y="1490">• <tspan class="code">MessageSearchCoverage</tspan></text></g>
+<text class="muted" x="118" y="1598">built by <tspan class="code">Catalog</tspan> · <tspan class="code">Search</tspan></text>
 
 <rect x="673" y="1334" width="553" height="280" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
 <text class="section-title" x="691" y="1369"><tspan class="code">Exports</tspan><tspan class="detail" dx="12">export/orchestrator.py</tspan></text>
@@ -160,7 +152,7 @@
 <g><title>Fetch the selection, render TXT or JSONL, add attachments, and publish one file only when complete.</title><text class="detail" x="691" y="1436">• <tspan class="code">export(request, progress)</tspan></text></g>
 <text class="group-title" x="691" y="1475">Modules</text>
 <g><title>formatter.py renders TXT and JSONL; packaging.py builds one flat file or one ZIP.</title><text class="detail" x="691" y="1505">• <tspan class="code">formatter</tspan> · <tspan class="code">packaging</tspan></text></g>
-<text class="muted" x="691" y="1598">uses <tspan class="code">Store</tspan> · <tspan class="code">History</tspan> · <tspan class="code">Files</tspan></text>
+<text class="muted" x="691" y="1598">uses <tspan class="code">Catalog</tspan> · <tspan class="code">History</tspan> · <tspan class="code">Files</tspan></text>
 
 <rect x="1247" y="1334" width="553" height="280" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
 <text class="section-title" x="1265" y="1369"><tspan class="code">Sender</tspan><tspan class="detail" dx="12">send.py</tspan></text>
@@ -174,10 +166,10 @@
 <rect x="100" y="1634" width="553" height="260" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
 <text class="section-title" x="118" y="1669"><tspan class="code">Files</tspan> · <tspan class="code">Photos</tspan><tspan class="detail" dx="12">files.py</tspan></text>
 <text class="group-title" x="118" y="1706">Methods</text>
-<g><title>Save a file linked from an archived message, streamed with a size bound.</title><text class="detail" x="118" y="1736">• <tspan class="code">download_attachment(...)</tspan></text></g>
+<g><title>Save one file linked from a message, read again from Teams; streamed with a size bound.</title><text class="detail" x="118" y="1736">• <tspan class="code">download_attachment(...)</tspan></text></g>
 <g><title>The same, for a file the export already selected.</title><text class="detail" x="118" y="1763">• <tspan class="code">download_selected_attachment</tspan></text></g>
 <g><title>A participant's directory photo, for the UI.</title><text class="detail" x="118" y="1790">• <tspan class="code">Photos.photo(user_id)</tspan></text></g>
-<text class="muted" x="118" y="1878">uses <tspan class="code">Store</tspan> · <tspan class="code">FileReader</tspan> · <tspan class="code">People</tspan></text>
+<text class="muted" x="118" y="1878">uses <tspan class="code">History</tspan> · <tspan class="code">FileReader</tspan> · <tspan class="code">People</tspan></text>
 
 <rect x="673" y="1634" width="1127" height="260" fill="#eff8f6" stroke="#c7d5e2" stroke-width="1.5"/>
 <text class="group-title" x="691" y="1672">Helpers</text>
@@ -192,7 +184,7 @@
 <text class="detail" x="1100" y="1825">(CLAUDE.md, &quot;Input boundaries&quot;)</text>
 
 <path class="local-flow" d="M340 1918 V1980"/>
-<text class="flow-label" x="360" y="1956" text-anchor="start">chats · messages · progress</text>
+<text class="flow-label" x="360" y="1956" text-anchor="start">chats · catalog · meta</text>
 <path class="call-flow" d="M940 1914 V1980"/>
 <text class="flow-label" x="960" y="1956" text-anchor="start">Teams-service ports</text>
 <path class="call-flow" d="M1520 1914 V1980"/>
@@ -201,23 +193,21 @@
 <!-- Local store. -->
 <rect x="80" y="1984" width="520" height="560" rx="14" fill="#f7f9fc" stroke="#c7d5e2" stroke-width="1.5"/>
 <path d="M80 2058 V1998 Q80 1984 94 1984 H586 Q600 1984 600 1998 V2058 Z" fill="#183153"/>
-<text class="card-title" x="100" y="2017">LOCAL ARCHIVE</text>
+<text class="card-title" x="100" y="2017">LOCAL STORE</text>
 <text class="card-subtitle" x="100" y="2041"><tspan class="code">store/db.py</tspan> · <tspan class="code">Store</tspan> · SQLite per account (WAL)</text>
 <rect x="100" y="2078" width="480" height="446" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
 <text class="group-title" x="118" y="2116">Methods</text>
 <g><title>The cached catalog, and one conversation.</title><text class="detail small" x="118" y="2146">• <tspan class="code">chats()</tspan> · <tspan class="code">chat(id)</tspan></text></g>
 <g><title>Replace the catalog in one short transaction.</title><text class="detail small" x="118" y="2173">• <tspan class="code">save_catalog(...)</tspan></text></g>
-<g><title>Insert or update fetched messages; a message seen again updates in place.</title><text class="detail small" x="118" y="2200">• <tspan class="code">save_messages(...)</tspan></text></g>
-<g><title>Archived messages in either order, for history pages and exports.</title><text class="detail small" x="118" y="2227">• <tspan class="code">chronological</tspan> · <tspan class="code">newest_first</tspan></text></g>
-<g><title>Literal local matching over the archived text.</title><text class="detail small" x="118" y="2254">• <tspan class="code">search(...)</tspan></text></g>
-<g><title>Participant rosters and name lookup.</title><text class="detail small" x="118" y="2281">• <tspan class="code">save_roster</tspan> · <tspan class="code">participant_matches</tspan></text></g>
-<g><title>Per-chat sync state and resumable history progress.</title><text class="detail small" x="118" y="2308">• <tspan class="code">states</tspan> · <tspan class="code">save_history_progress</tspan></text></g>
-<g><title>SQLite online backup to another file, bound to the same account.</title><text class="detail small" x="118" y="2335">• <tspan class="code">backup_to(path)</tspan></text></g>
+<g><title>Store owner, the catalog sync token and refresh time, in short transactions.</title><text class="detail small" x="118" y="2200">• <tspan class="code">meta(key)</tspan> · <tspan class="code">set_meta(...)</tspan></text></g>
+<g><title>The account-bound store; an owner mismatch raises AccountMismatch.</title><text class="detail small" x="118" y="2227">• <tspan class="code">Store(path, owner)</tspan></text></g>
+<g><title>A legacy or damaged store is moved into a timestamped folder; nothing is deleted.</title><text class="detail small" x="118" y="2254">• <tspan class="code">_move_aside(...)</tspan></text></g>
+<g><title>One short transaction per call; a damaged file is detected before use.</title><text class="detail small" x="118" y="2281">• <tspan class="code">_tx()</tspan> · <tspan class="code">_healthy()</tspan></text></g>
 <text class="group-title" x="118" y="2374">Tables</text>
-<text class="detail small" x="118" y="2404"><tspan class="code">meta</tspan> · <tspan class="code">chats</tspan> · <tspan class="code">messages</tspan></text>
-<text class="detail small" x="118" y="2431"><tspan class="code">participants</tspan> · <tspan class="code">chat_state</tspan></text>
+<text class="detail small" x="118" y="2404"><tspan class="code">meta</tspan> · <tspan class="code">chats</tspan> · <tspan class="code">chats_activity</tspan></text>
+<text class="detail small" x="118" y="2431">legacy tables are moved aside</text>
 <text class="group-title" x="118" y="2470">Not stored</text>
-<text class="detail small" x="118" y="2500">tokens or authorization headers</text>
+<text class="detail small" x="118" y="2500">message text, member lists, tokens</text>
 
 <!-- Remote. -->
 <rect x="640" y="1984" width="1180" height="1070" rx="14" fill="#f7f9fc" stroke="#c7d5e2" stroke-width="1.5"/>
@@ -252,7 +242,7 @@
 <rect x="660" y="2358" width="560" height="250" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
 <text class="section-title" x="678" y="2393">Teams-service adapters</text>
 <g><title>The chat catalog from the Chat Service Aggregator, as a snapshot or a delta; implements ChatCatalog.</title><text class="detail small" x="678" y="2430"><tspan class="code">CsaCatalog</tspan>: CSA catalog (<tspan class="code">csa.py</tspan>)</text></g>
-<g><title>Chat history, rosters and the conversation list over the regional Chat Service; implements HistoryReader and MemberReader for chats.</title><text class="detail small" x="678" y="2457"><tspan class="code">ChatService</tspan>: history, rosters</text></g>
+<g><title>Chat history, members and the conversation list over the regional Chat Service; implements HistoryReader and MemberReader for chats.</title><text class="detail small" x="678" y="2457"><tspan class="code">ChatService</tspan>: history, members</text></g>
 <g><title>The AuthZ exchange: a teams.spaces token becomes a Skype token and the regional Chat Service address, renewed when rejected.</title><text class="detail small" x="678" y="2484"><tspan class="code">TeamsSession</tspan>: AuthZ → Skype token</text></g>
 <g><title>Chat Service sends the Skype token; CSA sends a teams.csa bearer token plus the Skype token.</title><text class="detail small" x="678" y="2511"><tspan class="code">SkypeCredential</tspan> · <tspan class="code">CsaCredential</tspan></text></g>
 <text class="muted" x="678" y="2590">call <tspan class="code">Transport</tspan> directly</text>
@@ -306,7 +296,7 @@
 <g><title>Silent: memory, then the cache, refreshing if needed. Never prompts.</title><text class="detail" x="678" y="3310">• <tspan class="code">get_token(profile)</tspan></text></g>
 <g><title>Prepare every profile; only the auth command calls it.</title><text class="detail" x="678" y="3337">• <tspan class="code">bootstrap()</tspan></text></g>
 <g><title>Delete the cache; or an offline view of it.</title><text class="detail" x="678" y="3364">• <tspan class="code">sign_out()</tspan> · <tspan class="code">status()</tspan></text></g>
-<g><title>The account the cache belongs to, without network calls (used by backup).</title><text class="detail" x="678" y="3391">• <tspan class="code">cached_account()</tspan></text></g>
+<g><title>The account the cache belongs to, without network calls.</title><text class="detail" x="678" y="3391">• <tspan class="code">cached_account()</tspan></text></g>
 <rect x="1240" y="3208" width="560" height="290" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
 <text class="group-title" x="1258" y="3246">Profiles used here</text>
 <g><title>Teams client → api.spaces.skype.com: the AuthZ session and the account identity.</title><text class="detail" x="1258" y="3276">• <tspan class="code">teams.spaces</tspan>: Teams client</text></g>
@@ -327,7 +317,7 @@
 <rect x="1920" y="244" width="580" height="412" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
 <text class="group-title" x="1938" y="282">Built once per account, on first use</text>
 <g><title>Encrypted cache unless --unsecure (a separate plaintext development cache). The account comes from the teams.spaces token.</title><text class="detail small" x="1938" y="312">• <tspan class="code">TokenProvider(unsecure)</tspan></text></g>
-<g><title>Every token request is checked against the account the archive belongs to.</title><text class="detail small" x="1938" y="339">• <tspan class="code">AccountBoundTokenSource(...)</tspan></text></g>
+<g><title>Every token request is checked against the account the store belongs to.</title><text class="detail small" x="1938" y="339">• <tspan class="code">AccountBoundTokenSource(...)</tspan></text></g>
 <g><title>One HTTPS client for every Microsoft service.</title><text class="detail small" x="1938" y="366">• <tspan class="code">Transport(client)</tspan></text></g>
 <text class="detail small" x="1938" y="393">• <tspan class="code">Graph(transport, Bearer teams.graph)</tspan></text>
 <text class="detail small" x="1938" y="420">• <tspan class="code">TeamsSession(transport, tokens)</tspan></text>
@@ -336,8 +326,8 @@
 <text class="detail small" x="1938" y="501">• <tspan class="code">CsaCatalog(transport, session, ...)</tspan></text>
 <g><title>SQLite file per account fingerprint.</title><text class="detail small" x="1938" y="528">• <tspan class="code">Store(account)</tspan> · <tspan class="code">Catalog</tspan> · <tspan class="code">History</tspan></text></g>
 <text class="detail small" x="1938" y="555">• <tspan class="code">SubstrateSearch(transport, m365.search)</tspan></text>
-<text class="detail small" x="1938" y="582">• <tspan class="code">Files(store, GraphFiles)</tspan> · <tspan class="code">Photos</tspan></text>
-<text class="detail small" x="1938" y="609">• <tspan class="code">Search</tspan> · <tspan class="code">Archive</tspan> · <tspan class="code">Exports</tspan></text>
+<text class="detail small" x="1938" y="582">• <tspan class="code">Files(history, GraphFiles)</tspan> · <tspan class="code">Photos</tspan></text>
+<text class="detail small" x="1938" y="609">• <tspan class="code">Search</tspan> · <tspan class="code">Exports</tspan></text>
 <text class="detail small" x="1938" y="636">• <tspan class="code">Sender(catalog, GraphWriter)</tspan></text>
 
 <rect x="1900" y="716" width="620" height="560" rx="14" fill="#eff8f6" stroke="#9fd3cb" stroke-width="1.5"/>

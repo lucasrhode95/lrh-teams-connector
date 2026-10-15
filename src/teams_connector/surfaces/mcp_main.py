@@ -43,8 +43,8 @@ authorized message-send tool.
 group, meeting, channel, or self for the user's own notes chat). search_chats finds conversations by \
 name, and with refresh by the members Teams matches for a plain name or email; read its coverage.
 - Reading: get_messages returns a conversation's history newest pages first, oldest first within a \
-page, with optional since/until and a total message_limit. Follow `cursor` for older messages. Long \
-a page holds whole messages up to max_chars (at least one), so no message text is cut. \
+page, with optional since/until and a total message_limit. Follow `cursor` for older messages. A \
+page holds whole messages up to max_chars (at least one), so no message text is cut. \
 is_self marks the user's own messages: use it rather than matching names.
 - Searching message content: search_messages takes terms (1 to 25 phrases; a message matches when any \
 term matches), optionally scoped by conversation_ids and since/until. Each term is one phrase, matched on \
@@ -160,7 +160,9 @@ def build_server(context: AppContext) -> FastMCP:
         limit: Annotated[int, Field(ge=1, le=100)] = 25,
         cursor: str | None = None,
     ) -> ChatSearchResult:
-        """Conversations whose name, or an indexed participant's name, contains the query."""
+        """Conversations whose name contains the query. With refresh (the default), also the named
+        group and meeting chats that Teams matches by a member's name or email, with the members
+        that matched."""
         return await (await services()).catalog.search(query, refresh=refresh, limit=limit, cursor=cursor)
 
     @mcp.tool(annotations=READ_ONLY)

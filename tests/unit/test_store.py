@@ -11,7 +11,7 @@ from teams_connector.domain.models import Chat
 from teams_connector.store.db import Store, store_path
 
 
-def test_archive_is_bound_to_its_account(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_store_is_bound_to_its_account(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TEAMS_CONNECTOR_HOME", str(tmp_path / "connector"))
     first_path = store_path("account-one")
     second_path = store_path("account-two")

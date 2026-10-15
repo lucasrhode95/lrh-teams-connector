@@ -1,7 +1,7 @@
 """An in-memory Microsoft Teams tenant served through httpx.MockTransport.
 
 It understands exactly the request shapes the connector sends: Teams AuthZ, the CSA catalog (snapshot
-and delta), Chat Service history/rosters/listing, and the Graph endpoints for teams, channels, channel
+and delta), Chat Service history, members and listing, and the Graph endpoints for teams, channels, channel
 threads, members, people, photos, sends and shared files. All data is synthetic.
 """
 
@@ -104,7 +104,7 @@ class FakeChat:
     id: str
     title: str | None = None
     chat_type: str | None = None  # CSA chatType: oneOnOne, group, meeting
-    members: list[tuple[str, str | None]] = field(default_factory=list)  # (object id, roster name)
+    members: list[tuple[str, str | None]] = field(default_factory=list)  # (object id, member name)
     messages: list[dict[str, Any]] = field(default_factory=list)  # Chat Service records
     empty: bool | None = None
     in_csa: bool = True  # listed by the CSA snapshot (False: only the Chat Service listing has it)

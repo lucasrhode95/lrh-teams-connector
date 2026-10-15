@@ -3423,3 +3423,14 @@ The request shapes tried are those recorded earlier in this document.
 the matching members of stored chats. With a query containing query syntax (for example `AND`), the connector
 does not send it to Teams and says so in the coverage notes.
 
+## Store and downloads after the archive removal (2026-10-15)
+
+Live checks on the developer's account after the message archive was removed (roadmap D2):
+
+- The first run moved the old store, which held message content, into a `legacy-archive-<timestamp>`
+  folder beside it, without deleting anything, and rebuilt the chat catalog from Teams.
+- History walks with different page budgets matched, and an export of one 28-message conversation was
+  written from Teams pages alone.
+- A download of a file linked from a message reached Graph's `/shares` route and was refused with HTTP
+  400. The linked item was a SharePoint site-page attachment. This limitation predates the archive
+  removal and is not addressed by it.

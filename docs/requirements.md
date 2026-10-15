@@ -68,7 +68,7 @@ The current split ([research](api-research.md#microsoft-graph-with-the-teams-cli
 | Capability | Backend | Why |
 |---|---|---|
 | Chat catalog (one-on-one, group, meeting, self) | CSA, private | Graph cannot list chats: the Teams client has no `Chat.*` read grant |
-| Chat history and rosters | Chat Service, private | Same |
+| Chat history and chat members | Chat Service, private | Same |
 | Channels, channel history and members | Graph | Lists every joined channel; the private catalog adds only activity |
 | People's names and photos | Graph | |
 | Sending | Graph | Returns the server message id |
@@ -101,18 +101,17 @@ edited message with its newest text and `edited_at`, and a deleted message marke
 `deleted_at` and no text.
 
 A small local cache of the chat list stays, holding no message text: the catalog sync token, the
-names worked out for untitled chats, the channels Graph's listing omits, and photo ids. It may also
-hold chat member lists, if participant search still needs them (roadmap P2.2b).
-
-The current code still keeps a message archive. Removing it is roadmap D2; until then the
-[architecture](architecture.md#requests-caching-and-storage) describes the archive as it is.
+names worked out for untitled chats, the channels Graph's listing omits, and photo ids. It holds no
+chat member lists; participant matches come from Teams' chat search (roadmap P2.2b). A store from the
+version that kept messages is moved aside, not deleted, on first use, and the catalog is rebuilt from
+Teams ([architecture](architecture.md#requests-caching-and-storage)).
 
 ## 7. Search
 
 | Layer | Surface | Behavior |
 |---|---|---|
 | Conversation filter | Local UI | Filters the loaded catalog in the browser. Typing never calls Teams. |
-| Conversation search | MCP (`search_chats`) | Matches conversation names and participants: from the catalog, the indexed rosters, and, with a refresh, the named group and meeting chats Teams matches by a plain name or email. Refreshes the catalog by default; `refresh=false` searches the cache only. Reports what it could not cover. |
+| Conversation search | MCP (`search_chats`) | Matches conversation names in the catalog and, with a refresh (the default), the named group and meeting chats Teams matches by a plain name or email, with the members that matched. `refresh=false` searches the cache only. Reports what it could not cover. |
 | Message search | MCP (`search_messages`) | Search v2 on the server, across Teams or scoped to chosen conversations and dates. Takes a list of terms, any of which matches; each term is one phrase, never split and never read as a query operator. Matches words, word prefixes and phrases; returns message ids, totals, pages, and a confirmed zero. No local match modes (decided 2026-10-15).
 
 Calendar events, meeting recaps, transcript lists, transcript content and transcript-text search are
