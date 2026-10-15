@@ -162,6 +162,7 @@ class FakeTeams:
     images: dict[str, bytes] = field(default_factory=dict)  # AMS object id -> full-size image bytes
     hosted: dict[str, bytes] = field(default_factory=dict)  # Graph hosted-content id -> image bytes
     favorite_ids: set[str] = field(default_factory=set)  # chats in the Favorites sidebar folder
+    presence_fails: bool = False  # the regional presence service answers 503
     delta_rows: list[dict[str, Any]] = field(default_factory=list)  # rows returned for the next delta
     deleted_chat_ids: list[str] = field(default_factory=list)
     csa_partial: bool = False
@@ -209,6 +210,8 @@ class FakeTeams:
             return self._chat_service(request, path, parse_qs(url.query))
         if url.hostname == "eu-api.asm.skype.com":
             return self._ams(request, path)
+        if url.hostname and url.hostname.endswith(".presence.teams.microsoft.com"):
+            return self._presence(request)
         if url.hostname == "graph.microsoft.com":
             return self._graph(request, path.removeprefix("/v1.0"), parse_qs(url.query))
         if url.hostname and url.hostname.endswith(".sharepoint.com"):
@@ -299,6 +302,33 @@ class FakeTeams:
         return httpx.Response(404, json={"errorCode": "NotFound"})
 
     # ------------------------------------------------------------------ Graph
+
+    def _presence(self, request: httpx.Request) -> httpx.Response:
+        """Regional Unified Presence: the teams.spaces bearer is accepted; one row per requested MRI. The
+        response carries fields the connector does not report, so they can be checked as dropped."""
+        if not request.headers.get("authorization", "").startswith("Bearer "):
+            return httpx.Response(401, json={"errorCode": "911"})
+        if self.presence_fails:
+            return httpx.Response(503, json={"errorCode": "Unavailable"})
+        rows = json.loads(request.content)
+        presence = {
+            "availability": "Available",
+            "activity": "InACall",
+            "deviceType": "Desktop",
+            "lastActiveTime": "2026-09-05T10:00:00.000Z",
+            "capabilities": ["synthetic"],
+            "calendarData": {"status": "synthetic"},
+            "workLocation": {"type": "synthetic"},
+            "forcedAvailability": {"availability": "Away"},
+            "sourceNetwork": "synthetic",
+        }
+        return httpx.Response(
+            200,
+            json=[
+                {"mri": row["mri"], "etag": "1", "etagMatch": False, "status": 200, "presence": presence}
+                for row in rows
+            ],  # fmt: skip
+        )
 
     def _ams(self, request: httpx.Request, path: str) -> httpx.Response:
         """AMS full-size views of pasted images. The connector sends the Skype token as ``skype_token``."""

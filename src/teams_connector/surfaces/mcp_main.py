@@ -31,6 +31,7 @@ from teams_connector.domain.models import (
     ExportRequest,
     MessagePage,
     MessageSearchResult,
+    PresenceResult,
     SendResult,
 )
 
@@ -169,6 +170,14 @@ def build_server(context: AppContext) -> FastMCP:
         group and meeting chats that Teams matches by a member's name or email, with the members
         that matched."""
         return await (await services()).catalog.search(query, refresh=refresh, limit=limit, cursor=cursor)
+
+    @mcp.tool(annotations=READ_ONLY)
+    @_logged
+    async def get_presence(conversation_id: ConversationId) -> PresenceResult:
+        """Availability, activity, last-active time and device of the other person in a one-on-one chat.
+        Nothing richer is returned: no status note and no calendar text. A failed read returns no presence
+        and a reason."""
+        return await (await services()).presence.for_chat(conversation_id)
 
     @mcp.tool(annotations=READ_ONLY)
     @_logged

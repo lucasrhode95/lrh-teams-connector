@@ -30,6 +30,7 @@ async def test_mcp_exposes_current_contract_and_reads_synthetic_chats(context: A
             "search_messages",
             "export_chats",
             "download_attachment",
+            "get_presence",
             "send_message",
         }
         assert all(isinstance(tool.inputSchema, dict) for tool in tools.values())
