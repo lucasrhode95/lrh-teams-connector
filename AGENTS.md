@@ -83,7 +83,7 @@ explicit private config file rather than embedding fallback settings in code.
 
 ## Teams-specific safety and authentication
 
-- Sending a Teams message is the only write path. Require explicit authorization for both destination and content. Send once; do not retry automatically after an uncertain result.
+- Sending a Teams message and deleting the user's own chat messages are the only write paths. A send requires explicit authorization for both destination and content; a delete requires one explicit confirmation of the listed set of messages. Make each send and each delete once; do not retry automatically after an uncertain result.
 - Keep logs limited to operational timings, statuses, and counts. Do not log message bodies, search terms, chat names, identifiers, tokens, or authorization headers. Keep MCP protocol stdout free of diagnostics.
 - Normal UI, MCP, and sign-in use the shared encrypted cache provided by `lrh-m365-auth`. Do not fall back to plaintext if encrypted storage is unavailable.
 - For an explicitly authorized local development probe only, pass `--unsecure` to a supported `teams-connector` command and set `M365_AUTH_HOME` to an isolated local path. This selects a separate plaintext cache containing reusable tokens. Never print it, copy it into logs, commit it, or share it; remove it when the probe is complete. Do not enable plaintext mode implicitly.

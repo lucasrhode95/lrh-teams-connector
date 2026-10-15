@@ -43,7 +43,8 @@ endpoint does not change who owns a resource.
 - Keeping messages Teams no longer returns: deleted text, earlier versions of edited messages, or
   messages past the organization's retention policy (decided 2026-10-14).
 - Matching inside words. Teams search matches words, word prefixes and phrases only.
-- Teams writes other than sending a message: no edits, deletes, reactions or read-state changes.
+- Teams writes other than sending a message and deleting the user's own chat messages: no edits,
+  reactions or read-state changes, and nothing written as someone else.
 - Resuming an export after a process restart, or other export resilience machinery, unless a real
   failure calls for it.
 - One combined text file for several conversations. Each conversation is its own artifact.
@@ -119,7 +120,7 @@ Calendar events, meeting recaps, transcript lists, transcript content and transc
 separate capabilities. Report each one as verified, blocked or unverified; message search alone never
 counts as broad Microsoft 365 search.
 
-## 8. History, exports and sending
+## 8. History, exports, sending and deleting
 
 - **History selection** is one rule for `get_messages`, MCP exports and UI exports: `since` and
   `until` are inclusive, dates filter first, then `message_limit` keeps the latest N matching
@@ -166,3 +167,14 @@ counts as broad Microsoft 365 search.
     those, a few times at most; then it cancels the upload and fails the send.
   - Images and files may share a message. Files and images in channels and meeting chats are roadmap
     P1.5.
+- **Deleting the user's own messages** (decided and implemented 2026-10-15), the second write path:
+  `delete_messages` soft-deletes a set of the user's own messages in one chat, as Teams' Delete does.
+  - The agent lists the set (chat, count, first and last message) and gets one explicit yes for it. The
+    connector cannot verify that confirmation, so it is a rule in the tool description and the MCP
+    instructions.
+  - The chat's current name must match `expected_chat_name`. Every message is read again before its
+    delete; anyone else's message, a system event or an already deleted one is skipped.
+  - Each delete is attempted once and never retried. The result lists what was deleted, skipped and
+    uncertain, per message.
+  - Files a deleted message shared are reported, not removed or unshared (decided 2026-10-15).
+  - Channels are not covered.

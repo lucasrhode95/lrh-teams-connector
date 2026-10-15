@@ -33,6 +33,7 @@ from teams_connector.remote.substrate_search import SubstrateChatSearch, Substra
 from teams_connector.remote.teams_session import TeamsSession
 from teams_connector.remote.transport import Bearer, Transport
 from teams_connector.service.catalog import Catalog
+from teams_connector.service.delete import Deleter
 from teams_connector.service.export.orchestrator import Exports
 from teams_connector.service.files import Files, Photos
 from teams_connector.service.history import History
@@ -52,6 +53,7 @@ class Services:
     search: Search
     exports: Exports
     sender: Sender
+    deleter: Deleter
     files: Files
     photos: Photos
     presence: Presences
@@ -152,6 +154,7 @@ class AppContext:
                 members=chat_service,
                 me_id=account.object_id,
             ),
+            deleter=Deleter(catalog, history, chat_service),
             files=files,
             photos=Photos(people),
             presence=Presences(

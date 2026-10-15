@@ -5,7 +5,7 @@ A local MCP server and browser UI for one user's Microsoft Teams chats and chann
 - Find conversations by name or participant, then read chat and channel history.
 - Search message text in chosen chats and dates, or discover messages online through Microsoft Search.
 - Export conversations with their attachments, and download files linked from messages.
-- Send a message, only after you explicitly authorize it.
+- Send a message, only after you explicitly authorize it, and delete your own chat messages after you confirm the set.
 
 Local search covers the history the connector has prepared, and online search returns bounded
 pages; neither claims to cover every message or meeting transcript. See the
@@ -95,7 +95,8 @@ The MCP server exposes the tools below. Each one's inputs, results and caveats a
 | `export_chats` | [`service/export/`](src/teams_connector/service/export/) | Export conversations to `.txt`, `.jsonl` or `.zip`, with their attachments |
 | `download_attachment` | [`service/files.py`](src/teams_connector/service/files.py) | Save the files a message names (shared files and pasted images), by message id or by its arrival time; lists those it could not fetch |
 | `get_presence` | [`service/presence.py`](src/teams_connector/service/presence.py) | Availability, activity, device and last-active time of the other person in a one-on-one chat; nothing richer |
-| `send_message` | [`service/send.py`](src/teams_connector/service/send.py) | Send one message (plain text, or HTML sent as written), optionally with inline PNG/JPEG images and local files uploaded to your OneDrive and shared with the chat, after explicit authorization; the only write tool |
+| `send_message` | [`service/send.py`](src/teams_connector/service/send.py) | Send one message (plain text, or HTML sent as written), optionally with inline PNG/JPEG images and local files uploaded to your OneDrive and shared with the chat, after explicit authorization; a write tool |
+| `delete_messages` | [`service/delete.py`](src/teams_connector/service/delete.py) | Delete a set of your own messages in one chat after one explicit confirmation of the set; each delete is attempted once, and the result lists what was deleted, skipped and uncertain; a write tool |
 
 Message timestamps are returned in UTC.
 

@@ -211,6 +211,30 @@ class SendResult(Compact):
     status: Literal["accepted"] = "accepted"
 
 
+class DeletedMessage(Compact):
+    """A message deleted in Teams. ``files`` names the files it shared: they stay in the sender's OneDrive,
+    still shared with the chat."""
+
+    message_id: str
+    sent_at: datetime | None = None
+    files: list[str] = Field(default_factory=list)
+
+
+class NotDeletedMessage(Compact):
+    """A message left as it was (skipped) or whose delete has an unknown outcome (uncertain), and why."""
+
+    message_id: str
+    reason: str
+
+
+class DeleteResult(Compact):
+    conversation_id: str
+    chat_name: str
+    deleted: list[DeletedMessage] = Field(default_factory=list)
+    skipped: list[NotDeletedMessage] = Field(default_factory=list)
+    uncertain: list[NotDeletedMessage] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------------------------- files
 
 

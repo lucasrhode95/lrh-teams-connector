@@ -15,7 +15,7 @@ overview; this document records the rules and contracts they cannot show.
 | Layer | Responsibility |
 |---|---|
 | `src/teams_connector/__main__.py` | Canonical CLI (`teams-connector`) for shared sign-in, profile status, MCP, and UI. Loads MCP and web dependencies only for those commands. |
-| `surfaces/mcp_main.py` | Typed MCP tools over the service layer. Keeps stdio free of logs; `send_message` is the only Teams write tool. |
+| `surfaces/mcp_main.py` | Typed MCP tools over the service layer. Keeps stdio free of logs; `send_message` and `delete_messages` are the only Teams write tools. |
 | `surfaces/web/` | Starlette app, static local export page, and loopback UI launcher. Uses a per-run session token, Host validation, and an idle timeout. |
 | `service/` | Domain behavior for the catalog, message history, exports, attachment downloads, profile photos, and sending. MCP and UI share these operations. |
 | `remote/ports.py` | Interfaces used by services; service code does not depend on concrete HTTP adapters. |
@@ -61,6 +61,7 @@ and the adapters behind them. The split of backends (which private or public ser
 | MCP | `export_chats` | `Exports.export` | `HistoryReader` (`History.selection`), `FileReader` and `ImageReader` (`Files.save`) | `ChatService`, `GraphChannels`, `GraphFiles`, `AmsImages`, `GraphHostedImages` |
 | MCP | `download_attachment` | `Files.download_attachments` (`History.resolve`) | `ChatHistoryReader` (finds the message, and a channel reply's thread), `ChannelHistoryReader`, `FileReader`, `ImageReader` | `ChatService`, `GraphChannels`, `GraphFiles`, `AmsImages`, `GraphHostedImages` |
 | MCP | `send_message` | `Sender.send` (and `Catalog.recipient`) | `ChatWriter`, `ChatCatalog` (chats), `ChannelDirectory` (channels), `MemberReader` and `FileSharer` (files) | `GraphWriter`, `CsaCatalog`, `GraphChannels`, `ChatService`, `GraphFileSharer` |
+| MCP | `delete_messages` | `Deleter.delete` (and `Catalog.recipient`, `History.message`) | `MessageDeleter`, `ChatHistoryReader`, `ChatCatalog` | `ChatService`, `CsaCatalog` |
 | MCP | `get_presence` | `Presences.for_chat` | `PresenceReader` | `TeamsPresence` |
 | UI | `GET /api/status` | token status | none | `TokenProvider` |
 | UI | `GET /api/chats` | `Catalog.list` (or `ensure`) | as `list_chats` | as `list_chats` |
@@ -288,7 +289,8 @@ SharePoint discovery belongs to the SharePoint connector. Email attachments belo
 
 ### Send a message
 
-`send_message` is the only Teams write tool. The user must explicitly authorize both the recipient
+`send_message` is one of the two Teams write tools, with `delete_messages`. The user must explicitly
+authorize both the recipient
 and exact message content. Pass the current conversation name from `list_chats` as
 `expected_chat_name`; the service refreshes only that recipient (a chat's delta, or a channel's name from
 its team), then checks the name before sending. Pass exactly one of `text` (plain text; HTML
@@ -331,3 +333,22 @@ share that fails for some members (Graph's `207 Multi-Status`) counts as failed.
 When something fails, the error names the files already in the sender's OneDrive, which stay there. A
 member without an object id in the directory, such as a federated user, makes the send fail before
 anything is uploaded. The result lists each file's name, as renamed, and its link.
+
+### Delete messages
+
+`delete_messages` soft-deletes a set of the user's own messages in one chat (not a channel), by the ids
+`get_messages` returns: up to 100 per call. The agent first lists the set (chat, count, first and last
+message) and gets the user's explicit confirmation of the whole set; the connector cannot verify that,
+so the rule lives in the tool description and the MCP instructions. The service checks
+`expected_chat_name` against the chat's live name, as a send does, then for each id in order:
+
+1. Reads the message again (`History.message`). A message it cannot read, someone else's, a system event
+   or an already deleted message is skipped with the reason.
+2. Sends Chat Service `DELETE …/messages/{id}?behavior=softDelete` with the Skype token, once
+   ([research](api-research.md#writes-not-used-by-the-connector)). Teams Web's Delete does the same, and
+   it can be undone in Teams.
+
+A refused delete is skipped and the rest continue; an ambiguous one (no response, or HTTP 504) is listed
+as uncertain and never resent. The result lists `deleted` (with each message's time and the names of
+the files it shared, which stay in the sender's OneDrive, still shared with the chat), `skipped` and
+`uncertain`. `get_messages` then shows a deleted message as `is_deleted` with no text.
