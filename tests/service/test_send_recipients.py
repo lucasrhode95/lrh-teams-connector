@@ -78,3 +78,20 @@ async def test_a_channel_that_is_gone_is_refused_after_the_full_refresh(
             CHANNEL, expected_chat_name=channel.name, text="Synthetic text.", user_confirmation=CONFIRMATION
         )
     assert services.store.chat(CHANNEL) is None
+
+
+async def test_an_expired_token_before_a_send_reads_the_snapshot_once(
+    services: Services, fake: FakeTeams
+) -> None:
+    await services.catalog.refresh()
+    chat = services.store.chat(ONE_ON_ONE)
+    assert chat is not None
+    token = services.store.meta("csa_sync_token")
+    assert token
+    fake.expired_tokens.add(token)
+    fake.calls.clear()
+
+    await services.catalog.recipient(ONE_ON_ONE)
+
+    catalog_reads = [call for call in fake.calls if "/csa/" in call and "conversationFolders" not in call]
+    assert len(catalog_reads) == 2  # the refused delta and one snapshot

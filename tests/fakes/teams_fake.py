@@ -151,6 +151,7 @@ class FakeTeams:
     images: dict[str, bytes] = field(default_factory=dict)  # AMS object id -> full-size image bytes
     hosted: dict[str, bytes] = field(default_factory=dict)  # Graph hosted-content id -> image bytes
     favorite_ids: set[str] = field(default_factory=set)  # chats in the Favorites sidebar folder
+    folders_fail: bool = False  # the sidebar folders answer 503
     presence_fails: bool = False  # the regional presence service answers 503
     delta_rows: list[dict[str, Any]] = field(default_factory=list)  # rows returned for the next delta
     deleted_chat_ids: list[str] = field(default_factory=list)
@@ -168,6 +169,8 @@ class FakeTeams:
 
     def _folders(self) -> httpx.Response:
         """The sidebar folders: Favorites lists ``favorite_ids``; the other folder is empty."""
+        if self.folders_fail:
+            return httpx.Response(503, json={"errorCode": "ServiceUnavailable"})
         favorites = [{"conversationId": chat_id} for chat_id in sorted(self.favorite_ids)]
         return httpx.Response(
             200,

@@ -32,6 +32,7 @@ from teams_connector.domain.models import (
     Participant,
 )
 from teams_connector.remote.ports import (
+    CatalogUpdate,
     ChannelDirectory,
     ChatCatalog,
     ChatMemberSearch,
@@ -78,19 +79,32 @@ class Catalog:
     async def ensure(self, *, refresh: bool) -> str:
         """Make the stored catalog usable. Returns the source: 'remote' (refreshed now) or 'local'."""
         age = self.age()
-        if refresh or age is None or age > CATALOG_TTL_SECONDS:
+        if refresh or age is None or age > CATALOG_TTL_SECONDS or self._favorites_unread():
             await self.refresh()
             return "remote"
         return "local"
+
+    def _favorites_unread(self) -> bool:
+        """Favorites are on here but the stored catalog was refreshed without reading them (by a process
+        with the setting off)."""
+        if self._favorites is None or not config.favorites_enabled():
+            return False
+        stamp = self._store.meta("catalog_at")
+        return stamp is not None and self._store.meta("favorites_attempt_at") != stamp
 
     async def refresh(self) -> None:
         async with self._lock:
             await self._refresh_all()
 
-    async def _refresh_all(self) -> None:
-        bootstrapped = self._store.meta("catalog_bootstrapped") == "1"
-        token = self._store.meta("csa_sync_token") if bootstrapped else None
-        update = await self._source.updates(token)
+    async def _refresh_all(self, snapshot: CatalogUpdate | None = None) -> None:
+        """Refresh chats, channels, Favorites and the self chat. ``snapshot``: a full snapshot already read
+        (the delta token was refused), used instead of asking for it again."""
+        if snapshot is None:
+            bootstrapped = self._store.meta("catalog_bootstrapped") == "1"
+            token = self._store.meta("csa_sync_token") if bootstrapped else None
+            update = await self._source.updates(token)
+        else:
+            update = snapshot
         notes = list(update.notes)
 
         known_channels = {c.id: c for c in self._store.chats(kind="channel")}
@@ -111,12 +125,14 @@ class Catalog:
         activity = {c.id: c for c in update.channel_activity}
         channels = [_with_activity(chat, activity.get(chat.id)) for chat in listed.values()]
 
-        meta = {"csa_sync_token": update.sync_token, "catalog_at": str(time.time())}
+        stamp = str(time.time())
+        meta = {"csa_sync_token": update.sync_token, "catalog_at": stamp}
         if update.full:
             meta["catalog_bootstrapped"] = "1"
             meta["catalog_complete"] = "1" if update.complete is not False else "0"
         if self._favorites is not None and config.favorites_enabled():
-            await _read_favorites(self._favorites, notes, meta)
+            meta["favorites_attempt_at"] = stamp
+            await _read_favorites(self._favorites, notes, meta, stamp)
         self._store.save_catalog(
             [*update.chats, *channels], deleted_ids=[*update.deleted_ids, *vanished], meta=meta
         )
@@ -143,8 +159,8 @@ class Catalog:
         """The chat delta alone. Its sync token is not stored, so the next full refresh reads the same
         delta again; applying it twice is harmless, and channel activity in it is never lost."""
         update = await self._source.updates(self._store.meta("csa_sync_token"))
-        if update.full:  # the token was rejected: only a full refresh can rebuild the snapshot
-            await self._refresh_all()
+        if update.full:  # the token was rejected: the snapshot read here rebuilds the catalog
+            await self._refresh_all(update)
             return
         self._store.save_catalog(update.chats, deleted_ids=update.deleted_ids)
 
@@ -247,9 +263,12 @@ class Catalog:
         )
 
     def _favorite_ids(self) -> set[str] | None:
-        """The Favorites set stored by the last refresh with the setting on; None when there is none."""
+        """The Favorites set read with the stored catalog; None when that refresh did not read it (the
+        setting was off, or the folder did not answer): an older set is never shown as current."""
         stored = self._store.meta("favorite_ids")
-        return None if stored is None else set(json.loads(stored))
+        if stored is None or self._store.meta("favorites_at") != self._store.meta("catalog_at"):
+            return None
+        return set(json.loads(stored))
 
     def coverage(self, source: str, total: int, empty_excluded: int = 0) -> CatalogCoverage:
         stamp = self._store.meta("catalog_at")
@@ -421,9 +440,11 @@ def _plain_text(query: str) -> bool:
     return bool(_PLAIN_TEXT.fullmatch(query)) and not _QUERY_OPERATOR.search(query)
 
 
-async def _read_favorites(source: FavoriteFolders, notes: list[str], meta: dict[str, str]) -> None:
-    """Store the chats in the Favorites folder with the catalog. When the folder cannot be read, the stored
-    set stays and the coverage notes say so."""
+async def _read_favorites(
+    source: FavoriteFolders, notes: list[str], meta: dict[str, str], stamp: str
+) -> None:
+    """Store the chats in the Favorites folder with the catalog, marked with its refresh time. When the
+    folder cannot be read, no flags are shown until a refresh reads it, and the coverage notes say so."""
     try:
         favorites = await source.favorite_ids()
     except AuthenticationRequired:
@@ -432,6 +453,7 @@ async def _read_favorites(source: FavoriteFolders, notes: list[str], meta: dict[
         notes.append(f"Favorites were not refreshed: {exc}")
         return
     meta["favorite_ids"] = json.dumps(sorted(favorites))
+    meta["favorites_at"] = stamp
 
 
 def _with_favorite(chat: Chat, favorites: set[str] | None) -> Chat:
