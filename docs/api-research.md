@@ -3478,3 +3478,17 @@ Read-only probes through the connector's own session: the 25 most recently activ
   it is not an image.
 - 23 messages show an AMS URL as link text: 18 without attachments and 5 with SharePoint files. These are not image
   elements, are not fetched, and keep their link text.
+
+## HTML sends, live check (2026-10-15)
+
+One synthetic HTML message was sent once to the self chat, and the stored record was read back through Chat
+Service (`GET .../messages/{id}`, status 200). The sent markup used headings, paragraphs, bold, italics,
+underline, inline and block code, unordered and ordered lists, a block quote, a link, a table and a line break.
+
+- Teams stored every element sent: `h2`, `p`, `strong`, `em`, `u`, `code`, `pre`, `ul`, `ol`, `li`,
+  `blockquote`, `a`, `table`, `tr`, `td` and `br`. It added one `tbody` around the table rows; nothing was dropped.
+- The stored message type was `RichText/Html`.
+- The connector's rendering of the stored message kept the heading, a list item and the link text.
+- The stored markup shows what Teams keeps, not how a Teams client draws it. Visual rendering of headings and
+  tables was not inspected. Images were not sent in this check; the passive rules do not refuse `img`, as the
+  Outlook rules do not.

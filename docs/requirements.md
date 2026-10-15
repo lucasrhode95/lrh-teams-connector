@@ -24,7 +24,7 @@ The connector must:
 - treat Teams as the record: keep no local copy of message content (§6);
 - send a text message the user explicitly authorized.
 
-Presence, Favorites and HTML sends are optional extras, tracked in the roadmap. Outlook, Teams and
+Presence and Favorites are optional extras, tracked in the roadmap. Outlook, Teams and
 SharePoint are separately installed connectors that share one sign-in (`lrh-m365-auth`); each keeps
 its own product logic.
 
@@ -142,5 +142,5 @@ counts as broad Microsoft 365 search.
   user's unread state in Teams stays as it was.
 - **Sending** needs the user's explicit authorization for both the recipient and the exact content.
   The current conversation name must match `expected_chat_name`. Text is escaped, sent once, and the
-  server message id is returned. Verified live for the self chat, one-on-one and group chats
+  server message id is returned. HTML (`html`, decided 2026-10-15) is sent as written after the passive check. Verified live for the self chat, one-on-one and group chats
   (2026-10-14); channels and meeting chats are roadmap S3.

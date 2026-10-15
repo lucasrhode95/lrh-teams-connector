@@ -244,7 +244,9 @@ SharePoint discovery belongs to the SharePoint connector. Email attachments belo
 `send_message` is the only Teams write tool. The user must explicitly authorize both the recipient
 and exact message content. Pass the current conversation name from `list_chats` as
 `expected_chat_name`; the service refreshes only that recipient (a chat's delta, or a channel's name from
-its team), then checks the name before sending. HTML characters are escaped and the
+its team), then checks the name before sending. Pass exactly one of `text` (plain text; HTML
+characters are escaped) or `html` (HTML sent as written, after a passive check that refuses scripts, frames,
+form controls, event-handler attributes, `javascript:` and `vbscript:` URLs and unfinished markup). The
 message is attempted once. A network failure after the request may leave the result uncertain, so
 inspect the conversation before deciding whether another send is needed. A search result or request
 to analyze a conversation does not authorize a send.
