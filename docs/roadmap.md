@@ -5,7 +5,7 @@ Open bugs, improvements, enhancements and validation only. What the connector mu
 evidence is in the [research record](api-research.md). Delete an item once it is done. Codes are
 never reused.
 
-Snapshot **2026-10-14**.
+Snapshot **2026-10-15**.
 
 ## Bugs
 
@@ -41,6 +41,36 @@ only when `Results` is a list (`_message_rows` in
 
 **Fix:** treat a result set that reports `Total: 0` as a confirmed empty page.
 
+### B3 — Meeting and membership events come back as raw markup
+
+**Seen:** `get_messages` on a meeting chat returns, for the meeting that ended,
+`text: "<ended/><partlist alt=\"\" count=\"3\"><part identity=\"8:orgid:…\"><name>…</name><displayName>Alex Kim</displayName><duration>2502</duration></part>…<meetingDetails>…"`
+(about 1,800 characters, cut and `text_truncated`), `system_event: "Event/Call"`. A member joining
+returns its JSON: `{"eventtime":…,"initiator":"8:orgid:…","members":[{"id":"8:orgid:…","friendlyname":"Sam Lee",…}]}`.
+In one meeting chat, 8 of 15 consecutive messages were such records.
+
+**Expected:** each event shown as one short line with only what Teams shows, in `get_messages` and in
+exports alike:
+
+```text
+[Meeting started: Weekly sync]
+[Meeting ended · 41m 42s · Alex Kim, Sam Lee, Jo Park]
+[Sam Lee joined]
+[Sam Lee left]
+```
+
+Organizer addresses, iCal ids, transcript and recap flags and identity strings are left out. An event
+type without a known rendering becomes `[<type>]`, never its raw content.
+
+**Cause:** `to_message` in
+[`chat_service_mapping.py`](../src/teams_connector/remote/chat_service_mapping.py) renders every
+record's `content` through the HTML renderer; event records carry XML or JSON, not message HTML
+([research](api-research.md#meeting-and-membership-events)).
+
+**Fix:** render `Event/Call` (started; ended with duration and participants) and
+`ThreadActivity/MemberJoined`, `MemberLeft`, `AddMember` and `TopicUpdate` from their fields; keep
+`system_event` as the type.
+
 ## Improvements
 
 Working behavior that could be cheaper, simpler or better informed.
@@ -56,7 +86,8 @@ archive:
 | `search_messages`: fetch a scope, match locally | Search v2 scoped the way Teams Web scopes it: `clientthreadid:<id>`, `sent >= … AND sent < …`, a `conversationType` filter, `NOT (isClientSoftDeleted:TRUE)`. Merge it with `search_remote_messages` into one tool (P2.2d). |
 | `search_chats` participant matches from indexed rosters | P2.2b |
 | `get_messages` merges remote pages with retained ones | Read Teams only; drop the archive merge and its paging floor |
-| `get_message_content`, `download_attachment` read the archived message | Re-read the message: chat message ids are epoch milliseconds, so `startTime` just before the id returns it first; channels by Graph message id |
+| `get_message_content` reads the archived message | Removed by R2 |
+| `download_attachment` reads the archived message | Re-read the one message from Chat Service, by id or by time (N1) |
 | Exports stream from SQLite | Stream through the export's own temporary file |
 | `sync_archive`, `archive_status`, the `backup` command | Remove |
 | Catalog, sync token, untitled-chat names, omitted channels, photo ids | Keep, in a small account-bound cache with no message text |
@@ -133,6 +164,24 @@ separate paragraphs. Teams Web displays consecutive paragraphs one line apart.
 **Fix:** confirm the stored markup of a multi-line message, then render consecutive paragraphs with
 one line break. Low priority.
 
+### R2 — Whole messages per page; remove `get_message_content`
+
+`get_messages` fits each page into `max_chars` (30,000 by default) by cutting long messages and
+marking them `text_truncated`; the agent then calls `get_message_content` to read the rest of each
+one. Keep the page budget, since up to 50 long messages could otherwise fill the agent's context, but
+spend it on whole messages: fill the page until the next message would exceed `max_chars`, then stop
+and return the cursor there, as Outlook's `get_conversation` does.
+
+**Example:** a page of 25 messages where three are 12,000-character pasted logs. Today the page holds
+all 25, the logs cut to fit, plus three `get_message_content` calls to finish them. After the change
+the first page ends before the second log, and the cursor's next page starts with it, whole.
+
+- A page always holds at least one message, whole, even when it alone exceeds `max_chars`, so a walk
+  always advances. Teams bounds a message's size (roughly 28 KB; confirm), so that page stays bounded.
+- `page_size` becomes "at most": a page can hold fewer messages when they are long.
+- Remove `text_truncated` and `get_message_content`. This also removes one of the archive reads that
+  D2 would otherwise have to rebuild on Teams.
+
 ## Enhancements
 
 ### P1.5 — Send host files as attachments
@@ -152,30 +201,34 @@ Settle before relying on it:
   `properties.files`; [research](api-research.md#upload-chat-file)) is a fallback only if Graph's path
   loses something.
 
-### N7 — Markdown to Teams rich text
+### N7 — HTML sends
 
-Agents write Markdown, but `send_message` escapes it and Teams shows the asterisks. Convert a safe
-subset to Teams HTML instead.
+`send_message` takes plain text only and escapes it, so an agent cannot send bold text, lists, links
+or code. Add `html` beside `text` as two mutually exclusive body arguments: exactly one is required,
+and passing both or neither is refused. Nothing is parsed or converted. `text` stays escaped as
+today, so Markdown in it arrives as literal asterisks; `html` is sent as written. Agents write HTML
+well, so there is no Markdown conversion.
 
 **Example:** the agent sends
-
-```markdown
-**Due Friday**
-- review the `budget` sheet
-- [tracker](https://example.com/tracker)
-```
-
-and Teams should receive
 
 ```html
 <p><strong>Due Friday</strong></p>
 <ul><li>review the <code>budget</code> sheet</li><li><a href="https://example.com/tracker">tracker</a></li></ul>
 ```
 
-Support paragraphs and line breaks, bold, italics, inline code, fenced code, lists and links; tables
-only if Teams renders them reliably. Escape raw HTML, and degrade anything unsupported to readable
-text rather than failing the send. Keep a plain-text mode for exact sends. Check rendering with
-disposable self-chat messages.
+as `html`, and Teams shows a bold line followed by a two-item list with inline code and a link. The
+same content sent as `text` shows the tags literally.
+
+Settle before relying on it:
+
+- Refuse unsafe HTML where it enters instead of rewriting it: scripts, frames, form controls,
+  event-handler attributes, `javascript:` URLs and unfinished markup. The Outlook connector's
+  [passive HTML check](https://github.com/lucasrhode95/lrh-outlook-connector/blob/main/src/outlook_connector/service/passive_html.py)
+  is the reference rule set; the Teams code keeps its own copy.
+- Which elements Teams renders: paragraphs, line breaks, bold, italics, inline and block code, lists
+  and links are expected; headings, tables and images need a check. Document what Teams strips.
+- The 10,000-character limit applies to the HTML as sent.
+- Check rendering with disposable self-chat messages.
 
 ### P2.2f — Meeting recaps and transcripts
 
@@ -197,20 +250,59 @@ which requires admin consent
 ([research](api-research.md#meeting-recaps-and-transcripts-as-search-sources-2026-10-10)). Respect
 the download restriction the Teams UI showed for one meeting; a reference is not permission.
 
-### N1 — Conversation viewer with authenticated resources
+### N1 — Attachments and inline images by name
 
-The UI exports conversations and serves only profile photos (`/api/photos/{user_id}`). A viewer that
-shows message images and files needs a resource gateway. It would also cover sender pictures (former
-N3) and rendering fidelity (former N4).
+Decided 2026-10-15; replaces the earlier resource-gateway viewer. Today pasted images appear only as
+`[Image: https://…/views/imgo]` in the text, never as attachments, so exports and
+`download_attachment` skip them; the URL is a compressed preview; downloads go only through Graph
+`/shares`; and an emoji sent as a `data:` URI puts its base64 into the text
+([research](api-research.md#inline-images-ams)).
 
-- Serve `GET /api/resources/{opaque_id}`, never `?url=https://…`: an arbitrary URL would leak into
-  logs and make the server an open proxy.
-- Resolve the opaque id to a resource found earlier, with its validated host, path family and fetch
-  strategy. Allow only Teams, AMS and the tenant's SharePoint/OneDrive hosts.
-- Never forward the caller's headers or return a Microsoft token; stream the bytes, keeping only the
-  type, length and file name.
-- Use one fetch layer for photos, AMS images and SharePoint files, shared with exports. Optionally
-  expose the same resource as an MCP Resource.
+**One extraction, three uses.** The same text rendering serves every route:
+
+- `get_messages` returns text only. Each attachment or inline image is a marker with a stable name.
+- `download_attachment` fetches the files the agent chooses, so it can judge from context what is
+  worth downloading and what is a joke GIF.
+- `export_chats` wraps the same extraction: by default it downloads every file its text names and
+  writes each beside the text under that exact name; `include_attachments=false` writes text only.
+
+**Markers.** Names come from the message itself, so the same message always gives the same names:
+
+| Source | Marker | Name from |
+|---|---|---|
+| AMS image (`itemtype=…/AMSImage`) | `[Image: 0-neu-d1-0123….png]` | `itemid` (the AMS object id) and `itemscope` (the type) |
+| `data:` image | `[Image: sha-3f9a1c2e.png]` | SHA-256 prefix of the decoded bytes and the MIME type |
+| SharePoint or OneDrive file (`properties.files`) | `[File: budget-report.xlsx]` | the file's own name |
+
+Equal names within one message get ` (2)`, ` (3)` in message order. Emoji, custom emoji and stickers
+render as their `alt` or `title` text, not as markers. External images such as Giphy render as
+`[GIF: <title>] <link>` and are never fetched. Base64 never reaches a response.
+
+**`download_attachment` contract:** `conversation_id`; exactly one of `message_id` or `sent_at` (the
+time exactly as the TXT export prints it); `names`, optional, all of the message's files when
+omitted. It reads that one message again from Chat Service, by id
+(`GET …/messages/{id}`) or by time (`startTime` = `endTime`, then the exact-time match), runs the
+same extraction and resolves the names. No identity cache is kept: the message is the index. Several
+messages at the same time is an error that lists their ids. Results are local paths, never MCP
+resources or inline bytes.
+
+**Fetching:** always full resolution. AMS images: `GET <AMS host>/v1/objects/{id}/views/imgpsh_fullsize`
+with `Authorization: skype_token`; previews such as `imgo` are never used. Add the AMS hosts
+(`*.asm.skype.com`, `*.asyncgw.teams.microsoft.com`) to the allowed hosts. `data:` images are decoded
+from the message. SharePoint and OneDrive files keep the Graph `/shares` route.
+
+**Download once:** the disk is the cache. Files go to a folder named by their source, under the
+marker name: AMS by object id, `data:` images by SHA-256, SharePoint and OneDrive by drive item id
+and version. An existing file is returned without fetching. Write to a temporary file and rename, so
+concurrent processes are safe; the seven-day cleanup applies. Nothing downloads while reading
+([requirements §6](requirements.md#6-local-data-decided-2026-10-14)).
+
+**Exports:** TXT keeps today's lean header (exact UTC time, sender, reply and deletion marks) with the
+markers in place of image URLs, and no ids; JSONL keeps every field, ids included.
+
+**Settle while building:** channel history is read through Graph, which presents pasted images as
+`hostedContents` URLs rather than AMS elements. Chat Service also serves channels (single reads were
+checked live), so read channel history there too, or map Graph's hosted content to the same names.
 
 ### N5 — Presence
 

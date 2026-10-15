@@ -24,8 +24,7 @@ The connector must:
 - treat Teams as the record: keep no local copy of message content (§6);
 - send a text message the user explicitly authorized.
 
-Presence, Favorites, sender pictures, Markdown sends and a conversation viewer are optional extras,
-tracked in the roadmap. Outlook, Teams and SharePoint are separately installed connectors that share
+Presence, Favorites and HTML sends are optional extras, tracked in the roadmap. Outlook, Teams and SharePoint are separately installed connectors that share
 one sign-in (`lrh-m365-auth`); each keeps its own product logic.
 
 ## 2. Ownership (2026-10-11)
@@ -73,6 +72,7 @@ The current split ([research](api-research.md#microsoft-graph-with-the-teams-cli
 | People's names and photos | Graph | |
 | Sending | Graph | Returns the server message id |
 | Downloading files linked from messages | Graph shares | |
+| Downloading pasted images | AMS, private (planned, roadmap N1) | AMS holds them; the Skype token reads them ([research](api-research.md#inline-images-ams)) |
 | Online message discovery | Search v2 (`m365.search`) | Graph `chatMessage` search is denied to the tested client |
 
 Teams-native services stay where they are richer than Graph: presence, Favorites and read state,
@@ -130,6 +130,14 @@ counts as broad Microsoft 365 search.
   holding the text and its attachments. Several conversations are wrapped in one outer ZIP.
   Attachments are included by default, up to 200 references per conversation, 100 MiB per file and
   250 MiB per conversation. A failed download keeps the text and marks the attachment unavailable.
+  TXT is for reading and keeps a lean header; JSONL is for code and keeps every field.
+- **Attachments by name** (decided 2026-10-15, roadmap N1): one text extraction serves
+  `get_messages`, exports and downloads. Files and pasted images appear in the text as markers with
+  names derived from the message; `download_attachment` fetches the named files of one message, at
+  full resolution, to local paths, and fetches each source once. Base64 image data never reaches a
+  response, and nothing is downloaded while reading.
+- **Meeting and membership events** read as one short line each, never as their raw markup
+  (roadmap B3).
 - **Sending** needs the user's explicit authorization for both the recipient and the exact content.
   The current conversation name must match `expected_chat_name`. Text is escaped, sent once, and the
   server message id is returned. Verified live for the self chat, one-on-one and group chats
