@@ -95,6 +95,31 @@ archive:
 Then reset local state; no migration. Update the README, architecture, MCP server instructions and
 tests in the same change.
 
+### D3 — Organize the documentation by service
+
+The code already separates the services: services depend only on the capability ports in
+[`remote/ports.py`](../src/teams_connector/remote/ports.py) (`ChatCatalog`, `HistoryReader`,
+`ChatWriter`, `FileReader`, `MessageSearchReader` and others), one adapter per service implements
+them, and only `bootstrap.py` wires the two. That is what let sending move from Chat Service to Graph
+without touching a service. The documentation does not show this split: the research record mixes
+services by topic and date, and the architecture has no table of which service backs each tool.
+Follow the Outlook connector's layout
+([architecture](https://github.com/lucasrhode95/lrh-outlook-connector/blob/main/docs/architecture.md),
+[research](https://github.com/lucasrhode95/lrh-outlook-connector/blob/main/docs/api-research.md)):
+
+- **Research:** regroup by owner: Microsoft Graph; the Teams private services (AuthZ, Chat Service,
+  CSA, Middle Tier, AMS); Microsoft Search (Search v2); SharePoint and OneDrive. Move findings with
+  their dates; do not rewrite evidence. Keep or redirect every anchor that the roadmap, requirements,
+  architecture, README and the Outlook repository link to.
+- **Architecture:** one table mapping each MCP tool and UI route to its port, adapter and service,
+  consistent with the backend split in [requirements §4](requirements.md#4-backend-choice); one references the other
+  instead of repeating it.
+- **README and docs index:** say which service backs what, in the Outlook README's style.
+
+Example: a reader looking up how a pasted image is downloaded goes to the AMS section of the
+research, and the architecture table shows `download_attachment` → `FileReader` → AMS and Graph
+`/shares`.
+
 ### P2.2d — Search v2 message search improvements
 
 The hit id is the history message id, and Teams Web shows how to scope, filter and page
