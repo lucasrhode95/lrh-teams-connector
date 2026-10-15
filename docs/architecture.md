@@ -240,7 +240,8 @@ the SharePoint connector. Email attachments belong to Outlook.
 
 `send_message` is the only Teams write tool. The user must explicitly authorize both the recipient
 and exact message content. Pass the current conversation name from `list_chats` as
-`expected_chat_name`; the service checks it before sending. HTML characters are escaped and the
+`expected_chat_name`; the service refreshes only that recipient (a chat's delta, or a channel's name from
+its team), then checks the name before sending. HTML characters are escaped and the
 message is attempted once. A network failure after the request may leave the result uncertain, so
 inspect the conversation before deciding whether another send is needed. A search result or request
 to analyze a conversation does not authorize a send.

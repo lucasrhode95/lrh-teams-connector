@@ -44,8 +44,7 @@ class Sender:
             raise InvalidRequest(
                 "user_confirmation must record the user's explicit authorization to send this."
             )
-        await self._catalog.refresh()  # validate against the live catalog, not a stale cache
-        chat = await self._catalog.get(conversation_id)
+        chat = await self._catalog.recipient(conversation_id)  # the live name of this recipient only
         if _normalized_name(chat.name) != _normalized_name(expected_chat_name):
             raise InvalidRequest(
                 "expected_chat_name does not match the chat's current name; "

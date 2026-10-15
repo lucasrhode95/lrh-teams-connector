@@ -3361,3 +3361,14 @@ found the same channels as the sequential one it replaces.
 
 Graph's `$batch` also decodes percent-encoded sub-request paths. Channel and thread ids contain `:` and
 `@`, which the client encodes in the URL; the test fake now decodes batch paths the same way.
+
+## Recipient refresh before a send (2026-10-15)
+
+**Evidence:** read-only recipient refreshes on one one-on-one chat and one channel of the signed-in account,
+then one synthetic message to the self chat, counting requests by kind (no content kept).
+
+- One-on-one chat: one CSA delta request; no joined-teams or channel listing.
+- Channel: one joined-teams listing and one channel GET; no channel listing.
+- The catalog's freshness mark did not change, so listings still wait for a full refresh.
+- Self-chat send: one message POST, and the returned id was present.
+

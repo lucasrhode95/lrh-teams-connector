@@ -84,6 +84,22 @@ class GraphChannels:
                     raise sub_failure(response, detail="while finding channels by id")
         return list(found.values())
 
+    async def channel(self, team_id: str, channel_id: str) -> Chat | None:
+        """One channel read in its team. The team's name comes from the joined-teams listing, because a
+        channel's listed name includes it. None when the team or the channel is no longer reachable."""
+        team = next((t for t in await self._teams() if t.get("id") == team_id), None)
+        if team is None:
+            return None
+        with operation("reading one channel"):
+            try:
+                row = await self._graph.get(
+                    f"/teams/{segment(team_id)}/channels/{segment(channel_id)}",
+                    {"$select": "id,displayName,membershipType"},
+                )
+            except (NotFound, InvalidRequest):
+                return None
+        return graph_mapping.channel(team, row) if row.get("id") else None
+
     async def page(
         self,
         chat: Chat,

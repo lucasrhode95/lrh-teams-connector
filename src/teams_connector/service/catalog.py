@@ -71,38 +71,84 @@ class Catalog:
 
     async def refresh(self) -> None:
         async with self._lock:
-            bootstrapped = self._store.meta("catalog_bootstrapped") == "1"
-            token = self._store.meta("csa_sync_token") if bootstrapped else None
-            update = await self._source.updates(token)
-            notes = list(update.notes)
+            await self._refresh_all()
 
-            known_channels = {c.id: c for c in self._store.chats(kind="channel")}
-            vanished: list[str] = []
-            try:
-                listed = {c.id: c for c in await self._channels.channels()}
-                # Channels the listing omits: rows the private catalog knows, and channels we stored before.
-                missing = [c.id for c in update.channel_activity if c.id not in listed]
-                missing += [i for i in known_channels if i not in listed and i not in missing]
-                for chat in await self._channels.locate(missing):
-                    listed[chat.id] = chat
-                vanished = [i for i in known_channels if i not in listed]
-            except AuthenticationRequired:
-                raise
-            except ConnectorError as exc:  # channels stay as stored; chats still refresh
-                listed = {}
-                notes.append(f"Channels were not refreshed: {exc}")
-            activity = {c.id: c for c in update.channel_activity}
-            channels = [_with_activity(chat, activity.get(chat.id)) for chat in listed.values()]
+    async def _refresh_all(self) -> None:
+        bootstrapped = self._store.meta("catalog_bootstrapped") == "1"
+        token = self._store.meta("csa_sync_token") if bootstrapped else None
+        update = await self._source.updates(token)
+        notes = list(update.notes)
 
-            meta = {"csa_sync_token": update.sync_token, "catalog_at": str(time.time())}
-            if update.full:
-                meta["catalog_bootstrapped"] = "1"
-                meta["catalog_complete"] = "1" if update.complete is not False else "0"
-            self._store.save_catalog(
-                [*update.chats, *channels], deleted_ids=[*update.deleted_ids, *vanished], meta=meta
-            )
-            self._notes = notes
-            await self._refresh_self_chat()
+        known_channels = {c.id: c for c in self._store.chats(kind="channel")}
+        vanished: list[str] = []
+        try:
+            listed = {c.id: c for c in await self._channels.channels()}
+            # Channels the listing omits: rows the private catalog knows, and channels we stored before.
+            missing = [c.id for c in update.channel_activity if c.id not in listed]
+            missing += [i for i in known_channels if i not in listed and i not in missing]
+            for chat in await self._channels.locate(missing):
+                listed[chat.id] = chat
+            vanished = [i for i in known_channels if i not in listed]
+        except AuthenticationRequired:
+            raise
+        except ConnectorError as exc:  # channels stay as stored; chats still refresh
+            listed = {}
+            notes.append(f"Channels were not refreshed: {exc}")
+        activity = {c.id: c for c in update.channel_activity}
+        channels = [_with_activity(chat, activity.get(chat.id)) for chat in listed.values()]
+
+        meta = {"csa_sync_token": update.sync_token, "catalog_at": str(time.time())}
+        if update.full:
+            meta["catalog_bootstrapped"] = "1"
+            meta["catalog_complete"] = "1" if update.complete is not False else "0"
+        self._store.save_catalog(
+            [*update.chats, *channels], deleted_ids=[*update.deleted_ids, *vanished], meta=meta
+        )
+        self._notes = notes
+        await self._refresh_self_chat()
+
+    async def recipient(self, conversation_id: str) -> Chat:
+        """The current chat for one send. Only the recipient is refreshed: a one-on-one, group or meeting
+        chat by the catalog's delta, a channel by its team's listing and its own read. The self chat is
+        read from the store. The freshness mark of the stored catalog does not change, so listings still
+        wait for a full refresh."""
+        conversation_id = _conversation_id(conversation_id)
+        async with self._lock:
+            stored = self._store.chat(conversation_id)
+            if stored is None:
+                await self._refresh_all()
+            elif stored.kind == "channel":
+                await self._refresh_channel(stored)
+            elif stored.kind != "self":
+                await self._refresh_chats()
+        return await self.get(conversation_id)
+
+    async def _refresh_chats(self) -> None:
+        """The chat delta alone. Its sync token is not stored, so the next full refresh reads the same
+        delta again; applying it twice is harmless, and channel activity in it is never lost."""
+        update = await self._source.updates(self._store.meta("csa_sync_token"))
+        if update.full:  # the token was rejected: only a full refresh can rebuild the snapshot
+            await self._refresh_all()
+            return
+        self._store.save_catalog(update.chats, deleted_ids=update.deleted_ids)
+
+    async def _refresh_channel(self, channel: Chat) -> None:
+        """One channel's name and membership from its team, keeping its stored activity."""
+        fresh = await self._channels.channel(channel.team_id, channel.id) if channel.team_id else None
+        if fresh is None:  # gone or moved, or its team is unknown: the full refresh decides what is left
+            await self._refresh_all()
+            return
+        self._store.save_catalog(
+            [
+                fresh.model_copy(
+                    update={
+                        "last_message_at": channel.last_message_at,
+                        "last_message_preview": channel.last_message_preview,
+                        "unread": channel.unread,
+                    }
+                )
+            ]
+        )
 
     async def _refresh_self_chat(self) -> None:
         """The catalog's deltas omit the self chat's activity; read its newest message instead."""
@@ -136,9 +182,7 @@ class Catalog:
 
     async def get(self, conversation_id: str) -> Chat:
         """A catalog chat, refreshing the catalog once if it is not known yet."""
-        if not conversation_id or not conversation_id.strip():
-            raise InvalidRequest("conversation_id must be a non-empty string.")
-        conversation_id = conversation_id.strip()
+        conversation_id = _conversation_id(conversation_id)
         if self.age() is None:
             await self.refresh()
         chat = self._store.chat(conversation_id)
@@ -257,6 +301,12 @@ class Catalog:
             unresolved_participants=unresolved,
             notes=notes,
         )
+
+
+def _conversation_id(value: str) -> str:
+    if not value or not value.strip():
+        raise InvalidRequest("conversation_id must be a non-empty string.")
+    return value.strip()
 
 
 def _with_activity(channel: Chat, activity: Chat | None) -> Chat:

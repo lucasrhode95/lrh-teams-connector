@@ -98,16 +98,6 @@ the chat-list cache keeps member lists for that case. Chat *suggestions* need a 
 Substrate token, a new `lrh-m365-auth` profile, and return fewer chats than route 2, so they are not
 needed.
 
-### S2 — Check a send's recipient without a full catalog refresh
-
-`send_message` refreshes the whole catalog to confirm the recipient's current name
-([`Sender.send`](../src/teams_connector/service/send.py)). That costs a CSA delta, the joined-teams
-and channel listings of every team, the omitted-channel lookups and a self-chat history read,
-where the check needs only the one conversation.
-
-**Fix:** refresh only what the recipient needs: the CSA delta for a chat, or one Graph GET of
-`/teams/{team}/channels/{channel}` for a channel. The live name check itself stays.
-
 ### R2 — Whole messages per page; remove `get_message_content`
 
 `get_messages` fits each page into `max_chars` (30,000 by default) by cutting long messages and

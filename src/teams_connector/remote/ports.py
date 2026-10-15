@@ -83,6 +83,10 @@ class ChannelDirectory(Protocol):
         """Channels the listing omits (e.g. some shared channels), found by id in the joined teams."""
         ...
 
+    async def channel(self, team_id: str, channel_id: str) -> Chat | None:
+        """One channel with its current name, read in its team; None when it is no longer reachable."""
+        ...
+
 
 class HistoryReader(Protocol):
     async def page(
