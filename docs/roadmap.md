@@ -298,7 +298,9 @@ render as their `alt` or `title` text, not as markers. External images such as G
 time exactly as the TXT export prints it); `names`, optional, all of the message's files when
 omitted. It reads that one message again from Chat Service, by id
 (`GET …/messages/{id}`) or by time (`startTime` = `endTime`, then the exact-time match), runs the
-same extraction and resolves the names. No identity cache is kept: the message is the index. Several
+same extraction and resolves the names. Both are plain reads that leave the chat's read state as it
+was ([requirements §8](requirements.md#8-history-exports-and-sending)). No identity cache is kept:
+the message is the index. Several
 messages at the same time is an error that lists their ids. Results are local paths, never MCP
 resources or inline bytes.
 
@@ -363,7 +365,8 @@ a refusal is reported clearly.
 ### N2 — Unread state
 
 `list_chats` reports CSA's `unread` flag. Check that it follows the Teams UI after a chat is read in
-another client.
+another client, and that reading an unread chat through the connector (`get_messages`,
+`download_attachment`, an export) leaves it unread in Teams.
 
 ### A1 — Fresh-account sign-in
 
