@@ -39,6 +39,8 @@ ACTIVE = [
     ("<?xml version='1.0'?><p>x</p>", "processing instructions"),
     ('<p>see <img src="https://example.com/x.png"></p>', "Embedded media"),
     ('<video src="https://example.com/v.mp4"></video>', "Embedded media"),
+    ('<image src="https://example.com/x.png">', "Embedded media"),
+    ('<svg><image href="https://example.com/x.png"></image></svg>', "Embedded media"),
 ]
 
 

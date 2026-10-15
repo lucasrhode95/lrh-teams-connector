@@ -105,9 +105,9 @@ edited message with its newest text and `edited_at`, and a deleted message marke
 
 A small local cache of the chat list stays, holding no message text: the catalog sync token, the
 names worked out for untitled chats, the channels Graph's listing omits, and photo ids. It holds no
-chat member lists; participant matches come from Teams' chat search (roadmap P2.2b). A store from the
-version that kept messages is moved aside, not deleted, on first use, and the catalog is rebuilt from
-Teams ([architecture](architecture.md#requests-caching-and-storage)). Downloaded attachments are kept per source for a week, so a repeat download is served from disk; they are files Teams shares, not message text.
+chat member lists; participant matches come from Teams' chat search. A damaged store is moved aside,
+not deleted, and the catalog is rebuilt from Teams
+([architecture](architecture.md#requests-caching-and-storage)). Downloaded attachments are kept per source for a week, so a repeat download is served from disk; they are files Teams shares, not message text.
 
 ## 7. Search
 

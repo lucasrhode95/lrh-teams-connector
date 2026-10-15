@@ -6,7 +6,7 @@ from teams_connector.__main__ import EXIT_OK, build_parser, main
 from tests.fakes.teams_fake import FakeTokens
 
 
-def test_cli_has_one_canonical_name_and_no_legacy_application_commands() -> None:
+def test_cli_name_and_commands() -> None:
     parser = build_parser()
     assert parser.prog == "teams-connector"
     assert parser.parse_args(["auth"]).command == "auth"
