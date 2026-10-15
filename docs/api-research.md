@@ -3492,3 +3492,15 @@ underline, inline and block code, unordered and ordered lists, a block quote, a 
 - The stored markup shows what Teams keeps, not how a Teams client draws it. Visual rendering of headings and
   tables was not inspected. Images were not sent in this check; the passive rules do not refuse `img`, as the
   Outlook rules do not.
+
+## Favorites folder through the catalog (2026-10-15)
+
+Read-only, through the connector's own session (`teams.csa` credential). The sidebar folders endpoint returned
+the top-level keys `conversationFolders`, `folderHierarchyVersion`, `isPartialResponse`,
+`migratedPinnedToFavorites` and others. It listed three folders, of types `Favorites`, `RecentChats` and
+`TeamsAndChannels`, each with `folderType`, `id`, `name`, `createdTime`, `version` and `conversationFolderItems`.
+Each item had `conversationId`, `threadType`, `createdTime` and `lastUpdatedTime`; the Favorites folder held four.
+
+- All four Favorites items were known to the local catalog.
+- With `TEAMS_CONNECTOR_FAVORITES` set, a catalog refresh and a listing of 500 chats reported four favorites and
+  496 non-favorites. With the setting off, no flag was reported.

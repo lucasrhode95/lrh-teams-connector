@@ -35,7 +35,7 @@ Run the `auth` command above and it logs you in. All `lrh-*` Microsoft 365 conne
 
 The Teams store and local output files are stored under `%LOCALAPPDATA%\lrh-teams-connector` on
 Windows, or `~/.local/share/lrh-teams-connector` on other systems. Set `TEAMS_CONNECTOR_HOME` to
-override the Teams data directory.
+override the Teams data directory. Set `TEAMS_CONNECTOR_FAVORITES` to `1` to mark the chats in the Teams Favorites folder (off by default).
 
 ### Configure a local MCP client
 
@@ -88,7 +88,7 @@ The MCP server exposes the tools below. Each one's inputs, results and caveats a
 | MCP tool | Service module | Behavior |
 |---|---|---|
 | `auth_status` | shared auth provider | Read cached account/client credentials and resource-token expiry |
-| `list_chats` | [`service/catalog.py`](src/teams_connector/service/catalog.py) | List chats and channels by recent activity, with kind filters and paging |
+| `list_chats` | [`service/catalog.py`](src/teams_connector/service/catalog.py) | List chats and channels by recent activity, with kind filters and paging; with `TEAMS_CONNECTOR_FAVORITES` set, a favorite flag |
 | `search_chats` | [`service/catalog.py`](src/teams_connector/service/catalog.py) | Match conversation names, and named group and meeting chats Teams matches by member (with a refresh) |
 | `get_messages` | [`service/history.py`](src/teams_connector/service/history.py) | Read a conversation's history, newest pages first, with inclusive date bounds |
 | `search_messages` | [`service/search.py`](src/teams_connector/service/search.py) | Search Teams messages online through Microsoft Search v2: any of up to 25 terms, optionally within chosen chats and dates; one page of hits with message ids |
