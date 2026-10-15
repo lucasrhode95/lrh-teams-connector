@@ -104,8 +104,6 @@ the download restriction the Teams UI showed for one meeting; a reference is not
 The type and naming rules are implemented ([requirements §5](requirements.md#5-catalog)). Compare a
 live catalog with what Teams shows:
 
-- a chat whose CSA row says `chatType=meeting` with `isOneOnOne=false` is a `meeting`, not a
-  `group`; this precedence has no dedicated synthetic test yet;
 - an untitled one-on-one with an app is named after the app;
 - an untitled group reads like `Alex Doe | Sam Roe | Kim Poe +2`;
 - the UI icon and label agree with `kind`.
@@ -123,9 +121,9 @@ a refusal is reported clearly.
 
 ### N2 — Unread state
 
-`list_chats` reports CSA's `unread` flag. Check that it follows the Teams UI after a chat is read in
-another client, and that reading an unread chat through the connector (`get_messages`,
-`download_attachment`, an export) leaves it unread in Teams.
+`list_chats` reports CSA's `unread` flag. Checked 2026-10-15: reading unread meeting chats through the
+connector (history, a download, an export) left them unread on the next refresh. Still open: whether the flag
+follows the Teams client after a chat is read there, which needs a look at the client.
 
 ### A1 — Fresh-account sign-in
 

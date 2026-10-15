@@ -3523,3 +3523,14 @@ Read-only, through the connector's own session. The Teams Web source names Unifi
 - Through the service on one one-on-one chat: the four fields were present, and no calendar, work-location or
   capability data reached the result.
 - The region is taken from the Chat Service host. Only the `emea` region was checked.
+
+## Unread state after reads (2026-10-15)
+
+Read-only reads through the connector's own session, on the unread chats the catalog listed (500 chats, 22 of them
+unread meeting chats; no unread one-on-one or group chat at the time).
+
+- A meeting chat with 25 messages read through `get_messages`, then exported (186 messages), stayed unread on the
+  next catalog refresh.
+- A meeting chat with a downloadable file: one download of 144,830 bytes; the chat stayed unread on the next refresh.
+- Two unread meeting chats returned an upstream error on their history reads. Their causes were not inspected.
+- Not checked: whether the flag follows the Teams client after a chat is read there.

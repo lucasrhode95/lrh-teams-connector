@@ -142,7 +142,7 @@ counts as broad Microsoft 365 search.
   left, a new topic) and drops identifiers and flags.
 - **Reading never changes a message or chat** (decided 2026-10-15). Reading history, searching,
   exporting and downloading use only reads; nothing marks a message or chat as read or seen, so the
-  user's unread state in Teams stays as it was.
+  user's unread state in Teams stays as it was. Checked 2026-10-15 on unread meeting chats: after history reads, a download and an export, they were still unread.
 - **Sending** needs the user's explicit authorization for both the recipient and the exact content.
   The current conversation name must match `expected_chat_name`. Text is escaped, sent once, and the
   server message id is returned. HTML (`html`, decided 2026-10-15) is sent as written after the passive check. Verified live for the self chat, one-on-one and group chats
