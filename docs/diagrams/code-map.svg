@@ -62,7 +62,7 @@
 <rect x="80" y="494" width="850" height="366" rx="14" fill="#f7f9fc" stroke="#c7d5e2" stroke-width="1.5"/>
 <path d="M80 568 V508 Q80 494 94 494 H916 Q930 494 930 508 V568 Z" fill="#183153"/>
 <text class="card-title" x="100" y="527">MCP SERVER</text>
-<text class="card-subtitle" x="100" y="551"><tspan class="code">surfaces/mcp_main.py</tspan> · <tspan class="code">build_server(AppContext)</tspan> · 8 FastMCP tools</text>
+<text class="card-subtitle" x="100" y="551"><tspan class="code">surfaces/mcp_main.py</tspan> · <tspan class="code">build_server(AppContext)</tspan> · 9 FastMCP tools</text>
 <rect x="100" y="588" width="810" height="252" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
 <text class="group-title" x="118" y="626">Conversations</text>
 <g><title>Chats and channels by recent activity, with kind filters and paging. → Catalog.list</title><text class="detail small" x="118" y="656">• <tspan class="code">list_chats</tspan></text></g>
@@ -77,6 +77,8 @@
 <g><title>Send one message after explicit authorization; checks the live chat name; sent once. → Sender.send</title><text class="detail small" x="360" y="752">• <tspan class="code">send_message</tspan></text></g>
 <text class="group-title" x="668" y="626">Export</text>
 <g><title>Export conversations to .txt, .jsonl or a .zip with attachments. → Exports.export</title><text class="detail small" x="668" y="656">• <tspan class="code">export_chats</tspan></text></g>
+<text class="group-title" x="668" y="776">Presence</text>
+<g><title>Availability of the other person in a one-on-one chat; read only. → Presences.for_chat</title><text class="detail small" x="668" y="806">• <tspan class="code">get_presence</tspan></text></g>
 
 <!-- Local UI. -->
 <rect x="970" y="494" width="850" height="366" rx="14" fill="#f7f9fc" stroke="#c7d5e2" stroke-width="1.5"/>

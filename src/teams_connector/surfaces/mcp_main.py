@@ -61,6 +61,8 @@ outer .zip, with an inner .zip for each conversation with attachments and a plai
 without them. Attachments are included by default; set include_attachments=false to omit them. Date \
 bounds and latest-N message_limit apply per conversation; export fetches the selected history, \
 so a long selection takes a while. Read the returned file path with your file tools.
+- Presence: get_presence reads the other person's availability in a one-on-one chat only. It is read-only, \
+and when it returns no presence it says why.
 - Attachments: download_attachment saves the files a message names (its shared files and pasted images, \
 shown as [File: name] and [Image: name] markers) and returns their local paths. Pass the message_id from \
 get_messages, or the message's sent_at time instead.

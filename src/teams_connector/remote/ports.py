@@ -6,7 +6,8 @@ Adapters (wired in bootstrap.py):
 - ChannelDirectory: remote/graph_teams.py (Graph joined teams and channels).
 - HistoryReader: remote/chat_service.py for chats, remote/graph_teams.py for channels.
 - MemberReader: remote/chat_service.py for chats, remote/graph_teams.py for channels.
-- People, ChatWriter, FileReader: remote/graph_teams.py.
+- People, ChatWriter, FileReader: remote/graph_teams.py. ImageReader: remote/image_readers.py.
+- PresenceReader: remote/presence.py. FavoriteFolders: remote/csa.py (the sidebar folders).
 
 Swapping an adapter (another tenant, a policy change) must not change anything above this file.
 """
