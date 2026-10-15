@@ -74,7 +74,7 @@
 <text class="group-title" x="360" y="626">Search</text>
 <g><title>One page of Search v2 message hits for the terms, scope and dates. → Search.search_messages</title><text class="detail small" x="360" y="656">• <tspan class="code">search_messages</tspan></text></g>
 <text class="group-title" x="360" y="722">Write</text>
-<g><title>Send one message after explicit authorization; checks the live chat name; sent once. → Sender.send</title><text class="detail small" x="360" y="752">• <tspan class="code">send_message</tspan></text></g>
+<g><title>Send one message, optionally with files, after explicit authorization; checks the live chat name; sent once. → Sender.send</title><text class="detail small" x="360" y="752">• <tspan class="code">send_message</tspan></text></g>
 <text class="group-title" x="668" y="626">Export</text>
 <g><title>Export conversations to .txt, .jsonl or a .zip with attachments. → Exports.export</title><text class="detail small" x="668" y="656">• <tspan class="code">export_chats</tspan></text></g>
 <text class="group-title" x="668" y="776">Presence</text>
@@ -159,11 +159,11 @@
 <rect x="1247" y="1334" width="553" height="280" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
 <text class="section-title" x="1265" y="1369"><tspan class="code">Sender</tspan><tspan class="detail" dx="12">send.py</tspan></text>
 <text class="group-title" x="1265" y="1406">Method</text>
-<g><title>Checks the destination against the live catalog and the expected chat name, then attempts the send exactly once.</title><text class="detail" x="1265" y="1436">• <tspan class="code">send(...)</tspan></text></g>
+<g><title>Checks the destination against the live catalog and the expected chat name, uploads and shares any files once each, then attempts the send exactly once.</title><text class="detail" x="1265" y="1436">• <tspan class="code">send(...)</tspan></text></g>
 <text class="group-title" x="1265" y="1475">Rules</text>
 <text class="detail" x="1265" y="1505">the only write · never retried</text>
 <text class="detail" x="1265" y="1532">uncertain result: inspect Teams first</text>
-<text class="muted" x="1265" y="1598">uses <tspan class="code">Catalog</tspan> · <tspan class="code">ChatWriter</tspan></text>
+<text class="muted" x="1265" y="1598">uses <tspan class="code">Catalog</tspan> · <tspan class="code">ChatWriter</tspan> · <tspan class="code">FileSharer</tspan></text>
 
 <rect x="100" y="1634" width="553" height="260" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
 <text class="section-title" x="118" y="1669"><tspan class="code">Files</tspan> · <tspan class="code">Photos</tspan><tspan class="detail" dx="12">files.py</tspan></text>
@@ -249,7 +249,7 @@
 <text class="section-title" x="1298" y="2393">Graph and search ports<tspan class="detail" dx="12">ports.py</tspan></text>
 <g><title>Joined teams' channels, and locating one channel.</title><text class="detail" x="1258" y="2430"><tspan class="code">ChannelDirectory</tspan> · <tspan class="code">channels</tspan> · <tspan class="code">locate</tspan></text></g>
 <g><title>Display names by id, and profile photos.</title><text class="detail" x="1258" y="2457"><tspan class="code">People</tspan> · <tspan class="code">names</tspan> · <tspan class="code">photo</tspan></text></g>
-<g><title>Send one message to a chat or a channel.</title><text class="detail" x="1258" y="2484"><tspan class="code">ChatWriter</tspan> · <tspan class="code">send</tspan></text></g>
+<g><title>Send one message to a chat or a channel; upload a file and share it with people.</title><text class="detail" x="1258" y="2484"><tspan class="code">ChatWriter</tspan> · <tspan class="code">send</tspan> · <tspan class="code">FileSharer</tspan> · <tspan class="code">upload</tspan> · <tspan class="code">share</tspan></text></g>
 <g><title>Download a file linked from a message.</title><text class="detail" x="1258" y="2511"><tspan class="code">FileReader</tspan> · <tspan class="code">download</tspan></text></g>
 <g><title>One page of Search v2 message hits.</title><text class="detail" x="1258" y="2538"><tspan class="code">MessageSearchReader</tspan> · <tspan class="code">search_messages</tspan></text></g>
 
@@ -271,7 +271,7 @@
 <text class="section-title" x="1258" y="2673">Graph and search adapters</text>
 <g><title>Joined teams, channels, channel history and members; implements ChannelDirectory, and HistoryReader and MemberReader for channels.</title><text class="detail small" x="1258" y="2710"><tspan class="code">GraphChannels</tspan>: channels, history</text></g>
 <g><title>Display names and photos from the directory; implements People.</title><text class="detail small" x="1258" y="2737"><tspan class="code">GraphPeople</tspan>: names, photos</text></g>
-<g><title>Chats via /chats/{id}/messages, channel posts via the team channel; implements ChatWriter.</title><text class="detail small" x="1258" y="2764"><tspan class="code">GraphWriter</tspan>: send</text></g>
+<g><title>Chats via /chats/{id}/messages, channel posts via the team channel, files as reference attachments; implements ChatWriter. GraphFileSharer uploads to OneDrive and invites; implements FileSharer.</title><text class="detail small" x="1258" y="2764"><tspan class="code">GraphWriter</tspan>: send · <tspan class="code">GraphFileSharer</tspan>: files</text></g>
 <g><title>Shared files via /shares/{id}/driveItem; implements FileReader.</title><text class="detail small" x="1258" y="2791"><tspan class="code">GraphFiles</tspan>: linked files</text></g>
 <g><title>Search v2 Message/Teams pages under the m365.search profile; implements MessageSearchReader. Calls Transport directly.</title><text class="detail small" x="1258" y="2818"><tspan class="code">SubstrateSearch</tspan>: Search v2</text></g>
 <g><title>Named chats by member (Search v2) and the people Teams suggests (substrate.office.com); implements ChatMemberSearch.</title><text class="detail small" x="1258" y="2845"><tspan class="code">SubstrateChatSearch</tspan>: chats by member, people</text></g>
@@ -349,7 +349,7 @@
 <text class="detail small" x="1938" y="555">• <tspan class="code">SubstrateSearch(transport, m365.search)</tspan></text>
 <text class="detail small" x="1938" y="582">• <tspan class="code">Files(history, GraphFiles, images)</tspan> · <tspan class="code">Photos</tspan></text>
 <text class="detail small" x="1938" y="609">• <tspan class="code">Search</tspan> · <tspan class="code">Exports</tspan></text>
-<text class="detail small" x="1938" y="636">• <tspan class="code">Sender(catalog, GraphWriter)</tspan></text>
+<text class="detail small" x="1938" y="636">• <tspan class="code">Sender(catalog, GraphWriter, GraphFileSharer)</tspan></text>
 
 <rect x="1900" y="716" width="620" height="560" rx="14" fill="#eff8f6" stroke="#9fd3cb" stroke-width="1.5"/>
 <text class="note-title" x="1924" y="756">How to read it</text>

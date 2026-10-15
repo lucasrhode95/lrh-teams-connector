@@ -20,7 +20,13 @@ from teams_connector.remote.chat_service import ChatService
 from teams_connector.remote.csa import CsaCatalog
 from teams_connector.remote.csa_mapping import Me
 from teams_connector.remote.graph import Graph
-from teams_connector.remote.graph_teams import GraphChannels, GraphFiles, GraphPeople, GraphWriter
+from teams_connector.remote.graph_teams import (
+    GraphChannels,
+    GraphFiles,
+    GraphFileSharer,
+    GraphPeople,
+    GraphWriter,
+)
 from teams_connector.remote.image_readers import AmsCredential, AmsImages, GraphHostedImages
 from teams_connector.remote.presence import TeamsPresence
 from teams_connector.remote.substrate_search import SubstrateChatSearch, SubstrateSearch
@@ -137,7 +143,15 @@ class AppContext:
             history=history,
             search=Search(store, search_source),
             exports=Exports(catalog, history, files),
-            sender=Sender(catalog, GraphWriter(graph)),
+            sender=Sender(
+                catalog,
+                GraphWriter(graph),
+                sharer=GraphFileSharer(
+                    graph, folder=config.CHAT_FILES_FOLDER, access=config.SHARED_FILE_ACCESS
+                ),
+                members=chat_service,
+                me_id=account.object_id,
+            ),
             files=files,
             photos=Photos(people),
             presence=Presences(

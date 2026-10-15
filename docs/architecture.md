@@ -60,7 +60,7 @@ and the adapters behind them. The split of backends (which private or public ser
 | MCP | `search_messages` | `Search.search_messages` | `MessageSearchReader` | `SubstrateSearch` |
 | MCP | `export_chats` | `Exports.export` | `HistoryReader` (`History.selection`), `FileReader` and `ImageReader` (`Files.save`) | `ChatService`, `GraphChannels`, `GraphFiles`, `AmsImages`, `GraphHostedImages` |
 | MCP | `download_attachment` | `Files.download_attachments` (`History.resolve`) | `ChatHistoryReader` (finds the message, and a channel reply's thread), `ChannelHistoryReader`, `FileReader`, `ImageReader` | `ChatService`, `GraphChannels`, `GraphFiles`, `AmsImages`, `GraphHostedImages` |
-| MCP | `send_message` | `Sender.send` (and `Catalog.recipient`) | `ChatWriter`, `ChatCatalog` (chats), `ChannelDirectory` (channels) | `GraphWriter`, `CsaCatalog`, `GraphChannels` |
+| MCP | `send_message` | `Sender.send` (and `Catalog.recipient`) | `ChatWriter`, `ChatCatalog` (chats), `ChannelDirectory` (channels), `MemberReader` and `FileSharer` (files) | `GraphWriter`, `CsaCatalog`, `GraphChannels`, `ChatService`, `GraphFileSharer` |
 | MCP | `get_presence` | `Presences.for_chat` | `PresenceReader` | `TeamsPresence` |
 | UI | `GET /api/status` | token status | none | `TokenProvider` |
 | UI | `GET /api/chats` | `Catalog.list` (or `ensure`) | as `list_chats` | as `list_chats` |
@@ -294,7 +294,23 @@ its team), then checks the name before sending. Pass exactly one of `text` (plai
 characters are escaped) or `html` (HTML sent as written, after a passive check that refuses scripts, frames,
 form controls, event-handler attributes, `javascript:` and `vbscript:` URLs, images and other embedded
 media, declarations and CDATA sections, and unfinished markup). Teams shows only images it hosts, so an
-`<img>` is refused rather than sent; sending images is roadmap P1.5. The
+`<img>` is refused rather than sent; sending pasted images is roadmap P1.5. The
 message is attempted once. A network failure after the request may leave the result uncertain, so
 inspect the conversation before deciding whether another send is needed. A search result or request
 to analyze a conversation does not authorize a send.
+
+`files` attaches local files, by absolute path, to a message for a one-on-one or group chat: up to 10,
+each under 250 MiB. With files, `text` and `html` may both be omitted. The authorization covers every
+file. Before any request the service checks each path. It then does what Teams Web does, through Graph
+([research](api-research.md#sending-files)):
+
+1. Upload each file to `config.CHAT_FILES_FOLDER` in the sender's OneDrive. A name clash is renamed.
+2. Share each file with the chat's other members from Chat Service, without an email. The access follows
+   `config.SHARED_FILE_ACCESS`: the tenant's default link (`chat_default`) or direct grants (`direct`).
+3. Post the message with one `reference` attachment per file.
+
+Each request is made once. The message is posted only after every upload and share has succeeded. A
+share that fails for some members (Graph's `207 Multi-Status`) counts as failed.
+When something fails, the error names the files already in the sender's OneDrive, which stay there. A
+member without an object id in the directory, such as a federated user, makes the send fail before
+anything is uploaded. The result lists each file's name, as renamed, and its link.

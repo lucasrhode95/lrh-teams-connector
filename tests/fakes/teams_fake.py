@@ -2,7 +2,8 @@
 
 It understands exactly the request shapes the connector sends: Teams AuthZ, the CSA catalog (snapshot
 and delta), Chat Service history, members and listing, and the Graph endpoints for teams, channels, channel
-threads, members, people, photos, sends and shared files. All data is synthetic.
+threads, members, people, photos, sends, OneDrive uploads and invites, and shared files. All data is
+synthetic.
 """
 
 from __future__ import annotations
@@ -159,6 +160,12 @@ class FakeTeams:
     sent: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     calls: list[str] = field(default_factory=list)
     fail_sends: str | None = None  # "network" or "504"
+    uploads: list[tuple[str, str, bytes]] = field(default_factory=list)  # (folder, stored name, bytes)
+    # (item id, invite body, Prefer header)
+    invites: list[tuple[str, dict[str, Any], str | None]] = field(default_factory=list)
+    fail_upload_names: set[str] = field(default_factory=set)  # file names whose upload answers 500
+    fail_invites: bool = False
+    partial_invites: bool = False  # invites answer 207 with an error for the last recipient
     token_counter: int = 0
 
     # ------------------------------------------------------------------ routing
@@ -331,8 +338,48 @@ class FakeTeams:
                 return httpx.Response(200, content=data, headers={"content-type": "image/png"})
         return _not_found()
 
+    def _upload(self, request: httpx.Request, path: str, query: dict[str, list[str]]) -> httpx.Response:
+        """OneDrive single-request upload, renaming on a clash as Graph does (``name 1.txt``)."""
+        if query.get("@microsoft.graph.conflictBehavior") != ["rename"]:
+            return httpx.Response(409, json={"error": {"code": "nameAlreadyExists"}})
+        folder, name = path.removeprefix("/me/drive/root:/").removesuffix(":/content").rsplit("/", 1)
+        if name in self.fail_upload_names:
+            return httpx.Response(500, json={"error": {"code": "generalException", "message": "failed"}})
+        stem, dot, ext = name.rpartition(".")
+        stored, n = name, 0
+        while any(f == folder and s == stored for f, s, _ in self.uploads):
+            n += 1
+            stored = f"{stem} {n}{dot}{ext}" if dot else f"{name} {n}"
+        self.uploads.append((folder, stored, request.content))
+        number = len(self.uploads)
+        return httpx.Response(
+            201,
+            json={
+                "id": f"ITEM{number}",
+                "name": stored,
+                "webUrl": f"https://tenant-my.sharepoint.com/personal/mia/Documents/chat/{stored}",
+                "eTag": f'"{{0000000{number}-AAAA-BBBB-CCCC-DDDDEEEEFFFF}},1"',
+                "parentReference": {"driveId": "b!drive"},
+            },
+        )
+
+    def _invite(self, request: httpx.Request, item_id: str) -> httpx.Response:
+        if self.fail_invites:
+            return httpx.Response(403, json={"error": {"code": "accessDenied", "message": "denied"}})
+        body = json.loads(request.content)
+        self.invites.append((item_id, body, request.headers.get("prefer")))
+        if self.partial_invites:
+            error = {"code": "notAllowed", "message": "synthetic", "innererror": {"code": "invalidRecipient"}}
+            granted = {"id": "perm", "roles": body["roles"]}
+            return httpx.Response(207, json={"value": [granted, {"error": error}]})
+        return httpx.Response(200, json={"value": [{"id": "perm", "roles": body["roles"]}]})
+
     def _graph(self, request: httpx.Request, path: str, query: dict[str, list[str]]) -> httpx.Response:
         parts = path.strip("/").split("/")
+        if request.method == "PUT" and path.startswith("/me/drive/root:/") and path.endswith(":/content"):
+            return self._upload(request, path, query)
+        if request.method == "POST" and len(parts) == 5 and parts[0] == "drives" and parts[4] == "invite":
+            return self._invite(request, parts[3])
         if len(parts) in (9, 11) and parts[-3] == "hostedContents" and parts[-1] == "$value":
             data = self.hosted.get(parts[-2])
             if data is None:

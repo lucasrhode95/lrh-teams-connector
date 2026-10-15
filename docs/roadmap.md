@@ -12,33 +12,95 @@ Snapshot **2026-10-15**.
 Write each bug as **Seen** (a synthetic example: the call and what came back), **Expected**,
 **Cause** and **Fix**.
 
-None open.
+### B4 — Export UI: the attachments checkbox sits above its label
+
+- **Seen:** in the export UI, the "Include message attachments" checkbox shows on its own line, with its
+  text on the line below.
+- **Expected:** the checkbox and its text on one line, like any checkbox.
+- **Cause:** `app.css` styles every `label` as `display: grid; gap: 6px` (for the stacked filter fields),
+  and the checkbox is wrapped in a plain `label`, so the input and its `<span>` become two grid rows.
+- **Fix:** give checkbox labels their own class, laid out inline (`display: flex; align-items: center;
+  gap: 8px`), and keep the grid rule for field labels only.
 
 ## Improvements
 
 Working behavior that could be cheaper, simpler or better informed.
 
+### U1 — Date picker: match the Outlook connector
+
+The export UI's date-range picker differs from `lrh-outlook-connector`'s, though both are the same
+custom calendar. Make Teams behave like Outlook, keeping only differences one product needs.
+
+| Behavior | Teams today | Outlook |
+|---|---|---|
+| First weekday | Monday | Sunday |
+| Empty range label | "Unlimited" | "Any date" |
+| Future dates | selectable | disabled |
+| Second click before the start | restarts the range there | swaps, making the range from that day to the start |
+| After the second click | the calendar closes | stays open until Done |
+| Today button | none | jumps to the current month |
+| Clear outside the calendar | none | a × beside the toggle |
+| Hint text | "Click once for one day…" | none |
+| Keyboard and focus | none | focuses the chosen day; Escape and Done return focus to the toggle |
+| Changing month | arrows only | arrows, mouse wheel and swipe |
+| Placement | always opens the same way | opens to whichever side has room |
+| Day state for assistive tech | none | `aria-pressed` on days in the range |
+
+Decide the first weekday deliberately (Outlook's Sunday or a locale-based one) and change both connectors
+together if it changes.
+
 ## Enhancements
 
 ### P1.5 — Send host files as attachments
 
-`send_message` sends text only. Graph documents a file send in two steps: upload the file to the
-sender's OneDrive, then post a chat message whose `attachments` entry references that drive item
-(`contentType: "reference"`) and whose body carries a matching `<attachment id="…">` tag
-([Graph: send chatMessage](https://learn.microsoft.com/en-us/graph/api/chatmessage-post?view=graph-rest-1.0)).
-The Teams client's Graph token held `Files.ReadWrite.All` on 2026-10-01. Not tried yet.
+What files on `send_message` cannot do yet. One-on-one and group chats work
+([architecture](architecture.md#send-a-message), [research](api-research.md#sending-files)).
 
-Settle before relying on it:
+- **Files of 250 MiB or more:** refused today. A Graph upload session works
+  ([research](api-research.md#sending-files)): `createUploadSession`, then 10 MiB chunks PUT without
+  credentials to the SharePoint `uploadUrl`.
+  - The transport needs a narrow credential-free allowance for that URL.
+  - Read the file in chunks rather than all at once.
+  - Raise the size cap as a setting.
+  - Choose how a failed chunk is handled: fail the send and cancel the session (strict, within the
+    write-once rule), or resend the missing ranges (an explicit exception).
+- **Inline images:** proposed shape is an `images` list of local paths, with `<img src="name">` in `html`
+  naming an entry. The connector swaps in `../hostedContents/N/$value` and adds the bytes. An `<img>` that
+  names no entry is still refused, so remote images stay blocked.
+  - Only PNG and JPEG: refuse others before sending.
+  - The whole request is capped at about 4 MiB, so images total under about 3 MB per message.
+  - Images and files can share a message.
+- **Self chat:** files (no share step) and inline images worked there live, so the self chat can be
+  allowed.
+- **Channels and meeting chats:** channels store files in the team's SharePoint folder instead. Meeting
+  chats are untried.
 
-- that a recipient can open the file; a successful upload is not proof of delivery;
-- what the user sees when the upload succeeds and the post fails: report the uploaded file, never
-  retry the post;
-- pasted images: Graph sends an inline image as a `hostedContents` entry with `<img
-  src="../hostedContents/1/$value">` in the body; Teams Web uploads to AMS and references the object. HTML
-  sends refuse `<img>` until one of these is implemented;
-- the Teams Web private path (chunked upload, `POST /v1/threads/{threadId}/files`,
-  `properties.files`; [research](api-research.md#sending-files-not-used-by-the-connector)) is a fallback only if Graph's path
-  loses something.
+### P1.7 — Delete the user's own messages
+
+Requested 2026-10-15, to clear test sends from a chat. Example: "delete my messages from 'P1.5 capture 1,
+please ignore' onwards in John Doe's chat."
+
+Not implemented: deletes are out of scope today ([requirements §3](requirements.md#3-non-goals)), and
+sending is the only write path. Adding this makes deleting a second write path, so the requirements and
+the agent instructions change first.
+
+- **Shape:** one tool call deletes a set of the user's own messages in one conversation. The agent selects
+  them first: a starting message found by its text, then every later message of the user's, up to an
+  optional end. Each id is checked again before the delete. Only the user's own messages (`is_self`)
+  qualify, and other people's messages in the range are left alone.
+- **Confirmation:** the agent lists what will be deleted (chat, count, first and last message) and gets
+  the user's explicit yes. One yes covers the whole set. The connector cannot verify that confirmation,
+  so it is a rule in the tool description and MCP instructions, not something the code enforces.
+- **Writes:** each delete is attempted once and never retried. An uncertain outcome is reported per
+  message, and the result lists what was deleted, skipped and uncertain.
+- **Route:** Chat Service `DELETE …/messages/{messageId}?behavior=softDelete` with the Skype token. It
+  worked live on 2026-10-15 and has an undo ([research](api-research.md#writes-not-used-by-the-connector)).
+  Graph's `softDelete` needs `Chat.ReadWrite`, which the Teams client's Graph token lacks: editing a
+  message was refused ([research](api-research.md#grants-2026-10-01)).
+- **Shared files:** deleting a message leaves its files in `config.CHAT_FILES_FOLDER`, still shared with
+  the chat. Decide whether to also remove the file, revoke its sharing, or report it.
+- **Result:** confirm with `get_messages`, which shows a deleted message as `is_deleted` with no text
+  ([research](api-research.md#edits-and-deletes)).
 
 ### P2.2f — Meeting recaps and transcripts
 

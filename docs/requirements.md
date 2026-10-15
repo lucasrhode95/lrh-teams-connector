@@ -149,3 +149,10 @@ counts as broad Microsoft 365 search.
   server message id is returned. HTML (`html`, decided 2026-10-15) is sent as written after the passive check, which also refuses
   images and other embedded media (Teams shows only images it hosts). Verified live for the self chat, one-on-one and group chats
   (2026-10-14); channels and meeting chats are roadmap S3.
+- **Sending files** (decided and implemented 2026-10-15, for one-on-one and group chats):
+  `send_message` takes local file paths under the same authorization as the recipient and content.
+  - Like Teams, the connector uploads the files to the sender's OneDrive, grants the chat's other members
+    the tenant-default access without an email, and posts the message.
+  - It posts only after every file has been uploaded and shared. Files uploaded before a failure are
+    reported, never retried or deleted.
+  - Channels, meeting chats, the self chat, pasted images and files of 250 MiB or more are roadmap P1.5.
