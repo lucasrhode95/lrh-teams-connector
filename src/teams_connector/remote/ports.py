@@ -89,6 +89,21 @@ class ChannelDirectory(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class ChatMemberHit:
+    """A named chat Teams matched for a plain name or email, with the members that matched."""
+
+    chat_id: str
+    matching_members: list[Participant]
+
+
+class ChatMemberSearch(Protocol):
+    async def named_chats(self, text: str) -> list[ChatMemberHit]:
+        """Named group and meeting chats matched by a plain name or email, with their matching members.
+        One-on-one chats are not included: they are found by name in the catalog."""
+        ...
+
+
 class HistoryReader(Protocol):
     async def page(
         self,

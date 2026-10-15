@@ -21,7 +21,7 @@ from teams_connector.remote.csa import CsaCatalog
 from teams_connector.remote.csa_mapping import Me
 from teams_connector.remote.graph import Graph
 from teams_connector.remote.graph_teams import GraphChannels, GraphFiles, GraphPeople, GraphWriter
-from teams_connector.remote.substrate_search import SubstrateSearch
+from teams_connector.remote.substrate_search import SubstrateChatSearch, SubstrateSearch
 from teams_connector.remote.teams_session import TeamsSession
 from teams_connector.remote.transport import Bearer, Transport
 from teams_connector.service.archive import Archive
@@ -101,7 +101,12 @@ class AppContext:
         catalog_source = CsaCatalog(transport, session, account_tokens, people, chat_service, me)
 
         store = Store(store_path(account.fingerprint), account.fingerprint)
-        catalog = Catalog(store, catalog_source, channels, chat_service)
+        member_search = SubstrateChatSearch(
+            transport,
+            Bearer(account_tokens, "m365.search"),
+            anchor_mailbox=f"Oid:{account.object_id}@{account.tenant_id}",
+        )
+        catalog = Catalog(store, catalog_source, channels, chat_service, members=member_search)
         history = History(store, catalog, chat_service, channels, account.object_id)
         search_source = SubstrateSearch(
             transport,

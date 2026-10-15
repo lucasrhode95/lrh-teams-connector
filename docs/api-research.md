@@ -3395,3 +3395,31 @@ Earlier entries name the two former operations `search_remote_messages` and `sea
 - A continuation cursor kept the query and advanced the offset by the page size.
 - A query of about 880 characters was accepted.
 
+## Chat search by member (2026-10-15)
+
+**Evidence:** read-only requests through the connector's own sign-in (`m365.search` profile) and the connector's
+`search_chats` on the signed-in account. Counts, status codes and key names only; no names, ids or message text kept.
+
+**Chat entity (Search v2, the existing search endpoint):** an unquoted name query with `EntityType: "Chat"` and
+`ContentSources: ["Teams"]` returned 14 rows. Every row's `ThreadId` was a stored catalog chat. Row kinds were
+meeting and group chats (no one-on-one chats). Each row's `Source` carried `MatchingMembers`, whose members had
+`MRI` (`8:orgid:<object id>`), `DisplayName`, `GivenName` and `Surname`; the MRI is what lets a match be attributed
+to a person. The same query in quotes returned no rows. The one-on-one chat with the person was not among the rows.
+
+**People suggestions (`/search/api/v1/suggestions`, `EntityType: "People"`):** not answered on 2026-10-15 with the
+`m365.search` token:
+
+| Host and path | Scenario | Status |
+|---|---|---|
+| `outlook.office.com/searchservice/api/v1/suggestions` | `peoplepicker.newChat` | 404 |
+| `outlook.office.com/search/api/v1/suggestions` | `peoplepicker.newChat` | 400 |
+| `substrate.office.com/search/api/v1/suggestions` | `powerbar`, with the captured body shape | 400 |
+| `substrate.office.com/search/api/v1/suggestions` | `peoplepicker.newChat`, with the captured body shape | 400 |
+
+The 2026-10-14 entry above says People suggestions succeeded with both tokens; this run did not reproduce it.
+The request shapes tried are those recorded earlier in this document.
+
+**Connector behavior:** `search_chats` with `refresh=true` now asks the Chat entity for a plain name or email and lists
+the matching members of stored chats. With a query containing query syntax (for example `AND`), the connector
+does not send it to Teams and says so in the coverage notes.
+

@@ -112,7 +112,7 @@ The current code still keeps a message archive. Removing it is roadmap D2; until
 | Layer | Surface | Behavior |
 |---|---|---|
 | Conversation filter | Local UI | Filters the loaded catalog in the browser. Typing never calls Teams. |
-| Conversation search | MCP (`search_chats`) | Matches conversation names and participants. Refreshes the catalog by default; `refresh=false` searches the cache only. Reports what it could not cover. |
+| Conversation search | MCP (`search_chats`) | Matches conversation names and participants: from the catalog, the indexed rosters, and, with a refresh, the named group and meeting chats Teams matches by a plain name or email. Refreshes the catalog by default; `refresh=false` searches the cache only. Reports what it could not cover. |
 | Message search | MCP (`search_messages`) | Search v2 on the server, across Teams or scoped to chosen conversations and dates. Takes a list of terms, any of which matches; each term is one phrase, never split and never read as a query operator. Matches words, word prefixes and phrases; returns message ids, totals, pages, and a confirmed zero. No local match modes (decided 2026-10-15).
 
 Calendar events, meeting recaps, transcript lists, transcript content and transcript-text search are

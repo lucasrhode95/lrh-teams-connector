@@ -9,10 +9,17 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from teams_connector import config
-from teams_connector.domain.models import MessageHit
-from teams_connector.remote.ports import MessageSearchPage, MessageSearchReader
+from teams_connector.domain.models import MessageHit, Participant
+from teams_connector.remote.chat_service_mapping import user_id
+from teams_connector.remote.ports import (
+    ChatMemberHit,
+    ChatMemberSearch,
+    MessageSearchPage,
+    MessageSearchReader,
+)
 from teams_connector.remote.transport import Credential, Transport, operation
 
 
@@ -66,6 +73,80 @@ class SubstrateSearch(MessageSearchReader):
             result_set_found=found,
             total=total,
         )
+
+
+class SubstrateChatSearch(ChatMemberSearch):
+    """Named chats Teams matches by name or member, through the same Search v2 endpoint and profile.
+
+    The text is sent unquoted: a quoted query returned no chats. The service only passes plain names and
+    emails, so the text cannot change the query's meaning.
+    """
+
+    def __init__(self, transport: Transport, credential: Credential, *, anchor_mailbox: str) -> None:
+        self._transport = transport
+        self._credential = credential
+        self._anchor_mailbox = anchor_mailbox
+
+    async def named_chats(self, text: str) -> list[ChatMemberHit]:
+        body = {
+            "Cvid": str(uuid4()),
+            "LogicalId": str(uuid4()),
+            "Scenario": {"Name": "owa.react"},
+            "TimeZone": "UTC",
+            "TextDecorations": "Off",
+            "EntityRequests": [
+                {
+                    "EntityType": "Chat",
+                    "ContentSources": ["Teams"],
+                    "Query": {"QueryString": text, "DisplayQueryString": text},
+                    "From": 0,
+                    "Size": 25,
+                    "Sort": [],
+                    "PropertySet": "Optimized",
+                }
+            ],
+        }
+        with operation("searching Teams chats by member"):
+            data = await self._transport.json(
+                "POST",
+                config.SEARCH_URL,
+                credential=self._credential,
+                headers={"X-AnchorMailbox": self._anchor_mailbox},
+                json_body=body,
+                retry=True,
+            )
+        return [_chat_hit(source) for source in _result_sources(data) if _string(source.get("ThreadId"))]
+
+
+def _result_sources(data: Any) -> list[dict[str, Any]]:
+    if not isinstance(data, dict):
+        return []
+    sources: list[dict[str, Any]] = []
+    for entity_set in data.get("EntitySets") or []:
+        if not isinstance(entity_set, dict):
+            continue
+        for result_set in entity_set.get("ResultSets") or []:
+            if not isinstance(result_set, dict):
+                continue
+            for row in result_set.get("Results") or []:
+                if isinstance(row, dict) and isinstance(row.get("Source"), dict):
+                    sources.append(row["Source"])
+    return sources
+
+
+def _chat_hit(source: dict[str, Any]) -> ChatMemberHit:
+    members: list[Participant] = []
+    for member in source.get("MatchingMembers") or []:
+        if not isinstance(member, dict):
+            continue
+        object_id = user_id(member.get("MRI"))
+        if object_id is None:
+            continue
+        name = _string(member.get("DisplayName")) or " ".join(
+            part for part in (_string(member.get("GivenName")), _string(member.get("Surname"))) if part
+        )
+        members.append(Participant(id=object_id, name=name or None))
+    return ChatMemberHit(chat_id=str(source["ThreadId"]), matching_members=members)
 
 
 def _message_rows(data: Any) -> tuple[list[dict[str, Any]], bool | None, bool, int | None]:

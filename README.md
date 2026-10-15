@@ -89,7 +89,7 @@ The MCP server exposes the tools below. Each one's inputs, results and caveats a
 |---|---|---|
 | `auth_status` | shared auth provider | Read cached account/client credentials and resource-token expiry |
 | `list_chats` | [`service/catalog.py`](src/teams_connector/service/catalog.py) | List chats and channels by recent activity, with kind filters and paging |
-| `search_chats` | [`service/catalog.py`](src/teams_connector/service/catalog.py) | Match conversation names, and participant names indexed by `sync_archive` |
+| `search_chats` | [`service/catalog.py`](src/teams_connector/service/catalog.py) | Match conversation names, participants indexed by `sync_archive`, and named group and meeting chats Teams matches by member |
 | `get_messages` | [`service/history.py`](src/teams_connector/service/history.py) | Read a conversation's history, newest pages first, with inclusive date bounds |
 | `search_messages` | [`service/search.py`](src/teams_connector/service/search.py) | Search Teams messages online through Microsoft Search v2: any of up to 25 terms, optionally within chosen chats and dates; one page of hits with message ids |
 | `sync_archive`, `archive_status` | [`service/archive.py`](src/teams_connector/service/archive.py) | Fetch history and rosters in resumable batches, and report what is covered |
