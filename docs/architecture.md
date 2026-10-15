@@ -40,6 +40,29 @@ dates with the browser's UTC offset while MCP takes ISO 8601 timestamps; the UI 
 and a session token while MCP runs over stdio; the UI streams downloads while MCP returns local
 paths; each maps domain errors to its own responses.
 
+## Services, ports and adapters
+
+Each surface calls a service. A service depends only on the ports it needs, and `bootstrap.py` wires one adapter per
+port. The table maps each MCP tool and UI route to the service that answers it, the ports it reads or writes through,
+and the adapters behind them. The split of backends (which private or public service backs each capability) is in
+[requirements §4](requirements.md#4-backend-choice).
+
+| Surface | Tool or route | Service | Ports | Adapters |
+|---|---|---|---|---|
+| MCP | `auth_status` | `TokenProvider` (shared auth package) | none | `TokenProvider` |
+| MCP | `list_chats` | `Catalog.list` | `ChatCatalog`, `ChannelDirectory`, `FavoriteFolders` | `CsaCatalog`, `GraphChannels` |
+| MCP | `search_chats` | `Catalog.search` | `ChatMemberSearch` | `SubstrateChatSearch` |
+| MCP | `get_messages` | `History.get_messages` | `HistoryReader` (chats and channels) | `ChatService`, `GraphChannels` |
+| MCP | `search_messages` | `Search.search_messages` | `MessageSearchReader` | `SubstrateSearch` |
+| MCP | `export_chats` | `Exports.export` | `HistoryReader` (`History.selection`), `FileReader` and `ImageReader` (`Files.save`) | `ChatService`, `GraphChannels`, `GraphFiles`, `AmsImages`, `GraphHostedImages` |
+| MCP | `download_attachment` | `Files.download_attachments` (`History.resolve`) | `ChatHistoryReader`, `HistoryReader`, `FileReader`, `ImageReader` | `ChatService`, `GraphChannels`, `GraphFiles`, `AmsImages`, `GraphHostedImages` |
+| MCP | `send_message` | `Sender.send` (and `Catalog.recipient`) | `ChatWriter`, `ChatCatalog` | `GraphWriter`, `CsaCatalog` |
+| MCP | `get_presence` | `Presences.for_chat` | `PresenceReader` | `TeamsPresence` |
+| UI | `GET /api/status` | token status | none | `TokenProvider` |
+| UI | `GET /api/chats` | `Catalog.list` (or `ensure`) | as `list_chats` | as `list_chats` |
+| UI | `GET /api/photos/{user_id}` | `Photos.photo` | `People` | `GraphPeople` |
+| UI | `POST /api/exports` and its job routes | `Exports.export` in a background job | as `export_chats` | as `export_chats` |
+
 ## Authentication and account boundaries
 
 The shared `lrh-m365-auth` package supplies six named profiles shared by the three connectors:

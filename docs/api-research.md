@@ -6,6 +6,82 @@ These notes describe how the Microsoft Teams web/desktop clients authenticate an
 
 ---
 
+## Owner index
+
+The sections below are grouped by the service that owns their evidence. Headings and dates are unchanged, so every existing link still lands on its section.
+
+### Microsoft Graph
+- [Microsoft Graph with the Teams client (2026-10-01)](#microsoft-graph-with-the-teams-client-2026-10-01)
+- [Sending through Graph](#sending-through-graph)
+- [Omitted channels by id, batched (2026-10-15)](#omitted-channels-by-id-batched-2026-10-15)
+- [Recipient refresh before a send (2026-10-15)](#recipient-refresh-before-a-send-2026-10-15)
+
+### Teams private services (AuthZ, Chat Service, CSA, Middle Tier, AMS)
+- [Teams AuthZ / service discovery](#teams-authz--service-discovery)
+- [Chat Service Aggregator (CSA)](#chat-service-aggregator-csa)
+- [Sidebar folders, live](#sidebar-folders-live)
+- [Regional Chat Service](#regional-chat-service)
+- [Chat Service write operations](#chat-service-write-operations)
+- [Edit and delete](#edit-and-delete)
+- [Middle Tier](#middle-tier)
+- [Other Middle Tier routes found in Teams Web](#other-middle-tier-routes-found-in-teams-web)
+- [AMS / Async Media Service](#ams--async-media-service)
+- [Inline images (AMS)](#inline-images-ams)
+- [Inline images, sources and downloads (2026-10-15)](#inline-images-sources-and-downloads-2026-10-15)
+- [Reading one message by its time](#reading-one-message-by-its-time)
+- [Reading one message by its id](#reading-one-message-by-its-id)
+- [Meeting and membership events](#meeting-and-membership-events)
+- [Whole-message history pages (2026-10-15)](#whole-message-history-pages-2026-10-15)
+- [Presence through the regional host (2026-10-15)](#presence-through-the-regional-host-2026-10-15)
+- [Favorites folder through the catalog (2026-10-15)](#favorites-folder-through-the-catalog-2026-10-15)
+- [HTML sends, live check (2026-10-15)](#html-sends-live-check-2026-10-15)
+- [Unread state after reads (2026-10-15)](#unread-state-after-reads-2026-10-15)
+- [Meeting transcripts](#meeting-transcripts)
+- [Message schema observations](#message-schema-observations)
+
+### Microsoft Search (Search v2) and Substrate search
+- [Search v2 message search](#search-v2-message-search)
+- [One message search over Search v2 (2026-10-15)](#one-message-search-over-search-v2-2026-10-15)
+- [Chat search by member (2026-10-15)](#chat-search-by-member-2026-10-15)
+- [Substrate people/chat search](#substrate-peoplechat-search)
+- [Other Teams search routes](#other-teams-search-routes)
+- [Opening a hit](#opening-a-hit)
+- [Microsoft 365 search capture and source audit (2026-10-10)](#microsoft-365-search-capture-and-source-audit-2026-10-10)
+- [Microsoft 365 Search API coverage review (2026-10-10)](#microsoft-365-search-api-coverage-review-2026-10-10)
+- [Microsoft 365 search capture and source route map: Teams rows (2026-10-10)](#microsoft-365-search-capture-and-source-route-map-teams-rows-2026-10-10)
+- [Meeting recaps and transcripts as search sources (2026-10-10)](#meeting-recaps-and-transcripts-as-search-sources-2026-10-10)
+- [Cross-product search ledger: Teams (2026-10-12)](#cross-product-search-ledger-teams-2026-10-12)
+- [Teams online message search adapter (2026-10-12)](#teams-online-message-search-adapter-2026-10-12)
+- [Teams search and local cache findings (2026-10-11)](#teams-search-and-local-cache-findings-2026-10-11)
+- [Teams remote search and cache evaluation (2026-10-11)](#teams-remote-search-and-cache-evaluation-2026-10-11)
+
+### SharePoint and OneDrive (shared files and sharing links)
+- [SharePoint / OneDrive file attachments](#sharepoint--onedrive-file-attachments)
+- [Attachment and message discovery endpoint confirmation (2026-10-11)](#attachment-and-message-discovery-endpoint-confirmation-2026-10-11)
+- [Store and downloads after the archive removal (2026-10-15)](#store-and-downloads-after-the-archive-removal-2026-10-15)
+
+### Teams Web source and client behaviour
+- [Teams Web source (build 26091712222)](#teams-web-source-build-26091712222)
+- [Teams client identity](#teams-client-identity)
+- [Multiple OAuth resource audiences](#multiple-oauth-resource-audiences)
+- [Credential matrix](#credential-matrix)
+- [Authentication flow](#authentication-flow)
+- [Shared-auth live validation (2026-10-12)](#shared-auth-live-validation-2026-10-12)
+
+### Cross-cutting: method, live checks and decisions
+- [Confidence legend](#confidence-legend)
+- [Portability and privacy](#portability-and-privacy)
+- [Method](#method)
+- [High-level architecture](#high-level-architecture)
+- [Implementation decisions](#implementation-decisions)
+- [Source notes](#source-notes)
+- [Live observations and confidence — 2026-09-29](#live-observations-and-confidence--2026-09-29)
+- [Live catalog diagnostic — 2026-10-01](#live-catalog-diagnostic--2026-10-01)
+- [Live checks and Teams Web capture review (2026-10-14)](#live-checks-and-teams-web-capture-review-2026-10-14)
+- [Connector code-path audit and measurements (2026-10-10)](#connector-code-path-audit-and-measurements-2026-10-10)
+- [Message identity and jump-to-hit navigation (2026-10-10)](#message-identity-and-jump-to-hit-navigation-2026-10-10)
+- [Teams Web chat-list and People helper source audit (2026-10-11)](#teams-web-chat-list-and-people-helper-source-audit-2026-10-11)
+
 ## Confidence legend
 
 The notes below use four evidence levels:
