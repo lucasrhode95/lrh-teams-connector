@@ -289,7 +289,7 @@ class TeamsHtmlParser(HTMLParser):
         elif tag in self.BLOCK_TAGS:
             self._newline(2)
         elif tag == "br":
-            self._newline(1)
+            self.parts.append("\n")  # a hard break: two in a row, or one after a paragraph, leave a blank line
         elif tag in {"ul", "ol"}:
             self.list_stack.append({"tag": tag, "next": self._positive_int(attributes.get("start"), 1)})
         elif tag == "li":
