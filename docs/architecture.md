@@ -28,7 +28,7 @@ overview; this document records the rules and contracts they cannot show.
 | `remote/*_mapping.py` and `remote/teams_html.py` | Convert wire responses into domain records and readable message text. Wire-format field names remain inside this layer. |
 | `store/db.py` | Account-bound SQLite store for the chat catalog and account metadata only. Holds no message content and no tokens. |
 | `service/export/` | Text/JSONL formatting and safe output packaging. Exports read Teams page by page and spool to a temporary file, use exclusive temporary paths, and publish only after completion. |
-| `service/passive_html.py` | The passive check for HTML sends: refuses active content, embedded media, declarations and unfinished markup, and never rewrites the HTML. |
+| `service/passive_html.py` | The passive check for HTML sends: refuses active content, embedded media, declarations and unfinished markup. Its one rewrite points an `<img>` that names an attached image at the hosted copy. |
 | `service/localfiles.py` | Per-user output directories, retention cleanup, and collision-safe file creation. |
 | `src/teams_connector/config.py` | Product CLI/data names and fixed public service URLs. Tenant authority, client IDs, token profiles, scopes, and shared-cache configuration live in `lrh-m365-auth`. |
 
@@ -293,30 +293,40 @@ and exact message content. Pass the current conversation name from `list_chats` 
 `expected_chat_name`; the service refreshes only that recipient (a chat's delta, or a channel's name from
 its team), then checks the name before sending. Pass exactly one of `text` (plain text; HTML
 characters are escaped) or `html` (HTML sent as written, after a passive check that refuses scripts, frames,
-form controls, event-handler attributes, `javascript:` and `vbscript:` URLs, images and other embedded
-media, declarations and CDATA sections, and unfinished markup). Teams shows only images it hosts, so an
-`<img>` is refused rather than sent; sending pasted images is roadmap P1.5. The
-message is attempted once. A network failure after the request may leave the result uncertain, so
-inspect the conversation before deciding whether another send is needed. A search result or request
-to analyze a conversation does not authorize a send.
+form controls, event-handler attributes, `javascript:` and `vbscript:` URLs, embedded media, declarations
+and CDATA sections, and unfinished markup). The message is attempted once. A network failure after the
+request may leave the result uncertain, so inspect the conversation before deciding whether another send
+is needed. A search result or request to analyze a conversation does not authorize a send.
 
-`files` attaches local files, by absolute path, to a message for a one-on-one or group chat: up to 10,
-each up to `config.MAX_SEND_FILE_BYTES` (2 GiB by default). With files, `text` and `html` may both be omitted. The authorization covers every
-file. Before any request the service checks each path. It then does what Teams Web does, through Graph
+`images` sends local PNG or JPEG files inline, as Graph `hostedContents` in the same request
+([research](api-research.md#sending-files)). Teams shows only images it hosts, so an `<img>` in `html` is
+allowed only when its `src` is the file name of one of `images`; the service rebuilds that tag to point
+at `../hostedContents/N/$value` and keeps only `alt`, `title`, `width`, `height` and `style`. Any other
+`<img>` is refused, so remote images stay blocked. Images the HTML does not name, and every image sent
+with `text`, follow the text, one paragraph each. Before any request the service refuses a file that is
+not PNG or JPEG (by its content) and images that would push the request past about 4 MiB (base64 adds a
+third, so about 3 MB of images); the error suggests `files` instead.
+
+`files` attaches local files, by absolute path, in a one-on-one or group chat or the self chat: up to 10,
+each up to `config.MAX_SEND_FILE_BYTES` (2 GiB by default). With files or images, `text` and `html` may
+both be omitted, and images and files may share a message. The authorization covers every file and
+image. Before any request the service checks each path. It then does what Teams Web does, through Graph
 ([research](api-research.md#sending-files)):
 
 1. Upload each file to `config.CHAT_FILES_FOLDER` in the sender's OneDrive. A name clash is renamed. A
    file under 250 MiB goes up in one `PUT`. A larger one uses an upload session: `createUploadSession`,
    then 10 MiB chunks read from disk and `PUT` to the session's `uploadUrl`, without credentials.
-2. Share each file with the chat's other members from Chat Service, without an email. The access follows
-   `config.SHARED_FILE_ACCESS`: the tenant's default link (`chat_default`) or direct grants (`direct`).
+2. Share each file with the chat's other members (listed from Chat Service), without an email. The access
+   follows `config.SHARED_FILE_ACCESS`: the tenant's default link (`chat_default`) or direct grants
+   (`direct`). The self chat has nobody to share with, so this step is skipped there.
 3. Post the message with one `reference` attachment per file.
 
 Each request is made once, with one user-approved exception: after a failed chunk, the uploader reads
 the session's `nextExpectedRanges` and resends only the missing bytes, at most
 `graph_teams.UPLOAD_RESUMES` (3) times per file; then it cancels the session (`DELETE uploadUrl`) and
 the send fails. If the last chunk fails and the session's state cannot be read, the file may have been
-uploaded, so the outcome is reported as unknown. The message is posted only after every upload and share has succeeded. A
+uploaded, so the outcome is reported as unknown. The message is posted only after every upload and
+share has succeeded. A
 share that fails for some members (Graph's `207 Multi-Status`) counts as failed.
 When something fails, the error names the files already in the sender's OneDrive, which stay there. A
 member without an object id in the directory, such as a federated user, makes the send fail before

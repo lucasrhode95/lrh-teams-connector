@@ -121,12 +121,11 @@ async def test_direct_access_grants_without_asking_for_the_default_link(fake: Fa
 @pytest.mark.parametrize(
     ("conversation_id", "message"),
     [
-        ("19:general@thread.tacv2", "one-on-one and group chats only"),
-        ("19:meeting_abc@thread.v2", "one-on-one and group chats only"),
-        ("48:notes", "one-on-one and group chats only"),
+        ("19:general@thread.tacv2", "one-on-one and group chats and the self chat only"),
+        ("19:meeting_abc@thread.v2", "one-on-one and group chats and the self chat only"),
     ],
 )
-async def test_files_are_refused_outside_one_on_one_and_group_chats(
+async def test_files_are_refused_in_channels_and_meeting_chats(
     services: Services, fake: FakeTeams, notes: Path, conversation_id: str, message: str
 ) -> None:
     name = await _name(services, conversation_id)
@@ -134,6 +133,20 @@ async def test_files_are_refused_outside_one_on_one_and_group_chats(
     with pytest.raises(InvalidRequest, match=message):
         await services.sender.send(conversation_id, expected_chat_name=name, files=[str(notes)])
     assert fake.uploads == [] and fake.sent == []
+
+
+async def test_the_self_chat_takes_files_without_a_share_step(
+    services: Services, fake: FakeTeams, notes: Path
+) -> None:
+    name = await _name(services, "48:notes")
+
+    result = await services.sender.send("48:notes", expected_chat_name=name, text="Mine.", files=[str(notes)])
+
+    assert [stored for _, stored, _ in fake.uploads] == ["notes.txt"]
+    assert fake.invites == []
+    path, body = fake.sent[-1]
+    assert path == "/chats/48:notes/messages" and len(body["attachments"]) == 1
+    assert [f.name for f in result.files] == ["notes.txt"]
 
 
 async def test_bad_paths_are_refused_before_any_request(
