@@ -26,7 +26,7 @@ ACTIVE = [
     ('<a href="javascript:alert(1)">x</a>', "Active HTML URLs"),
     ('<a href="  JaVa\tScRiPt:alert(1)">x</a>', "Active HTML URLs"),
     ('<a href="vbscript:msgbox">x</a>', "Active HTML URLs"),
-    ('<img src="https://example.com/x.png" onerror="alert(1)">', "event handlers"),
+    ('<span onmouseover="alert(1)">x</span>', "event handlers"),
     ('<p onclick="alert(1)">x</p>', "event handlers"),
     ("<title>x</title>", "changes how"),
     ("<noscript><p>x</p></noscript>", "changes how"),
@@ -34,6 +34,11 @@ ACTIVE = [
     ('<p><a href="https://example.com/x', "ends inside"),
     ("<p>unfinished <!-- comment", "ends inside"),
     ("<p>text <script>alert(1)", "script"),
+    ("<![CDATA[ > <img src=x onerror=alert(1)> ]]>", "CDATA"),
+    ("<!DOCTYPE html><p>x</p>", "declarations"),
+    ("<?xml version='1.0'?><p>x</p>", "processing instructions"),
+    ('<p>see <img src="https://example.com/x.png"></p>', "Embedded media"),
+    ('<video src="https://example.com/v.mp4"></video>', "Embedded media"),
 ]
 
 
