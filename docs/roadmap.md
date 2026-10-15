@@ -12,29 +12,26 @@ Snapshot **2026-10-15**.
 Write each bug as **Seen** (a synthetic example: the call and what came back), **Expected**,
 **Cause** and **Fix**.
 
-### R3 — Channel history is not in time order across pages (decision pending)
-
-**Seen:** `get_messages` on a channel with more than 50 active threads returns an old post with a new
-reply in its first pages, before newer posts of quieter threads; with `message_limit=100`, the "latest
-100" can include that old post and miss newer ones. Exports inherit the order.
-**Expected:** history newest first across pages, as for chats.
-**Cause:** Graph pages channel threads by their latest activity, and a page's messages are sorted only
-within it. `HistoryPage.floor` (every newer message is already delivered) is computed but unused since D2.
-**Fix (to decide):** present channel history as threads by latest activity, each thread in time order,
-and document `message_limit` for channels as "the messages of the most active threads"; or hold back
-messages older than each page's floor (complete in exports, which read every page; not possible across
-`get_messages` cursors without carrying messages in them).
+None open.
 
 ## Improvements
 
 Working behavior that could be cheaper, simpler or better informed.
 
-### D3 — Organize the research by service (decision pending)
+### D3 — Rewrite the research record
 
-`docs/api-research.md` (about 3,600 lines) keeps its findings in dated blocks; the owner index at its top
-groups the existing sections by service without moving them. Still to decide: move the sections under
-their owners (their anchors change, and links from other documents and the Outlook repository must follow),
-or keep the index and close D3.
+`docs/api-research.md` (about 3,700 lines) is meant for what Microsoft does not document, or documents
+ambiguously enough that it had to be tested. It has grown into a chronological log that also restates
+documented Graph behavior and keeps findings later ones replaced. Rewrite it by service (AuthZ, CSA,
+Chat Service, AMS, Search v2 and Substrate, SharePoint and OneDrive, presence, Teams Web), each with the
+routes the connector uses, their request and response shapes, limits and dated evidence:
+
+- documented Graph behavior moves out; only Graph findings that contradict or sharpen the documentation stay;
+- superseded findings are deleted (git keeps them), as are references to removed features;
+- routes the connector does not use (Chat Service edits, deletes, reactions and drafts, Middle Tier
+  profile routes, AMS upload, sharing links, other search routes) stay, trimmed to route, shape and status,
+  as a source for later work;
+- links from the other documents, and the two from the Outlook research, follow the new anchors.
 
 ### S4 — Check the recipient against the stored catalog (decision pending)
 

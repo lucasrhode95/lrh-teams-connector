@@ -180,3 +180,21 @@ async def test_an_export_stops_when_teams_repeats_a_continuation(services: Servi
     with pytest.raises(Upstream):
         async for _ in history.selection(chat, since=None, until=None):
             pass
+
+
+async def test_channel_history_is_threads_by_latest_activity_each_in_time_order(
+    services: Services, fake: FakeTeams
+) -> None:
+    fake.channels[CHANNEL].threads = [
+        graph_message("6001", "2026-03-03T12:00:00Z", "Budget", replies=[
+            graph_message("6002", "2026-09-14T12:00:00Z", "Update", reply_to="6001"),
+        ]),
+        graph_message("6003", "2026-09-13T12:00:00Z", "Release"),
+        graph_message("6004", "2026-09-12T12:00:00Z", "Offsite"),
+    ]  # fmt: skip
+    page = await services.history.get_messages(CHANNEL)
+    # the quietest thread first, the busiest last; the March post stays with its September reply
+    assert [m.id for m in page.items] == ["6004", "6003", "6001", "6002"]
+
+    latest = await services.history.get_messages(CHANNEL, message_limit=2)
+    assert [m.id for m in latest.items] == ["6001", "6002"]  # the most recently active thread

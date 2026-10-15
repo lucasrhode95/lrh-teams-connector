@@ -271,7 +271,7 @@ def _name_attachments(
         if final is None:
             final = unique_asset_name(attachment.name, used)
             names[key] = final
-            references[final] = attachment.model_copy(update={"name": final})
+            references[final] = attachment  # cached under its own name; packaged as ``final``
         if final != attachment.name:
             label = _label(attachment)
             message.text = message.text.replace(f"[{label}: {attachment.name}]", f"[{label}: {final}]")

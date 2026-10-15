@@ -10,7 +10,6 @@ import contextlib
 import re
 from typing import Any
 
-from teams_connector.config import CSA_FOLDERS_URL as FOLDERS_URL
 from teams_connector.config import CSA_UPDATES_URL as UPDATES_URL
 from teams_connector.domain.errors import InvalidRequest, Upstream
 from teams_connector.domain.models import Chat
@@ -46,24 +45,6 @@ class CsaCatalog:
             headers["x-ms-synctoken"] = sync_token
         data = await self._transport.json("GET", UPDATES_URL, credential=self._credential, headers=headers)
         return data if isinstance(data, dict) else {}
-
-    async def favorite_ids(self) -> set[str]:
-        """The chats in the Favorites sidebar folder. Read with the CSA credential; nothing is written."""
-        with operation("reading the sidebar folders"):
-            data = await self._transport.json(
-                "GET", FOLDERS_URL, credential=self._credential, headers={"Accept": "application/json"}
-            )
-        folders = data.get("conversationFolders") if isinstance(data, dict) else None
-        if not isinstance(folders, list):
-            raise Upstream("Unexpected Teams sidebar folders response.")
-        ids: set[str] = set()
-        for folder in folders:
-            if not isinstance(folder, dict) or folder.get("folderType") != "Favorites":
-                continue
-            for item in folder.get("conversationFolderItems") or []:
-                if isinstance(item, dict) and isinstance(item.get("conversationId"), str):
-                    ids.add(item["conversationId"])
-        return ids
 
     async def updates(self, sync_token: str | None) -> CatalogUpdate:
         with operation("reading the chat catalog"):

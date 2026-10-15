@@ -82,5 +82,5 @@ async def test_an_expired_token_before_a_send_reads_the_snapshot_once(
 
     await services.catalog.recipient(ONE_ON_ONE)
 
-    catalog_reads = [call for call in fake.calls if "/csa/" in call and "conversationFolders" not in call]
+    catalog_reads = [call for call in fake.calls if "/csa/" in call]
     assert len(catalog_reads) == 2  # the refused delta and one snapshot

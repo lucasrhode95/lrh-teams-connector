@@ -115,7 +115,6 @@ class AppContext:
             channels,
             chat_service,
             members=member_search,
-            favorites=catalog_source,
         )
         history = History(catalog, chat_service, channels, account.object_id)
         search_source = SubstrateSearch(
