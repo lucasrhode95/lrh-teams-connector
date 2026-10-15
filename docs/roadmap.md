@@ -77,35 +77,6 @@ Settle before relying on it:
   `properties.files`; [research](api-research.md#upload-chat-file)) is a fallback only if Graph's path
   loses something.
 
-### N7 — HTML sends
-
-`send_message` takes plain text only and escapes it, so an agent cannot send bold text, lists, links
-or code. Add `html` beside `text` as two mutually exclusive body arguments: exactly one is required,
-and passing both or neither is refused. Nothing is parsed or converted. `text` stays escaped as
-today, so Markdown in it arrives as literal asterisks; `html` is sent as written. Agents write HTML
-well, so there is no Markdown conversion.
-
-**Example:** the agent sends
-
-```html
-<p><strong>Due Friday</strong></p>
-<ul><li>review the <code>budget</code> sheet</li><li><a href="https://example.com/tracker">tracker</a></li></ul>
-```
-
-as `html`, and Teams shows a bold line followed by a two-item list with inline code and a link. The
-same content sent as `text` shows the tags literally.
-
-Settle before relying on it:
-
-- Refuse unsafe HTML where it enters instead of rewriting it: scripts, frames, form controls,
-  event-handler attributes, `javascript:` URLs and unfinished markup. The Outlook connector's
-  [passive HTML check](https://github.com/lucasrhode95/lrh-outlook-connector/blob/main/src/outlook_connector/service/passive_html.py)
-  is the reference rule set; the Teams code keeps its own copy.
-- Which elements Teams renders: paragraphs, line breaks, bold, italics, inline and block code, lists
-  and links are expected; headings, tables and images need a check. Document what Teams strips.
-- The 10,000-character limit applies to the HTML as sent.
-- Check rendering with disposable self-chat messages.
-
 ### P2.2f — Meeting recaps and transcripts
 
 Four separate capabilities, none implemented: finding recaps, listing a meeting's transcripts,

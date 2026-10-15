@@ -70,6 +70,8 @@ chat, in the current request or by confirming after you asked. If authorization 
 ambiguous, ask and wait. user_confirmation records the authorization; it is not permission by itself. \
 One authorization is not ongoing consent. Search, summaries and exports never imply permission to \
 send. A send is attempted once: if its outcome is unknown, check the chat before trying again.
+- Pass text (plain, escaped) or html (sent as written: bold, lists, links, code) to send_message, never \
+both. Active HTML (scripts, forms, event handlers, javascript: links) and unfinished markup are refused.
 - If a tool says sign-in is required, ask the user to run the quoted `teams-connector auth` command in \
 a terminal; never attempt to sign in yourself. "Access denied" errors are about that item, not the \
 sign-in.
@@ -332,7 +334,6 @@ def build_server(context: AppContext) -> FastMCP:
         expected_chat_name: Annotated[
             str, Field(description="The chat's exact current name from list_chats; checked before sending.")
         ],
-        text: Annotated[str, Field(description="Plain text, up to 10,000 characters (HTML is escaped).")],
         user_confirmation: Annotated[
             str,
             Field(
@@ -340,13 +341,26 @@ def build_server(context: AppContext) -> FastMCP:
                 "and content. Never invent or infer it; it does not authorize anything by itself."
             ),
         ],
+        text: Annotated[
+            str | None,
+            Field(description="Plain text, up to 10,000 characters; HTML characters are escaped. Or html."),
+        ] = None,
+        html: Annotated[
+            str | None,
+            Field(
+                description="HTML, up to 10,000 characters, sent as written (bold, lists, links, code). "
+                "Active content and unfinished markup are refused. Pass exactly one of text or html."
+            ),
+        ] = None,
     ) -> SendResult:
-        """Send one plain-text message to a chat or channel. External side effect: only with the user's
-        explicit authorization for this recipient and content. Attempted once, never retried."""
+        """Send one message to a chat or channel, as plain text or as HTML sent as written. External side
+        effect: only with the user's explicit authorization for this recipient and content. Attempted once,
+        never retried."""
         return await (await services()).sender.send(
             conversation_id,
             expected_chat_name=expected_chat_name,
             text=text,
+            html=html,
             user_confirmation=user_confirmation,
         )
 
