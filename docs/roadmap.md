@@ -22,18 +22,8 @@ Working behavior that could be cheaper, simpler or better informed.
 
 ### P1.5 — Send host files as attachments
 
-Files on `send_message` work for one-on-one and group chats (implemented 2026-10-15; see
-[architecture](architecture.md#send-a-message)): Graph upload to `config.CHAT_FILES_FOLDER`, a
-`driveItem/invite` per file following `config.SHARED_FILE_ACCESS`, then one post with `reference`
-attachments. The 2026-10-15 probes of these Graph calls were confirmed by their recipients
-([research](api-research.md#sending-files)).
-
-The first connector send, on 2026-10-15, sent one small text file with a caption to a one-on-one chat.
-It was sent once and returned `accepted` with the file's name and OneDrive link. `get_messages` read it
-back with the caption and the `[File: …]` marker. The file was renamed on a clash, and the result and
-marker both used the new name. The recipient confirmed that the file opened.
-
-Open:
+What files on `send_message` cannot do yet. One-on-one and group chats work
+([architecture](architecture.md#send-a-message), [research](api-research.md#sending-files)).
 
 - **Files of 250 MiB or more:** refused today. A single PUT takes at most 262,143,999 bytes; larger files
   need a Graph upload session (`createUploadSession`, then ranged PUTs to its `uploadUrl`).
@@ -43,10 +33,6 @@ Open:
   - Channels store files in the team's SharePoint folder instead.
   - Meeting chats and the self chat are untried with Graph `reference` attachments; the self chat has no
     one to share with.
-- **Known gaps against Teams Web:**
-  - Graph attachments leave `permissionScope` and `shareUrl` empty; recipients saw no difference.
-  - Graph cannot read the chat-audience default (`driveItem/commands`); `getDefaultLink` matched it on one
-    tenant.
 
 ### P1.7 — Delete the user's own messages
 

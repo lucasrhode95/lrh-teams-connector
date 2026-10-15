@@ -606,6 +606,10 @@ What Chat Service stored:
   a pasted image would be: an `AMSImage` on the first AMS host (`views/imgpsh_fullsize`), listed in
   `amsreferences`, with a `blurHash`.
 
+Graph has no route for the chat-audience default Teams Web reads (`driveItem/commands` with
+`audienceType="chat"`). The invite's `getDefaultLink` returned the same specific-people edit link on this
+tenant, but nothing shows the two always agree.
+
 Both recipients opened every file, saw normal file cards and previews despite the empty `permissionScope`,
 and received no invitation email (`sendInvitation: false`). Confirmed by the recipients the same day.
 
