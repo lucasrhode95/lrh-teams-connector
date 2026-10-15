@@ -29,7 +29,6 @@ from teams_connector.domain.models import (
     ExportProgress,
     ExportRequest,
     MatchMode,
-    MessageContent,
     MessagePage,
     RemoteMessageSearchResult,
     SavedFile,
@@ -49,7 +48,7 @@ group, meeting, channel, or self for the user's own notes chat). search_chats fi
 name or by an indexed participant's name (rosters are indexed by sync_archive; read its coverage).
 - Reading: get_messages returns a conversation's history newest pages first, oldest first within a \
 page, with optional since/until and a total message_limit. Follow `cursor` for older messages. Long \
-texts are shortened to fit the response (text_truncated); get_message_content continues one. \
+a page holds whole messages up to max_chars (at least one), so no message text is cut. \
 is_self marks the user's own messages: use it rather than matching names.
 - Searching message content: search_messages needs an explicit date range and a scope \
 (conversation_ids, or all_chats=true). It first fetches that scope from Teams into the local archive \
@@ -202,7 +201,12 @@ def build_server(context: AppContext) -> FastMCP:
         ] = None,
         page_size: Annotated[int, Field(ge=1, le=50)] = 25,
         max_chars: Annotated[
-            int, Field(ge=4_000, le=100_000, description="Text budget for the page.")
+            int,
+            Field(
+                ge=4_000,
+                le=100_000,
+                description="Text budget: whole messages up to this many characters, at least one.",
+            ),
         ] = 30_000,
         cursor: Annotated[
             str | None,
@@ -219,19 +223,6 @@ def build_server(context: AppContext) -> FastMCP:
             page_size=page_size,
             max_chars=max_chars,
             cursor=cursor,
-        )
-
-    @mcp.tool(annotations=READ_ONLY)
-    @_logged
-    async def get_message_content(
-        conversation_id: ConversationId,
-        message_id: str,
-        offset: Annotated[int, Field(ge=0)] = 0,
-        max_chars: Annotated[int, Field(ge=1, le=100_000)] = 50_000,
-    ) -> MessageContent:
-        """A character range of one archived message's text (continue a text_truncated message)."""
-        return (await services()).history.content(
-            conversation_id, message_id, offset=offset, max_chars=max_chars
         )
 
     @mcp.tool(annotations=READ_ONLY)

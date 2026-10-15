@@ -15,8 +15,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
-from teams_connector.domain.errors import InvalidRequest, NotFound, Upstream
-from teams_connector.domain.models import Chat, HistoryCoverage, Message, MessageContent, MessagePage
+from teams_connector.domain.errors import InvalidRequest, Upstream
+from teams_connector.domain.models import Chat, HistoryCoverage, Message, MessagePage
 from teams_connector.remote.ports import HistoryReader
 from teams_connector.service import cursors
 from teams_connector.service.catalog import Catalog
@@ -185,6 +185,9 @@ class History:
         else:
             items = []
 
+        whole = _whole_messages(items, max_chars)
+        trimmed = len(whole) < len(items)
+        items = whole
         if items:
             last = items[-1]
             s["before"] = [iso(last.sent_at), last.id]
@@ -197,13 +200,14 @@ class History:
                 chat.id, since=since, until=until, before=tuple(s["before"]), limit=1
             )
         )
-        has_more = not limit_reached and (not s["remote_complete"] or more_local)
+        has_more = not limit_reached and (trimmed or not s["remote_complete"] or more_local)
 
-        texts_cut = _fit_texts(items, max_chars)
         ordered = [self.annotate(m) for m in reversed(items)]
         notes = []
         if has_more and not items:
             notes.append("The remote history is still being fetched for this selection; follow the cursor.")
+        if trimmed:
+            notes.append("The page ends before the next message, which would exceed max_chars.")
         return MessagePage(
             chat=chat,
             items=ordered,
@@ -213,43 +217,20 @@ class History:
                 remote_complete=bool(s["remote_complete"]),
                 remote_pages=int(s["remote_pages"]),
                 archive_only=sum(1 for m in items if m.id not in fetched),
-                truncated_texts=texts_cut,
                 message_limit_reached=limit_reached,
                 notes=notes,
             ),
         )
 
-    def content(
-        self, conversation_id: str, message_id: str, *, offset: int, max_chars: int
-    ) -> MessageContent:
-        message = self._store.message(conversation_id, message_id)
-        if message is None:
-            raise NotFound(
-                "The message is not in the local archive; read its conversation with get_messages first."
-            )
-        text = message.text
-        if offset > len(text):
-            raise InvalidRequest("offset is beyond the end of the message text.")
-        end = min(len(text), offset + max_chars)
-        return MessageContent(
-            message=self.annotate(message.model_copy(update={"text": ""})),
-            text=text[offset:end],
-            offset=offset,
-            total_chars=len(text),
-            next_offset=end if end < len(text) else None,
-        )
 
-
-def _fit_texts(items: list[Message], max_chars: int) -> int:
-    """Share a character budget across message texts; shortened ones are flagged. Returns how many."""
-    budget = max(0, max_chars)
-    cut = 0
-    for index, message in enumerate(items):
-        allowance = budget // max(1, len(items) - index)
-        if len(message.text) > allowance:
-            message.text_chars = len(message.text)
-            message.text = message.text[:allowance]
-            message.text_truncated = True
-            cut += 1
-        budget -= len(message.text)
-    return cut
+def _whole_messages(items: list[Message], max_chars: int) -> list[Message]:
+    """The leading messages (newest first) whose texts fit ``max_chars`` together. The first message is
+    always kept whole, so a page always moves on, even when that message alone exceeds the budget."""
+    kept: list[Message] = []
+    used = 0
+    for message in items:
+        if kept and used + len(message.text) > max_chars:
+            break
+        kept.append(message)
+        used += len(message.text)
+    return kept

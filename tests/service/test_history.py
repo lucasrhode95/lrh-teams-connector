@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import pytest
 
 from teams_connector.bootstrap import Services
-from teams_connector.domain.errors import InvalidRequest, NotFound
+from teams_connector.domain.errors import InvalidRequest
 from tests.fakes.teams_fake import FakeTeams, cs_message, graph_message
 
 ONE = "19:one@unq.gbl.spaces"
@@ -80,13 +80,29 @@ async def test_is_self_and_attachments(services: Services) -> None:
     assert attachment.name == "notes.txt" and "[Attachment: notes.txt]" in by_id["1003"].text
 
 
-async def test_text_budget_truncates_and_content_continues(services: Services, fake: FakeTeams) -> None:
+async def test_a_page_holds_whole_messages_and_the_cursor_continues_with_older_ones(
+    services: Services, fake: FakeTeams
+) -> None:
+    fake.chats[ONE].messages = [
+        cs_message("old", "2026-09-01T00:00:00.000Z", "a" * 3000),
+        cs_message("mid", "2026-09-02T00:00:00.000Z", "b" * 3000),
+        cs_message("new", "2026-09-03T00:00:00.000Z", "c" * 3000),
+    ]
+    first = await services.history.get_messages(ONE, max_chars=4000)
+    assert [m.id for m in first.items] == ["new"] and first.cursor and not first.coverage.complete
+    assert first.items[0].text == "c" * 3000
+    second = await services.history.get_messages(ONE, cursor=first.cursor)
+    assert [m.id for m in second.items] == ["mid"] and second.cursor
+    third = await services.history.get_messages(ONE, cursor=second.cursor)
+    assert [m.id for m in third.items] == ["old"] and third.cursor is None and third.coverage.complete
+
+
+async def test_a_message_larger_than_the_budget_is_returned_whole(
+    services: Services, fake: FakeTeams
+) -> None:
     fake.chats[ONE].messages = [cs_message("big", "2026-09-01T00:00:00.000Z", "x" * 9000)]
     page = await services.history.get_messages(ONE, max_chars=4000)
-    message = page.items[0]
-    assert message.text_truncated and message.text_chars == 9000 and len(message.text) == 4000
-    rest = services.history.content(ONE, "big", offset=4000, max_chars=10_000)
-    assert rest.total_chars == 9000 and rest.next_offset is None and len(rest.text) == 5000
+    assert [len(m.text) for m in page.items] == [9000] and page.cursor is None
 
 
 async def test_channel_history_comes_from_graph_threads(services: Services, fake: FakeTeams) -> None:
@@ -128,5 +144,3 @@ async def test_invalid_requests(services: Services) -> None:
         )
     with pytest.raises(InvalidRequest):
         await services.history.get_messages(ONE, since=datetime(2026, 1, 1))  # no timezone
-    with pytest.raises(NotFound):
-        services.history.content(ONE, "unknown", offset=0, max_chars=10)

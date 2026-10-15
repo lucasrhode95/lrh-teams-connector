@@ -124,9 +124,6 @@ class Message(Compact):
     is_deleted: bool = False
     deleted_at: datetime | None = None
     attachments: list[Attachment] = Field(default_factory=list)
-    # per result: the text was shortened to fit the response (continue with get_message_content)
-    text_truncated: bool = False
-    text_chars: int | None = None
 
 
 class HistoryCoverage(Compact):
@@ -136,7 +133,6 @@ class HistoryCoverage(Compact):
     remote_complete: bool  # the remote traversal reached the end of the selection
     remote_pages: int  # remote pages fetched so far for this selection
     archive_only: int = 0  # messages in this page known only from local retention
-    truncated_texts: int = 0
     message_limit_reached: bool = False
     notes: list[str] = Field(default_factory=list)
 
@@ -146,14 +142,6 @@ class MessagePage(Compact):
     items: list[Message]  # oldest first within the page; the cursor continues with older messages
     cursor: str | None = None
     coverage: HistoryCoverage
-
-
-class MessageContent(Compact):
-    message: Message  # without text
-    text: str
-    offset: int
-    total_chars: int
-    next_offset: int | None = None
 
 
 class SearchHit(Compact):

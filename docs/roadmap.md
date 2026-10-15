@@ -27,7 +27,6 @@ archive:
 | `search_messages`: fetch a scope, match locally with `match_mode` (`exact`, `substring`, `all_terms`) | One Search v2 tool replacing both `search_messages` and `search_remote_messages` (P2.2d). `match_mode` goes: Search v2 matches words, word prefixes and phrases, so local string modes have no meaning there. |
 | `search_chats` participant matches from indexed rosters | P2.2b |
 | `get_messages` merges remote pages with retained ones | Read Teams only; drop the archive merge and its paging floor |
-| `get_message_content` reads the archived message | Removed by R2 |
 | `download_attachment` reads the archived message | Re-read the one message from Chat Service, by id or by time (N1) |
 | Exports stream from SQLite | Stream through the export's own temporary file |
 | `sync_archive`, `archive_status`, the `backup` command | Remove |
@@ -97,24 +96,6 @@ Not covered: an older named chat where the person is a member but not in the tit
 the chat-list cache keeps member lists for that case. Chat *suggestions* need a Teams-client
 Substrate token, a new `lrh-m365-auth` profile, and return fewer chats than route 2, so they are not
 needed.
-
-### R2 — Whole messages per page; remove `get_message_content`
-
-`get_messages` fits each page into `max_chars` (30,000 by default) by cutting long messages and
-marking them `text_truncated`; the agent then calls `get_message_content` to read the rest of each
-one. Keep the page budget, since up to 50 long messages could otherwise fill the agent's context, but
-spend it on whole messages: fill the page until the next message would exceed `max_chars`, then stop
-and return the cursor there, as Outlook's `get_conversation` does.
-
-**Example:** a page of 25 messages where three are 12,000-character pasted logs. Today the page holds
-all 25, the logs cut to fit, plus three `get_message_content` calls to finish them. After the change
-the first page ends before the second log, and the cursor's next page starts with it, whole.
-
-- A page always holds at least one message, whole, even when it alone exceeds `max_chars`, so a walk
-  always advances. Teams bounds a message's size (roughly 28 KB; confirm), so that page stays bounded.
-- `page_size` becomes "at most": a page can hold fewer messages when they are long.
-- Remove `text_truncated` and `get_message_content`. This also removes one of the archive reads that
-  D2 would otherwise have to rebuild on Teams.
 
 ## Enhancements
 

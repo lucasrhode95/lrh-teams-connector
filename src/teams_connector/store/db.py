@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS chat_state (
 log = logging.getLogger(__name__)
 
 # Per-result fields: never stored with a message.
-DERIVED_FIELDS = {"is_self", "text_truncated", "text_chars"}
+DERIVED_FIELDS = {"is_self"}
 
 
 def store_path(fingerprint: str) -> Path:

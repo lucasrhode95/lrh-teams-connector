@@ -28,7 +28,6 @@ async def test_mcp_exposes_current_contract_and_reads_synthetic_chats(context: A
             "search_chats",
             "search_remote_messages",
             "get_messages",
-            "get_message_content",
             "search_messages",
             "export_chats",
             "download_attachment",

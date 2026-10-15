@@ -92,7 +92,6 @@ The MCP server exposes the tools below. Each one's inputs, results and caveats a
 | `search_chats` | [`service/catalog.py`](src/teams_connector/service/catalog.py) | Match conversation names, and participant names indexed by `sync_archive` |
 | `search_remote_messages` | [`service/search.py`](src/teams_connector/service/search.py) | Discover messages online through Microsoft Search v2, one bounded page at a time |
 | `get_messages` | [`service/history.py`](src/teams_connector/service/history.py) | Read a conversation's history, newest pages first, with inclusive date bounds |
-| `get_message_content` | [`service/history.py`](src/teams_connector/service/history.py) | Continue a long message's text |
 | `search_messages` | [`service/search.py`](src/teams_connector/service/search.py) | Match message text locally in chosen chats and dates, preparing history first |
 | `sync_archive`, `archive_status` | [`service/archive.py`](src/teams_connector/service/archive.py) | Fetch history and rosters in resumable batches, and report what is covered |
 | `export_chats` | [`service/export/`](src/teams_connector/service/export/) | Export conversations to `.txt`, `.jsonl` or `.zip`, with their attachments |

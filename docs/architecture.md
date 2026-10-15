@@ -154,9 +154,9 @@ diagnostics.
    available only after rosters have been indexed by `sync_archive`; read roster coverage.
 3. Call `get_messages` with the selected `conversation_id`. Pages are newest first; records within
    each page are oldest first. `since` and `until` are inclusive. `message_limit` caps the latest
-   matching messages, while `page_size` controls the returned page. Follow `cursor` to get older
-   messages. If a message body has `text_truncated=true`, call `get_message_content` with its ID and
-   the indicated continuation offset.
+   matching messages, while `page_size` is the most messages a page holds. A page also holds whole
+   messages up to `max_chars` (at least one), so no message text is cut; follow `cursor` to get the
+   older messages.
 
 Example arguments for a bounded history read:
 

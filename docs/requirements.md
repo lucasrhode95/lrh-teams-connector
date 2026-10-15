@@ -126,7 +126,8 @@ counts as broad Microsoft 365 search.
 
 - **History selection** is one rule for `get_messages`, MCP exports and UI exports: `since` and
   `until` are inclusive, dates filter first, then `message_limit` keeps the latest N matching
-  messages. Page size and response size are presentation only.
+  messages. A page holds whole messages: `page_size` and `max_chars` decide how many, and no message
+  text is cut to fit a response (decided 2026-10-15).
 - **Exports** produce one artifact per conversation: the plain TXT/JSONL file, or a ZIP with a folder
   holding the text and its attachments. Several conversations are wrapped in one outer ZIP.
   Attachments are included by default, up to 200 references per conversation, 100 MiB per file and

@@ -3372,3 +3372,10 @@ then one synthetic message to the self chat, counting requests by kind (no conte
 - The catalog's freshness mark did not change, so listings still wait for a full refresh.
 - Self-chat send: one message POST, and the returned id was present.
 
+## Whole-message history pages (2026-10-15)
+
+**Evidence:** read-only walks of two chats, the self chat and one meeting chat, with a 4,000-character page budget
+and with a 100,000-character budget (no message text kept). Both walks returned the same message ids and the same
+full texts (28 and 58 messages). The small budget used more pages (4 and 3, against 2 and 3). The longest
+message text was 3,640 characters, so no single message exceeded the budget.
+
