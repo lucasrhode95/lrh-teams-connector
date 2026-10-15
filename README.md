@@ -99,6 +99,8 @@ The MCP server exposes the tools below. Each one's inputs, results and caveats a
 
 Message timestamps are returned in UTC.
 
+Which service backs each tool and route, and which private or public service each capability uses, is in [the architecture](docs/architecture.md#services-ports-and-adapters) and [requirements §4](docs/requirements.md#4-backend-choice).
+
 ## Browser export UI
 
 Start the local UI when you want to choose conversations and download an export without an MCP

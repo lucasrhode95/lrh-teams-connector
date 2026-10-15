@@ -12,3 +12,5 @@ Diagrams: [architecture](diagrams/architecture.svg) (overview) and [code map](di
 
 Start with the [repository README](../README.md), then the architecture. The research is a dated
 evidence log: read the section you need, not the whole file.
+
+The [API research](api-research.md) is grouped by owner in its [owner index](api-research.md#owner-index). The architecture maps each tool and route to its service, ports and adapters.
