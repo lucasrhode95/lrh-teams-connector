@@ -16,7 +16,7 @@ CHANNEL = "19:general@thread.tacv2"
 
 
 def presence_calls(fake: FakeTeams) -> int:
-    return sum(1 for call in fake.calls if "presence.teams.microsoft.com" in call)
+    return sum(1 for call in fake.calls if "/v1/presence/getpresence" in call)
 
 
 async def test_presence_reports_the_fields_the_connector_keeps(services: Services) -> None:
@@ -54,3 +54,11 @@ async def test_a_failed_read_fails_open_and_is_not_kept(services: Services, fake
 async def test_only_one_to_one_chats_have_presence(services: Services) -> None:
     with pytest.raises(InvalidRequest, match="one-on-one"):
         await services.presence.for_chat(CHANNEL)
+
+
+async def test_presence_is_read_where_authz_names_the_service(services: Services, fake: FakeTeams) -> None:
+    await services.presence.for_chat(ONE)
+
+    assert any(
+        call.startswith("POST teams.microsoft.com/ups/emea/v1/presence/getpresence") for call in fake.calls
+    )

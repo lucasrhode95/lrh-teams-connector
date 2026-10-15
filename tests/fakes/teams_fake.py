@@ -22,6 +22,7 @@ from tests.fakes.msal_fakes import TENANT, USER_OID, jwt
 
 CHAT_SERVICE = "https://emea.ng.msg.teams.microsoft.com"
 GRAPH = "https://graph.microsoft.com/v1.0"
+PRESENCE = "https://teams.microsoft.com/ups/emea"
 ME = USER_OID
 ME_NAME = "Mia Example"
 PEER = "33333333-3333-3333-3333-333333333333"
@@ -191,7 +192,7 @@ class FakeTeams:
                 200,
                 json={
                     "tokens": {"skypeToken": "skype-token", "expiresIn": 86400},
-                    "regionGtms": {"chatService": CHAT_SERVICE},
+                    "regionGtms": {"chatService": CHAT_SERVICE, "presenceUPS": PRESENCE},
                 },  # fmt: skip
             )
         if url.hostname == "teams.microsoft.com" and path.endswith("/users/me/conversationFolders"):
@@ -202,7 +203,7 @@ class FakeTeams:
             return self._chat_service(request, path, parse_qs(url.query))
         if url.hostname == "eu-api.asm.skype.com":
             return self._ams(request, path)
-        if url.hostname and url.hostname.endswith(".presence.teams.microsoft.com"):
+        if url.hostname == "teams.microsoft.com" and path.startswith("/ups/emea/v1/presence/getpresence"):
             return self._presence(request)
         if url.hostname == "graph.microsoft.com":
             return self._graph(request, path.removeprefix("/v1.0"), parse_qs(url.query))
@@ -312,7 +313,7 @@ class FakeTeams:
     # ------------------------------------------------------------------ Graph
 
     def _presence(self, request: httpx.Request) -> httpx.Response:
-        """Regional Unified Presence: the teams.spaces bearer is accepted; one row per requested MRI. The
+        """Unified Presence at AuthZ's presenceUPS: the teams.spaces bearer is accepted; one row per MRI. The
         response carries fields the connector does not report, so they can be checked as dropped."""
         if not request.headers.get("authorization", "").startswith("Bearer "):
             return httpx.Response(401, json={"errorCode": "911"})
