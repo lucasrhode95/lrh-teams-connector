@@ -548,6 +548,51 @@ Shared files live in SharePoint or OneDrive; a message names them in `properties
 Beyond the documentation (live, 2026-10-15): a SharePoint site page (`.aspx`, such as a news post) shared in
 a message is refused by `/shares` with HTTP 400, so it is a link, not a file.
 
+### Loop pages and meeting notes
+
+Live, 2026-10-15, read-only, one meeting chat.
+
+**The message.** When a meeting ends, a bot posts a link to the meeting's Loop notes page:
+- Sender: `from` is a `28:` app id, `imdisplayname` and `properties.fromAppMetadata.name` are
+  "Facilitator", and `s2spartnername` is `SMBA`.
+- `properties.botMetadata.aiMetadata.botAiSkill` holds a JSON string with `eventType: TM_MeetingEnded` and
+  the `callId`.
+- `content` is one `RichText/Html` paragraph ("Everyone—that's a wrap…"). In it, an empty
+  `<a href="…/:fl:/p/<owner>/…" itemtype="http://schema.skype.com/FluidAutoEmbedLink" itemid="<guid>">`
+  carries the link; the `/:fl:/` path marks a Loop file. `properties.atp` repeats the URL.
+- There is no `properties.files`, so the connector reads the message as text plus a link today.
+
+**The page.** The link resolves through Graph `/shares/{u!…}/driveItem` with the `teams.graph` token. The
+item is a `.loop` file in the meeting organizer's OneDrive (about 95 KB, `application/octet-stream`).
+
+| `GET /shares/{share}/driveItem/content` | Result |
+|---|---|
+| no format | 200 binary Fluid container (`Microsoft.Prague` nodes); not readable as text |
+| `?format=html` | 200 `text/html`, about 12 KB, `<meta name="GENERATOR" content="Microsoft Loop">` |
+| `?format=pdf` | 200 `application/pdf`, about 22 KB |
+
+The HTML marks blocks with `data-docparser-context` (`paragraph`, `label`, `labelname`, `labelvalues`):
+- `h1` sections: the agenda with a goal, the meeting notes, and follow-up tasks.
+- The tasks are one `table` with Task, Assigned to, Due date and Bucket columns, and one row per task.
+- Boilerplate: a leading "AI-generated content in notes may be incorrect" note with a "Learn more" link,
+  empty paragraphs, a checkbox `input` per task, and a "Task list category : N" label after each task.
+
+The page is live: it shows its contents at read time, including later edits. Reading it needs
+access to the organizer's file, which an attendee had in this case.
+
+**How Teams Web renders the card** (Capture, 2026-10-15). Each meeting occurrence has its own page, named
+`<meeting> <date>.loop`, in a `Meetings` folder of the organizer's OneDrive. For each page, Teams Web:
+1. reads the item and its sharing (`/shares/{share}`, `GetSharingInformation`);
+2. checks `GET {site}/_api/v2.1/drives/{drive}/items/{item}/opStream/capabilities?$select=canWrite,canPrint,canExtract,canExport,supportsCLP`
+   (all true here except `supportsCLP`);
+3. loads the page as a live Fluid document: `opStream/snapshots/trees/latest`, `opStream` ops,
+   `opStream/joinSession` and a push socket.
+
+That is a collaborative editing session; the connector's HTML conversion needs none of it.
+`canExport`/`canExtract` are the flags to respect if a page forbids export; whether Graph's conversion
+already honors them is untested.
+Loop components that people paste into a chat may use the same `FluidAutoEmbedLink` embed; untested.
+
 ### Sending files
 
 Teams Web, Capture 2026-10-15: a one-on-one and a four-member group chat, a repeated name, an 8 MB file and an
