@@ -16,8 +16,8 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
 
-from teams_connector.domain.errors import InvalidRequest, NotFound
-from teams_connector.domain.models import Attachment, DownloadedFiles, SavedFile
+from teams_connector.domain.errors import AuthenticationRequired, ConnectorError, InvalidRequest, NotFound
+from teams_connector.domain.models import Attachment, DownloadedFiles, SavedFile, UnavailableFile
 from teams_connector.remote.ports import FileReader, ImageReader, People, RemoteFile
 from teams_connector.service import localfiles
 from teams_connector.service.history import History
@@ -59,14 +59,29 @@ class Files:
         chosen = [item for item in message.attachments if item.source is not None]
         if names is not None:
             available = {item.name for item in chosen}
+            pages = {item.name for item in message.attachments if item.kind == "link"}
             missing = [name for name in names if name not in available]
             if missing:
                 listed = ", ".join(repr(name) for name in missing)
-                raise NotFound(f"The message has no downloadable attachment named {listed}.")
+                hint = " SharePoint pages are links: open them instead." if set(missing) & pages else ""
+                raise NotFound(f"The message has no downloadable attachment named {listed}.{hint}")
             chosen = [item for item in chosen if item.name in set(names)]
         if not chosen:
             raise NotFound("The message has no downloadable attachment.")
-        return DownloadedFiles(files=[await self.save(item, max_bytes=MAX_DOWNLOAD_BYTES) for item in chosen])
+        saved: list[SavedFile] = []
+        unavailable: list[UnavailableFile] = []
+        first_error: ConnectorError | None = None
+        for item in chosen:
+            try:
+                saved.append(await self.save(item, max_bytes=MAX_DOWNLOAD_BYTES))
+            except AuthenticationRequired:
+                raise
+            except ConnectorError as exc:  # the other files are still saved; this one is reported
+                first_error = first_error or exc
+                unavailable.append(UnavailableFile(name=item.name, reason=str(exc)))
+        if not saved and first_error is not None:
+            raise first_error
+        return DownloadedFiles(files=saved, unavailable=unavailable)
 
     async def save(self, attachment: Attachment, *, max_bytes: int) -> SavedFile:
         """Fetch one attachment into the cache, or return the cached file. Only its own source is read."""

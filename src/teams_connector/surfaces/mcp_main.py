@@ -331,7 +331,8 @@ def build_server(context: AppContext) -> FastMCP:
         ] = None,
     ) -> DownloadedFiles:
         """Save the files a message names (shared files and pasted images) as local files and return their
-        paths. Pass exactly one of message_id or sent_at."""
+        paths. Pass exactly one of message_id or sent_at. A file that cannot be fetched is listed under
+        unavailable with its reason; the others are still saved. SharePoint pages ([Page: …]) are links."""
         if (message_id is None) == (sent_at is None):
             raise InvalidRequest("Pass exactly one of message_id or sent_at.")
         when = _utc(sent_at) if sent_at is not None else None

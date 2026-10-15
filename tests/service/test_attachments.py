@@ -175,3 +175,46 @@ async def test_export_without_attachments_keeps_only_the_markers(services: Servi
 
     text = Path(artifact.path).read_text(encoding="utf-8")
     assert f"[Image: {OBJECT}.png]" in text and calls_to(fake, "asm.skype.com") == 0
+
+
+def _shared(name: str, url: str) -> dict[str, object]:
+    return {"fileName": name, "fileInfo": {"shareUrl": url}}
+
+
+async def test_a_sharepoint_page_is_a_link_not_a_download(services: Services, fake: FakeTeams) -> None:
+    page_url = "https://tenant.sharepoint.com/sites/news/SitePages/Quarterly-recap.aspx"
+    fake.chats[ONE].messages.append(
+        cs_message("2101", WHEN, "Read this", files=[_shared("Quarterly-recap.aspx", page_url)])
+    )
+
+    message = await services.history.message(ONE, "2101")
+    assert f"[Page: Quarterly-recap.aspx] {page_url}" in message.text
+    (page,) = message.attachments
+    assert (page.kind, page.source) == ("link", None)
+    with pytest.raises(NotFound, match="SharePoint pages are links"):
+        await services.files.download_attachments(
+            ONE, message_id="2101", sent_at=None, names=["Quarterly-recap.aspx"]
+        )
+
+
+async def test_a_file_that_cannot_be_fetched_does_not_stop_the_others(
+    services: Services, fake: FakeTeams
+) -> None:
+    fake.files["https://tenant.sharepoint.com/s/plan"] = ("plan.txt", b"the plan")
+    fake.chats[ONE].messages.append(
+        cs_message(
+            "2102",
+            WHEN,
+            "Two files",
+            files=[
+                _shared("plan.txt", "https://tenant.sharepoint.com/s/plan"),
+                _shared("gone.txt", "https://tenant.sharepoint.com/s/gone"),  # no longer shared
+            ],
+        )
+    )
+
+    result = await services.files.download_attachments(ONE, message_id="2102", sent_at=None, names=None)
+    assert [saved.name for saved in result.files] == ["plan.txt"]
+    assert [missing.name for missing in result.unavailable] == ["gone.txt"]
+    with pytest.raises(NotFound):
+        await services.files.download_attachments(ONE, message_id="2102", sent_at=None, names=["gone.txt"])
