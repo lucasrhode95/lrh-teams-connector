@@ -20,8 +20,9 @@ ACTIVE_TAGS = frozenset(
 # after them as tags, so a fragment that ends after one would be checked as tags but rendered as text.
 STATE_CHANGING_TAGS = frozenset({"plaintext", "title", "xmp", "noembed", "noframes", "noscript"})
 # Teams shows a pasted image only as an upload it hosts; an <img> pointing elsewhere is not how Teams embeds
-# images, so it is refused rather than sent as a broken or external picture.
-UNSUPPORTED_TAGS = frozenset({"img", "picture", "source", "video", "audio"})
+# images, so it is refused rather than sent as a broken or external picture. A browser reads <image> as
+# <img>, and inline SVG can hold its own <image>.
+UNSUPPORTED_TAGS = frozenset({"img", "image", "svg", "picture", "source", "video", "audio"})
 _WHITESPACE = re.compile(r"[\s\x00-\x1f]+")
 
 
