@@ -26,10 +26,15 @@ Files on `send_message` work for one-on-one and group chats (implemented 2026-10
 [architecture](architecture.md#send-a-message)): Graph upload to `config.CHAT_FILES_FOLDER`, a
 `driveItem/invite` per file following `config.SHARED_FILE_ACCESS`, then one post with `reference`
 attachments. The 2026-10-15 probes of these Graph calls were confirmed by their recipients
-([research](api-research.md#sending-files)). Open:
+([research](api-research.md#sending-files)).
 
-- **First connector send:** check that the implementation matches the probes, with a file to a chat whose
-  recipient agrees, as in S3.
+The first connector send, on 2026-10-15, sent one small text file with a caption to a one-on-one chat.
+It was sent once and returned `accepted` with the file's name and OneDrive link. `get_messages` read it
+back with the caption and the `[File: …]` marker. The file was renamed on a clash, and the result and
+marker both used the new name. The recipient confirmed that the file opened.
+
+Open:
+
 - **Files of 250 MiB or more:** refused today. A single PUT takes at most 262,143,999 bytes; larger files
   need a Graph upload session (`createUploadSession`, then ranged PUTs to its `uploadUrl`).
 - **Pasted images:** `hostedContents` (`<img src="../hostedContents/1/$value">`) was stored as an AMS image,
@@ -42,6 +47,22 @@ attachments. The 2026-10-15 probes of these Graph calls were confirmed by their 
   - Graph attachments leave `permissionScope` and `shareUrl` empty; recipients saw no difference.
   - Graph cannot read the chat-audience default (`driveItem/commands`); `getDefaultLink` matched it on one
     tenant.
+
+### P1.7 — Delete the user's own messages
+
+Requested 2026-10-15, to clear test sends from a chat. Not implemented: deletes are out of scope today
+([requirements §3](requirements.md#3-non-goals)), and sending is the only write path. Implementing this makes deleting
+a second write path. That needs the requirements and the agent instructions changed, with the same
+safeguards as sending: explicit authorization for the chat and for every message, the user's own
+messages only (`is_self`), one attempt and no automatic retry.
+
+- **Route:** Graph `POST /chats/{chat}/messages/{message}/softDelete` is untried. Chat Service
+  `DELETE …/messages/{messageId}?behavior=softDelete` was captured, with an undo
+  ([research](api-research.md#writes-not-used-by-the-connector)). Probe Graph first, as was done for sends.
+- **Shared files:** deleting a message leaves its files in `config.CHAT_FILES_FOLDER`, still shared with
+  the chat. Decide whether to also remove the file, revoke its sharing, or report it.
+- **Result:** confirm with `get_messages`, which shows a deleted message as `is_deleted` with no text
+  ([research](api-research.md#edits-and-deletes)).
 
 ### P2.2f — Meeting recaps and transcripts
 
