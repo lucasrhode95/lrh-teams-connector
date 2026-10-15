@@ -238,7 +238,7 @@ The connector sends through Graph, which returns the new id in its body. Chat Se
 |---|---|---|
 | `POST …/conversations/{id}/messages` | `content`, `messagetype`, `contenttype`, `clientmessageid`, `imdisplayname`, `properties`, optional `amsreferences`. The body returns only `OriginalArrivalTime`; the new id is the last segment of the `Location` header. | Capture, Source, 2026-10-01 |
 | `PUT …/messages/{messageId}` | Edit: the whole message with new `content` and `properties.edittime` | Capture, 2026-10-14 |
-| `DELETE …/messages/{messageId}?behavior=softDelete` | Delete; undo is `DELETE …/messages/{messageId}/properties?name=deletetime` | Capture, 2026-10-14 |
+| `DELETE …/messages/{messageId}?behavior=softDelete` | Delete; undo is `DELETE …/messages/{messageId}/properties?name=deletetime`. With the Skype token it answered 200 for the user's own message in a group chat, and history then showed empty `content` and `deletetime` | Capture, 2026-10-14; Live, 2026-10-15 |
 | `PUT` / `DELETE …/messages/{messageId}/properties?name=emotions` | Add or remove a reaction: `{"emotions": {"key": "like", "value": "<messageId>"}}` | Third party |
 | `POST /v1/users/ME/drafts` | Scheduled message: `draftType: "ScheduledDraft"`, `innerThreadId`, `draftDetails.sendAt` | Third party |
 | `POST /v1/threads/{threadId}/files` | Thread file reference (Source, 2026-10-01); no file send called it ([sending files](#sending-files)) | Capture, 2026-10-15 |

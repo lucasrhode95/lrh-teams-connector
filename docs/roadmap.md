@@ -36,15 +36,26 @@ What files on `send_message` cannot do yet. One-on-one and group chats work
 
 ### P1.7 — Delete the user's own messages
 
-Requested 2026-10-15, to clear test sends from a chat. Not implemented: deletes are out of scope today
-([requirements §3](requirements.md#3-non-goals)), and sending is the only write path. Implementing this makes deleting
-a second write path. That needs the requirements and the agent instructions changed, with the same
-safeguards as sending: explicit authorization for the chat and for every message, the user's own
-messages only (`is_self`), one attempt and no automatic retry.
+Requested 2026-10-15, to clear test sends from a chat. Example: "delete my messages from 'P1.5 capture 1,
+please ignore' onwards in John Doe's chat."
 
-- **Route:** Graph `POST /chats/{chat}/messages/{message}/softDelete` is untried. Chat Service
-  `DELETE …/messages/{messageId}?behavior=softDelete` was captured, with an undo
-  ([research](api-research.md#writes-not-used-by-the-connector)). Probe Graph first, as was done for sends.
+Not implemented: deletes are out of scope today ([requirements §3](requirements.md#3-non-goals)), and
+sending is the only write path. Adding this makes deleting a second write path, so the requirements and
+the agent instructions change first.
+
+- **Shape:** one tool call deletes a set of the user's own messages in one conversation. The agent selects
+  them first: a starting message found by its text, then every later message of the user's, up to an
+  optional end. Each id is checked again before the delete. Only the user's own messages (`is_self`)
+  qualify, and other people's messages in the range are left alone.
+- **Confirmation:** the agent lists what will be deleted (chat, count, first and last message) and gets
+  the user's explicit yes. One yes covers the whole set. The connector cannot verify that confirmation,
+  so it is a rule in the tool description and MCP instructions, not something the code enforces.
+- **Writes:** each delete is attempted once and never retried. An uncertain outcome is reported per
+  message, and the result lists what was deleted, skipped and uncertain.
+- **Route:** Chat Service `DELETE …/messages/{messageId}?behavior=softDelete` with the Skype token. It
+  worked live on 2026-10-15 and has an undo ([research](api-research.md#writes-not-used-by-the-connector)).
+  Graph's `softDelete` needs `Chat.ReadWrite`, which the Teams client's Graph token lacks: editing a
+  message was refused ([research](api-research.md#grants-2026-10-01)).
 - **Shared files:** deleting a message leaves its files in `config.CHAT_FILES_FOLDER`, still shared with
   the chat. Decide whether to also remove the file, revoke its sharing, or report it.
 - **Result:** confirm with `get_messages`, which shows a deleted message as `is_deleted` with no text
