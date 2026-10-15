@@ -17,7 +17,7 @@ from teams_connector.domain.models import Chat, MessageHit, MessageSearchCoverag
 from teams_connector.remote.ports import MessageSearchReader
 from teams_connector.service import cursors
 from teams_connector.service.history import check_range
-from teams_connector.store.db import Store
+from teams_connector.store.db import Store, from_iso, iso
 
 CURSOR_KIND = "search_messages"
 MAX_TERMS = 25
@@ -50,14 +50,15 @@ class Search:
         cursor and the other arguments are ignored.
         """
         if cursor:
-            query, offset, page_size, cvid, logical_id = _resume(cursor)
+            terms, conversation_ids, since, until, offset, page_size, cvid, logical_id = _resume(cursor)
         else:
             check_range(since, until)
-            query = build_query(_terms(terms), _scope(conversation_ids), since, until)
+            terms, conversation_ids = _terms(terms), _scope(conversation_ids)
             if type(limit) is not int or not 1 <= limit <= MAX_PAGE_SIZE:
                 raise InvalidRequest(f"limit must be between 1 and {MAX_PAGE_SIZE}.")
             offset, page_size = 0, limit
             cvid, logical_id = str(uuid4()), str(uuid4())
+        query = build_query(terms, conversation_ids, since, until)
 
         page = await self._remote_messages.search_messages(
             query,
@@ -82,7 +83,10 @@ class Search:
             if next_offset <= MAX_OFFSET:
                 next_cursor = cursors.encode(
                     CURSOR_KIND,
-                    query=query,
+                    terms=terms,
+                    conversation_ids=conversation_ids,
+                    since=iso(since),
+                    until=iso(until),
                     page_size=page_size,
                     offset=next_offset,
                     cvid=cvid,
@@ -171,12 +175,17 @@ def _search_time(value: datetime) -> str:
     return moment.strftime("%Y-%m-%dT%H:%M:%S") + f".{moment.microsecond // 1000:03d}Z"
 
 
-def _resume(cursor: str) -> tuple[str, int, int, str, str]:
-    """The query and paging a cursor carries. Cursors are not signed, so each value is checked again."""
+def _resume(
+    cursor: str,
+) -> tuple[list[str], list[str], datetime | None, datetime | None, int, int, str, str]:
+    """The search inputs and paging a cursor carries. Cursors are not signed, so the terms, scope and dates
+    are checked again as a new request's are, and the query is rebuilt from them, never read from the
+    cursor."""
     state = cursors.decode(cursor, CURSOR_KIND)
-    query = state.get("query")
-    if not isinstance(query, str) or not query.strip() or len(query) > MAX_QUERY_CHARS:
-        raise InvalidRequest("The search cursor has an invalid query.")
+    terms = _terms(state.get("terms"))
+    conversation_ids = _scope(state.get("conversation_ids"))
+    since, until = _cursor_time(state.get("since")), _cursor_time(state.get("until"))
+    check_range(since, until)
     offset = state.get("offset")
     page_size = state.get("page_size")
     if type(offset) is not int or not 0 <= offset <= MAX_OFFSET:
@@ -184,12 +193,26 @@ def _resume(cursor: str) -> tuple[str, int, int, str, str]:
     if type(page_size) is not int or not 1 <= page_size <= MAX_PAGE_SIZE:
         raise InvalidRequest("The search cursor has an invalid page size.")
     return (
-        query,
+        terms,
+        conversation_ids,
+        since,
+        until,
         offset,
         page_size,
         _cursor_uuid(state.get("cvid"), "Cvid"),
         _cursor_uuid(state.get("logical_id"), "LogicalId"),
     )
+
+
+def _cursor_time(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise InvalidRequest("The search cursor has an invalid date.")
+    try:
+        return from_iso(value)
+    except ValueError:
+        raise InvalidRequest("The search cursor has an invalid date.") from None
 
 
 def _cursor_uuid(value: object, label: str) -> str:
