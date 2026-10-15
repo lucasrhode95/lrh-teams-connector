@@ -121,20 +121,6 @@ where the check needs only the one conversation.
 **Fix:** refresh only what the recipient needs: the CSA delta for a chat, or one Graph GET of
 `/teams/{team}/channels/{channel}` for a channel. The live name check itself stays.
 
-### R1 — Multi-line messages read back double-spaced
-
-**Seen:** a message sent as two lines (`<p>first<br>second</p>`) shows as two lines in Teams, but
-`get_messages` returns `"first\n\nsecond"`.
-
-**Expected:** `"first\nsecond"`, matching what Teams shows.
-
-**Cause:** the text rendering turns each paragraph into a blank line
-([`teams_html.py`](../src/teams_connector/remote/teams_html.py)), and Teams stored the message as
-separate paragraphs. Teams Web displays consecutive paragraphs one line apart.
-
-**Fix:** confirm the stored markup of a multi-line message, then render consecutive paragraphs with
-one line break. Low priority.
-
 ### R2 — Whole messages per page; remove `get_message_content`
 
 `get_messages` fits each page into `max_chars` (30,000 by default) by cutting long messages and

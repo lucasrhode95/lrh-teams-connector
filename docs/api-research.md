@@ -3154,7 +3154,11 @@ recorded; example ids below are synthetic.
 - Escaped markup stays literal: `<b>not bold</b> & done` displays as typed.
 - Chat Service stores a Graph-sent message as `<p>…</p>` with `messagetype: RichText/Html` and
   `properties.s2spartnername: teamsgraph`. A two-line message displays as two lines in Teams; the
-  connector's text rendering returns it with a blank line between them.
+  connector's text rendering returned it with a blank line between them until 2026-10-15.
+- **Paragraph markup, checked 2026-10-15** (one synthetic two-paragraph self-chat message, sent once
+  through Graph): Chat Service stored `<p>first</p>` and `<p>second</p>` with a CRLF between them, as
+  `RichText/Html`. The connector's text now reads `first\nsecond`. Consecutive paragraphs are one
+  line apart; the CRLF is layout, and an empty paragraph still gives a blank line.
 
 ## Edit and delete
 

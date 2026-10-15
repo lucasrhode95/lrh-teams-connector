@@ -256,6 +256,7 @@ class TeamsHtmlParser(HTMLParser):
         self.mention_join_snapshots: list[tuple[list[str], int] | None] = []
         self.last_mention_content_start: int | None = None
         self.last_mention_close_index: int | None = None
+        self.paragraph_starts: list[int] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attributes = {name.lower(): value or "" for name, value in attrs}
@@ -285,7 +286,10 @@ class TeamsHtmlParser(HTMLParser):
             return
         if self.ignored_depth:
             return
-        if tag in self.BLOCK_TAGS:
+        if tag == "p":
+            self.paragraph_starts.append(len(self.parts))
+            self._newline(1)
+        elif tag in self.BLOCK_TAGS:
             self._newline(2)
         elif tag == "br":
             self._newline(1)
@@ -356,7 +360,9 @@ class TeamsHtmlParser(HTMLParser):
             return
         if self.ignored_depth:
             return
-        if tag in self.BLOCK_TAGS or tag == "li":
+        if tag == "p":
+            self._end_paragraph()
+        elif tag in self.BLOCK_TAGS or tag == "li":
             self._newline(2 if tag in self.BLOCK_TAGS else 1)
         elif tag in {"ul", "ol"}:
             if self.list_stack:
@@ -388,6 +394,10 @@ class TeamsHtmlParser(HTMLParser):
 
     def handle_data(self, data: str) -> None:
         if self.ignored_depth:
+            return
+        has_line_break = "\n" in data.replace("\r", "\n")
+        if not self.pre_depth and not data.strip() and has_line_break and self._at_line_start():
+            # Teams stores a line break between two paragraphs as whitespace; at a line start it is layout.
             return
         if not self.mention_tags and data.strip():
             self.last_mention_content_start = None
@@ -426,6 +436,18 @@ class TeamsHtmlParser(HTMLParser):
         text = "".join(parts).replace("\xa0", " ")
         text = re.sub(r"[*_`]+", "", text)
         return text.strip()
+
+    def _end_paragraph(self) -> None:
+        """Consecutive paragraphs read as consecutive lines, as Teams shows them. An empty paragraph
+        (no text, or only a line break) keeps its blank line."""
+        start = self.paragraph_starts.pop() if self.paragraph_starts else len(self.parts)
+        self._newline(1)
+        if not "".join(self.parts[start:]).strip():
+            self._newline(2)
+
+    def _at_line_start(self) -> bool:
+        current = "".join(self.parts)
+        return not current or current.endswith("\n")
 
     def _newline(self, count: int) -> None:
         current = "".join(self.parts)
