@@ -24,8 +24,9 @@ The connector must:
 - treat Teams as the record: keep no local copy of message content (§6);
 - send a text message the user explicitly authorized.
 
-Presence, Favorites and HTML sends are optional extras, tracked in the roadmap. Outlook, Teams and SharePoint are separately installed connectors that share
-one sign-in (`lrh-m365-auth`); each keeps its own product logic.
+Presence, Favorites and HTML sends are optional extras, tracked in the roadmap. Outlook, Teams and
+SharePoint are separately installed connectors that share one sign-in (`lrh-m365-auth`); each keeps
+its own product logic.
 
 ## 2. Ownership (2026-10-11)
 
@@ -112,7 +113,7 @@ The current code still keeps a message archive. Removing it is roadmap D2; until
 |---|---|---|
 | Conversation filter | Local UI | Filters the loaded catalog in the browser. Typing never calls Teams. |
 | Conversation search | MCP (`search_chats`) | Matches conversation names and participants. Refreshes the catalog by default; `refresh=false` searches the cache only. Reports what it could not cover. |
-| Message search | MCP | Search v2 on the server, across Teams or scoped to chosen conversations and dates. Matches words, word prefixes and quoted phrases; reports totals, pages, and a confirmed zero. |
+| Message search | MCP | Search v2 on the server, across Teams or scoped to chosen conversations and dates. Takes a list of terms, any of which matches; each term is one phrase, never split and never read as a query operator. Matches words, word prefixes and phrases; reports totals, pages, and a confirmed zero. No local match modes (decided 2026-10-15, roadmap P2.2d). |
 
 Until D2 lands, message search is split in two: `search_remote_messages` searches online across
 Teams, and `search_messages` fetches a chosen scope into the archive and matches it locally.

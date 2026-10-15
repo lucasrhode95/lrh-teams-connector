@@ -12,20 +12,6 @@ Snapshot **2026-10-15**.
 Write each bug as **Seen** (a synthetic example: the call and what came back), **Expected**,
 **Cause** and **Fix**.
 
-### B1 — `exact` search mode compares the whole message
-
-**Seen:** `search_messages` with `match_mode: "exact"` and query `alpha7q2 budget`, over a chat
-holding the message `CACHEPROBE alpha7q2 budget`, returns no items with `coverage.complete: true`.
-
-**Expected:** the message is found; `exact` means "this exact phrase".
-
-**Cause:** the store compares the whole folded text (`m.text_folded = ?` in
-[`Store.search`](../src/teams_connector/store/db.py)). An agent searching for a phrase concludes the
-text is absent.
-
-**Fix:** none if D2 lands first, because server-side search replaces the modes with quoted phrases.
-Otherwise match the phrase on word boundaries.
-
 ### B2 — Online search cannot confirm zero hits
 
 **Seen:** `search_remote_messages` for `zzqxv7npl` returns no items, `coverage.complete: false` and
@@ -83,7 +69,7 @@ archive:
 
 | Today | Replacement |
 |---|---|
-| `search_messages`: fetch a scope, match locally | Search v2 scoped the way Teams Web scopes it: `clientthreadid:<id>`, `sent >= … AND sent < …`, a `conversationType` filter, `NOT (isClientSoftDeleted:TRUE)`. Merge it with `search_remote_messages` into one tool (P2.2d). |
+| `search_messages`: fetch a scope, match locally with `match_mode` (`exact`, `substring`, `all_terms`) | One Search v2 tool replacing both `search_messages` and `search_remote_messages` (P2.2d). `match_mode` goes: Search v2 matches words, word prefixes and phrases, so local string modes have no meaning there. |
 | `search_chats` participant matches from indexed rosters | P2.2b |
 | `get_messages` merges remote pages with retained ones | Read Teams only; drop the archive merge and its paging floor |
 | `get_message_content` reads the archived message | Removed by R2 |
@@ -112,29 +98,34 @@ Follow the Outlook connector's layout
   their dates; do not rewrite evidence. Keep or redirect every anchor that the roadmap, requirements,
   architecture, README and the Outlook repository link to.
 - **Architecture:** one table mapping each MCP tool and UI route to its port, adapter and service,
-  consistent with the backend split in [requirements §4](requirements.md#4-backend-choice); one references the other
-  instead of repeating it.
+  consistent with the backend split in [requirements §4](requirements.md#4-backend-choice); one
+  references the other instead of repeating it.
 - **README and docs index:** say which service backs what, in the Outlook README's style.
 
 Example: a reader looking up how a pasted image is downloaded goes to the AMS section of the
 research, and the architecture table shows `download_attachment` → `FileReader` → AMS and Graph
 `/shares`.
 
-### P2.2d — Search v2 message search improvements
+### P2.2d — One Search v2 message search
 
 The hit id is the history message id, and Teams Web shows how to scope, filter and page
-([research](api-research.md#search-v2-message-search)). Change `search_remote_messages` to:
+([research](api-research.md#search-v2-message-search)). With D2, `search_messages` becomes the one
+message search, on Search v2, and `search_remote_messages` goes. It:
 
-- return `message_id` (the hit's `InternetMessageId`) and drop the "not verified" note;
-- take optional `conversation_ids`, `since` and `until`, sent as `clientthreadid:` and `sent` terms;
-- add `NOT (isClientSoftDeleted:TRUE)`;
-- report `Total` and `MoreResultsAvailable`, and a confirmed zero (B2);
-- keep agent text from being read as KQL: `NOT IN THE CHAT` acted as an operator in Teams Web.
-  Quote or escape terms unless the caller asks for KQL.
+- takes `terms`, a list of 1 or more phrases (decided 2026-10-15). A message matches when any term
+  matches (OR). Each term is sent as one quoted phrase and never split on its spaces, so agent text
+  is never read as KQL (`NOT IN THE CHAT` acted as an operator in Teams Web). Search v2 matches whole
+  words and word prefixes: `["budget"]` also finds "budgets", `["udget"]` finds nothing, and
+  `["budget review"]` needs those words in that order. The tool description says so;
+- takes optional `conversation_ids`, `since` and `until`, sent as `clientthreadid:` and `sent` terms;
+- adds `NOT (isClientSoftDeleted:TRUE)`;
+- returns `message_id` (the hit's `InternetMessageId`) with each hit;
+- reports `Total` and `MoreResultsAvailable`, and a confirmed zero (B2).
 
-**Example:** `{"query": "budget", "conversation_ids": ["19:sample@thread.v2"], "since":
-"2026-08-01T00:00:00Z"}` should send `clientthreadid:19:sample@thread.v2 AND sent >=
-2026-08-01T00:00:00Z AND NOT (isClientSoftDeleted:TRUE) budget` and return hits with `message_id`.
+**Example:** `{"terms": ["budget review", "forecast"], "conversation_ids": ["19:sample@thread.v2"],
+"since": "2026-08-01T00:00:00Z"}` sends `clientthreadid:19:sample@thread.v2 AND sent >=
+2026-08-01T00:00:00Z AND NOT (isClientSoftDeleted:TRUE) AND ("budget review" OR "forecast")` and
+returns hits with `message_id`.
 
 ### P2.2b — Find chats by participant without indexed rosters
 
@@ -277,7 +268,7 @@ the download restriction the Teams UI showed for one meeting; a reference is not
 
 ### N1 — Attachments and inline images by name
 
-Decided 2026-10-15; replaces the earlier resource-gateway viewer. Today pasted images appear only as
+Decided 2026-10-15. Today pasted images appear only as
 `[Image: https://…/views/imgo]` in the text, never as attachments, so exports and
 `download_attachment` skip them; the URL is a compressed preview; downloads go only through Graph
 `/shares`; and an emoji sent as a `data:` URI puts its base64 into the text
