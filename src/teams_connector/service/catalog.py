@@ -25,9 +25,9 @@ from teams_connector.domain.models import (
     ChatKind,
     ChatMatch,
     ChatPage,
+    ChatSearchCoverage,
     ChatSearchResult,
     Participant,
-    RosterCoverage,
 )
 from teams_connector.remote.ports import ChannelDirectory, ChatCatalog, ChatMemberSearch, HistoryReader
 from teams_connector.service import cursors
@@ -180,7 +180,6 @@ class Catalog:
                 )
             ]  # fmt: skip
         )
-        self._store.save_messages(chat.id, page.messages)
 
     # ---------------------------------------------------------------- reads
 
@@ -248,7 +247,8 @@ class Catalog:
     async def search(
         self, query: str, *, refresh: bool = True, limit: int = 25, cursor: str | None = None
     ) -> ChatSearchResult:
-        """Chats whose name, or one of whose indexed participants' names, contains the query."""
+        """Chats whose name contains the query, and, with refresh, the named group and meeting chats Teams
+        matches by a plain name or email, with the members that matched."""
         if cursor:
             state = cursors.decode(cursor, "search_chats")
             query, offset = str(state["query"]), int(state["offset"])
@@ -263,43 +263,53 @@ class Catalog:
                     "No cached chat catalog is available; repeat with refresh=true to search Teams."
                 )
         folded = fold(query)
-        participants = self._store.participant_matches(query)
-        by_member, notes = await self._member_matches(query) if refresh else ({}, [])
+        by_member, complete, notes = await self._member_matches(query, asked=refresh)
         matches: list[ChatMatch] = []
         for chat in self._store.chats():
-            if folded not in fold(chat.name) and chat.id not in participants and chat.id not in by_member:
+            if folded not in fold(chat.name) and chat.id not in by_member:
                 continue
-            matched = _merged(participants.get(chat.id, []), by_member.get(chat.id, []))
             matches.append(
-                ChatMatch(chat=chat, name_matched=folded in fold(chat.name), matched_participants=matched)
+                ChatMatch(
+                    chat=chat,
+                    name_matched=folded in fold(chat.name),
+                    matched_participants=by_member.get(chat.id, []),
+                )
             )
         page = matches[offset : offset + limit]
         next_offset = offset + len(page)
-        coverage = self.roster_coverage()
-        coverage.notes.extend(notes)
         return ChatSearchResult(
             query=query,
             items=page,
             cursor=cursors.encode("search_chats", query=query, offset=next_offset)
             if next_offset < len(matches)
             else None,
-            coverage=coverage,
+            coverage=ChatSearchCoverage(complete=complete, chats=len(self._store.chats()), notes=notes),
         )
 
-    async def _member_matches(self, query: str) -> tuple[dict[str, list[Participant]], list[str]]:
-        """Named chats Teams matches by a plain name or email, with the members that matched. Fails open:
-        when Teams does not answer, the local catalog still answers and the coverage says so."""
+    async def _member_matches(
+        self, query: str, *, asked: bool
+    ) -> tuple[dict[str, list[Participant]], bool, list[str]]:
+        """Chats Teams matches by a plain name or email, with the members that matched, and whether Teams
+        answered. Fails open: when Teams does not answer, the local catalog still answers."""
+        if not asked:
+            return {}, False, ["Teams' chat search was not asked: refresh=false searches the cache only."]
         if self._members is None:
-            return {}, []
+            return {}, False, []
         if not _plain_text(query):
-            return {}, ["Teams' chat search takes a plain name or email; this query was not sent to it."]
+            return (
+                {},
+                False,
+                ["Teams' chat search takes a plain name or email; this query was not sent to it."],
+            )
         try:
             hits = await self._members.named_chats(query)
         except ConnectorError as exc:
             reason = type(exc).__name__
-            return {}, [
-                f"Teams' chat search did not answer ({reason}); chats matched by member may be missing."
-            ]
+            return (
+                {},
+                False,
+                [f"Teams' chat search did not answer ({reason}); chats matched by member may be missing."],
+            )
         notes = [
             "Teams' chat search covers named group and meeting chats with recent activity; "
             "one-on-one chats are matched by name."
@@ -309,29 +319,7 @@ class Catalog:
             notes.append(
                 f"{unknown} chats matched by Teams are not in the local catalog; refresh it to list them."
             )
-        return {hit.chat_id: hit.matching_members for hit in hits}, notes
-
-    def roster_coverage(self) -> RosterCoverage:
-        chats = self._store.chats()
-        states = self._store.states()
-        indexed = [states[c.id] for c in chats if c.id in states and states[c.id].roster_complete]
-        unresolved = sum(s.unresolved_participants for s in indexed)
-        missing = len(chats) - len(indexed)
-        notes = []
-        if missing:
-            notes.append(
-                f"{missing} chats have no indexed roster yet, so participant matches may be missing "
-                "for them; "
-                "sync_archive indexes rosters. Chat names are always searched."
-            )
-        return RosterCoverage(
-            complete=missing == 0 and unresolved == 0 and bool(chats),
-            chats=len(chats),
-            rosters_indexed=len(indexed),
-            rosters_missing=missing,
-            unresolved_participants=unresolved,
-            notes=notes,
-        )
+        return {hit.chat_id: hit.matching_members for hit in hits}, True, notes
 
 
 def _conversation_id(value: str) -> str:
@@ -347,14 +335,6 @@ _QUERY_OPERATOR = re.compile(r"\b(?:and|or|not)\b", re.IGNORECASE)
 def _plain_text(query: str) -> bool:
     """A plain name or email: no quotes, parentheses, wildcards, property syntax or query operators."""
     return bool(_PLAIN_TEXT.fullmatch(query)) and not _QUERY_OPERATOR.search(query)
-
-
-def _merged(*groups: list[Participant]) -> list[Participant]:
-    people: dict[str, Participant] = {}
-    for group in groups:
-        for person in group:
-            people.setdefault(person.id or person.model_dump_json(), person)
-    return list(people.values())
 
 
 def _with_activity(channel: Chat, activity: Chat | None) -> Chat:

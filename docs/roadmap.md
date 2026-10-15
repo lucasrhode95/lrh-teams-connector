@@ -16,24 +16,6 @@ Write each bug as **Seen** (a synthetic example: the call and what came back), *
 
 Working behavior that could be cheaper, simpler or better informed.
 
-### D2 — Remove the message archive
-
-Decided 2026-10-14: Teams is the record and the connector keeps no message content
-([requirements §6](requirements.md#6-local-data-decided-2026-10-14)). What replaces each use of the
-archive:
-
-| Today | Replacement |
-|---|---|
-| `search_chats` participant matches from indexed rosters | P2.2b |
-| `get_messages` merges remote pages with retained ones | Read Teams only; drop the archive merge and its paging floor |
-| `download_attachment` reads the archived message | Re-read the one message from Chat Service, by id or by time (N1) |
-| Exports stream from SQLite | Stream through the export's own temporary file |
-| `sync_archive`, `archive_status`, the `backup` command | Remove |
-| Catalog, sync token, untitled-chat names, omitted channels, photo ids | Keep, in a small account-bound cache with no message text |
-
-Then reset local state; no migration. Update the README, architecture, MCP server instructions and
-tests in the same change.
-
 ### D3 — Organize the documentation by service
 
 The code already separates the services: services depend only on the capability ports in
@@ -59,11 +41,11 @@ Example: a reader looking up how a pasted image is downloaded goes to the AMS se
 research, and the architecture table shows `download_attachment` → `FileReader` → AMS and Graph
 `/shares`.
 
-### P2.2b — Find chats by participant without indexed rosters (partial)
+### P2.2b — Find chats by participant (partial)
 
 Done 2026-10-15: route 2 (below) is in `search_chats` with `refresh=true`, and route 3 (names) already
 worked. Live check on 2026-10-15: a person's name matched 18 chats, 14 of them only through Teams'
-member match, which the rosters could not supply ([research](api-research.md#chat-search-by-member-2026-10-15)).
+member match, which name matching in the catalog cannot find ([research](api-research.md#chat-search-by-member-2026-10-15)).
 
 Still open, and the only remaining part:
 
@@ -71,10 +53,10 @@ Still open, and the only remaining part:
    chat id `19:{a}_{b}@unq.gbl.spaces`. Blocked: on 2026-10-15 every People suggestion request tried
    returned 400 (or 404 on another path), with the `m365.search` token and the captured request shapes.
    Decide whether to find the working route and token, or to accept name matching for one-on-ones.
-2. **The uncovered case:** an older named chat where the person is a member but not in the title, and
-   whose roster is not indexed. Teams' chat search covers only named group and meeting chats with
-   recent activity. Decide whether the chat-list cache keeps member lists for that case; until then the
-   coverage notes say that participant matches may be missing.
+2. **The uncovered case:** an older named chat where the person is a member but not in the title.
+   Teams' chat search covers only named group and meeting chats with recent activity, as the coverage
+   notes say. Decide whether the chat catalog should keep member lists for that case; until then, a chat
+   matched only through an older member may be missing from `search_chats`.
 
 ## Enhancements
 

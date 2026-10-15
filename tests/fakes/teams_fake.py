@@ -1,7 +1,7 @@
 """An in-memory Microsoft Teams tenant served through httpx.MockTransport.
 
 It understands exactly the request shapes the connector sends: Teams AuthZ, the CSA catalog (snapshot
-and delta), Chat Service history/rosters/listing, and the Graph endpoints for teams, channels, channel
+and delta), Chat Service history, members and listing, and the Graph endpoints for teams, channels, channel
 threads, members, people, photos, sends and shared files. All data is synthetic.
 """
 
@@ -104,7 +104,7 @@ class FakeChat:
     id: str
     title: str | None = None
     chat_type: str | None = None  # CSA chatType: oneOnOne, group, meeting
-    members: list[tuple[str, str | None]] = field(default_factory=list)  # (object id, roster name)
+    members: list[tuple[str, str | None]] = field(default_factory=list)  # (object id, member name)
     messages: list[dict[str, Any]] = field(default_factory=list)  # Chat Service records
     empty: bool | None = None
     in_csa: bool = True  # listed by the CSA snapshot (False: only the Chat Service listing has it)
@@ -247,6 +247,17 @@ class FakeTeams:
                           "syncState": str(offset + size)}  # fmt: skip
                 link = f"{CHAT_SERVICE}{path}?{urlencode(params)}"
             return httpx.Response(200, json={"messages": page, "_metadata": {"backwardLink": link}})
+        if (
+            parts[:4] == ["v1", "users", "ME", "conversations"]
+            and len(parts) == 7
+            and parts[5] == "messages"
+            and parts[4] in self.chats
+        ):
+            # one message by id; Teams answers an id it does not hold with 403
+            rows = [m for m in self.chats[parts[4]].messages if m["id"] == parts[6]]
+            if not rows:
+                return httpx.Response(403, json={"errorCode": "Forbidden"})
+            return httpx.Response(200, json=rows[0])
         if parts[:2] == ["v1", "threads"] and parts[-1] == "members":
             chat = self.chats.get(parts[2])
             if chat is None or chat.id == "48:notes":

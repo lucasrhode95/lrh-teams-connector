@@ -33,7 +33,7 @@ Run the `auth` command above and it logs you in. All `lrh-*` Microsoft 365 conne
 > Credentials are entered only on Microsoft's sign-in page. Tokens stay in the shared encrypted cache
 > (`~/.lrh-m365-auth`, or `M365_AUTH_HOME`). If encryption is unavailable, sign-in fails closed.
 
-The Teams archive and local output files are stored under `%LOCALAPPDATA%\lrh-teams-connector` on
+The Teams store and local output files are stored under `%LOCALAPPDATA%\lrh-teams-connector` on
 Windows, or `~/.local/share/lrh-teams-connector` on other systems. Set `TEAMS_CONNECTOR_HOME` to
 override the Teams data directory.
 
@@ -89,17 +89,16 @@ The MCP server exposes the tools below. Each one's inputs, results and caveats a
 |---|---|---|
 | `auth_status` | shared auth provider | Read cached account/client credentials and resource-token expiry |
 | `list_chats` | [`service/catalog.py`](src/teams_connector/service/catalog.py) | List chats and channels by recent activity, with kind filters and paging |
-| `search_chats` | [`service/catalog.py`](src/teams_connector/service/catalog.py) | Match conversation names, participants indexed by `sync_archive`, and named group and meeting chats Teams matches by member |
+| `search_chats` | [`service/catalog.py`](src/teams_connector/service/catalog.py) | Match conversation names, and named group and meeting chats Teams matches by member (with a refresh) |
 | `get_messages` | [`service/history.py`](src/teams_connector/service/history.py) | Read a conversation's history, newest pages first, with inclusive date bounds |
 | `search_messages` | [`service/search.py`](src/teams_connector/service/search.py) | Search Teams messages online through Microsoft Search v2: any of up to 25 terms, optionally within chosen chats and dates; one page of hits with message ids |
-| `sync_archive`, `archive_status` | [`service/archive.py`](src/teams_connector/service/archive.py) | Fetch history and rosters in resumable batches, and report what is covered |
 | `export_chats` | [`service/export/`](src/teams_connector/service/export/) | Export conversations to `.txt`, `.jsonl` or `.zip`, with their attachments |
-| `download_attachment` | [`service/files.py`](src/teams_connector/service/files.py) | Save a file linked from an archived message |
+| `download_attachment` | [`service/files.py`](src/teams_connector/service/files.py) | Save a file linked from a message, read again from Teams by its id |
 | `send_message` | [`service/send.py`](src/teams_connector/service/send.py) | Send one message after explicit authorization; the only write tool |
 
 Message timestamps are returned in UTC.
 
-## Browser export UI and archive backup
+## Browser export UI
 
 Start the local UI when you want to choose conversations and download an export without an MCP
 client:
@@ -119,24 +118,15 @@ and available files are placed together in a conversation-named folder inside on
 conversations download as one outer ZIP, with an inner ZIP for each conversation with attachments
 and a plain text file for each without them.
 
-The SQLite archive persists messages the connector has read, participant names, catalog state,
-and sync progress. It is separated by Microsoft account and checks its stored owner before use. The
-archive is local and is not application-encrypted; follow the storage rules for the device. Messages
-are retained until the archive is removed. Generated exports and downloaded message attachments are
-cleaned up after seven days the next time their output directory is used.
+The local store holds the chat catalog and account metadata, and nothing else. Message content is not
+kept: Teams is the record, and every history read goes to Teams. The store is separated by Microsoft
+account and checks its stored owner before use; it is not application-encrypted, so follow the storage
+rules for the device. Generated exports and downloaded message attachments are cleaned up after seven
+days the next time their output directory is used.
 
-The message archive, `sync_archive`, `archive_status` and the `backup` command are planned for
-removal: Teams will be the only record of message content
-([requirements §6](docs/requirements.md#6-local-data-decided-2026-10-14), roadmap D2).
-
-Create a consistent online backup while connectors are running:
-
-```powershell
-uv run teams-connector backup C:\Backups\teams-archive.sqlite3
-```
-
-An existing destination is preserved unless `--overwrite` is supplied. The backup remains bound to
-the same account identity; another account cannot silently open it as its own archive.
+A store left by an earlier version that kept messages is moved, without deletion, into a
+`legacy-archive-<timestamp>` folder next to it the first time this version opens the account. The
+catalog is then rebuilt from Teams. Delete that folder when you no longer need it.
 
 ## Troubleshooting
 
@@ -150,7 +140,7 @@ the same account identity; another account cannot silently open it as its own ar
   repository over HTTPS; check that github.com is reachable, then run `uv sync --locked` again.
 - **The local UI does not start:** check its printed URL and any automatically selected port. Stop
   the UI with Ctrl+C; it also exits after the configured idle period.
-- **The archive belongs to another account:** do not delete or replace it. Sign into the expected
+- **The store belongs to another account:** do not delete or replace it. Sign into the expected
   account or choose a separate `TEAMS_CONNECTOR_HOME` location.
 
 ## Microsoft 365 connectors

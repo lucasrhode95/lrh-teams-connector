@@ -1,7 +1,8 @@
 """Attachment downloads (MCP and UI) and profile photos.
 
-Only attachments of archived messages can be downloaded: no arbitrary URL is ever fetched. Files are
-saved under ``<data directory>/downloads`` and removed after a week.
+Only attachments of messages Teams returns can be downloaded: no arbitrary URL is ever fetched. The message
+is read from Teams again by its id. Files are saved under ``<data directory>/downloads`` and removed after a
+week.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from teams_connector.domain.errors import InvalidRequest, NotFound
 from teams_connector.domain.models import Attachment, SavedFile
 from teams_connector.remote.ports import FileReader, People, RemoteFile
 from teams_connector.service import localfiles
-from teams_connector.store.db import Store
+from teams_connector.service.history import History
 
 PHOTO_TTL_SECONDS = 3600
 _UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
@@ -26,18 +27,14 @@ def safe_filename(name: str, fallback: str = "file") -> str:
 
 
 class Files:
-    def __init__(self, store: Store, reader: FileReader) -> None:
-        self._store = store
+    def __init__(self, history: History, reader: FileReader) -> None:
+        self._history = history
         self._reader = reader
 
     async def download_attachment(
         self, conversation_id: str, message_id: str, name: str | None = None
     ) -> SavedFile:
-        message = self._store.message(conversation_id, message_id)
-        if message is None:
-            raise NotFound(
-                "The message is not in the local archive; read its conversation with get_messages first."
-            )
+        message = await self._history.message(conversation_id, message_id)
         files = [a for a in message.attachments if a.url]
         if name:
             files = [a for a in files if a.name == name]

@@ -1,19 +1,11 @@
-"""Account-bound SQLite archive (architecture, "Requests, caching, and storage").
+"""Account-bound SQLite store for the chat catalog only (architecture, "Requests, caching, and storage").
 
-Holds what Teams cannot give back cheaply or at all: the chat catalog and its delta token, every
-message the app has fetched (retained indefinitely, so content survives later edits and deletions),
-chat rosters for participant search, and per-chat history progress. It is populated lazily by reads,
-searches, exports and explicit syncs; there is no background collector.
-
-Several short-lived processes may share it: WAL mode, busy timeout, one connection per operation,
-short transactions. If SQLite reports it damaged when it is opened, the damaged files are moved to a
-``corrupt-<timestamp>`` folder next to it and a fresh store is started.
-
-Retention rules for a message seen again (requirements §6):
-- an edit overwrites the text; no edit history is kept, and an unversioned or older record never
-  replaces a known edit;
-- a deletion keeps the last known text and marks the row deleted;
-- a plain (stale) record never resurrects a deleted row; a later edit does.
+It holds the chat catalog and its delta token, and the account's metadata. It holds no message content:
+Teams is the record, and every history read goes to Teams. Several short-lived processes may share the file:
+WAL mode, busy timeout, one connection per operation, short transactions. If SQLite reports it damaged when
+it is opened, the damaged files are moved to a ``corrupt-<timestamp>`` folder next to it. A file left by an
+earlier version that held a message archive is moved to a ``legacy-archive-<timestamp>`` folder; the catalog
+is then rebuilt from Teams.
 """
 
 from __future__ import annotations
@@ -21,19 +13,17 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
-import shutil
 import sqlite3
 import time
 import unicodedata
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from teams_connector import config
-from teams_connector.domain.errors import AccountMismatch, ConnectorError, InvalidRequest
-from teams_connector.domain.models import ArchiveTotals, Chat, Message, Participant
+from teams_connector.domain.errors import AccountMismatch, ConnectorError
+from teams_connector.domain.models import Chat
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -45,48 +35,10 @@ CREATE TABLE IF NOT EXISTS chats (
     catalogued_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS chats_activity ON chats (last_message_at);
-CREATE TABLE IF NOT EXISTS messages (
-    conversation_id TEXT NOT NULL,
-    id TEXT NOT NULL,
-    sent_at TEXT,
-    edited_at TEXT,
-    is_deleted INTEGER NOT NULL DEFAULT 0,
-    deleted_at TEXT,
-    text_folded TEXT NOT NULL DEFAULT '',
-    data TEXT NOT NULL,
-    stored_at REAL NOT NULL,
-    PRIMARY KEY (conversation_id, id)
-);
-CREATE INDEX IF NOT EXISTS messages_time ON messages (conversation_id, sent_at, id);
-CREATE INDEX IF NOT EXISTS messages_sent ON messages (sent_at);
-CREATE TABLE IF NOT EXISTS participants (
-    conversation_id TEXT NOT NULL,
-    participant_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    name_folded TEXT NOT NULL,
-    PRIMARY KEY (conversation_id, participant_id, name)
-);
-CREATE INDEX IF NOT EXISTS participants_name ON participants (name_folded);
-CREATE TABLE IF NOT EXISTS chat_state (
-    conversation_id TEXT PRIMARY KEY,
-    history_link TEXT,
-    history_complete INTEGER NOT NULL DEFAULT 0,
-    history_synced_at REAL,
-    oldest_message_at TEXT,
-    newest_message_at TEXT,
-    missing_timestamps INTEGER NOT NULL DEFAULT 0,
-    roster_complete INTEGER NOT NULL DEFAULT 0,
-    roster_error TEXT,
-    roster_synced_at REAL,
-    unresolved_participants INTEGER NOT NULL DEFAULT 0,
-    sync_attempted_at REAL
-);
 """
 
+LEGACY_TABLES = ("messages", "participants", "chat_state")
 log = logging.getLogger(__name__)
-
-# Per-result fields: never stored with a message.
-DERIVED_FIELDS = {"is_self"}
 
 
 def store_path(fingerprint: str) -> Path:
@@ -111,29 +63,19 @@ def fold(text: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
 
 
-@dataclass
-class ChatState:
-    conversation_id: str
-    history_link: str | None = None
-    history_complete: bool = False
-    history_synced_at: float | None = None
-    oldest_message_at: str | None = None
-    newest_message_at: str | None = None
-    missing_timestamps: int = 0
-    roster_complete: bool = False
-    roster_error: str | None = None
-    roster_synced_at: float | None = None
-    unresolved_participants: int = 0
-    sync_attempted_at: float | None = None
-
-
 class Store:
     def __init__(self, path: Path, owner: str) -> None:
         self.path = path
         self.owner = owner
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists() and not self._healthy():
-            self._quarantine()
+            self._move_aside("corrupt", "Local store was damaged; moved to %s and starting a fresh one.")
+        if path.exists() and self._has_legacy_archive():
+            self._move_aside(
+                "legacy-archive",
+                "A message archive from an earlier version was moved to %s. It is not used any more; the "
+                "catalog is rebuilt from Teams.",
+            )
         with contextlib.closing(sqlite3.connect(self.path, timeout=15)) as db:
             db.execute("PRAGMA journal_mode=WAL")  # persistent: set once per database file
         with self._tx() as db:
@@ -142,9 +84,7 @@ class Store:
             if row is None:
                 db.execute("INSERT INTO meta (key, value) VALUES ('owner', ?)", (owner,))
             elif row[0] != owner:
-                raise AccountMismatch(
-                    f"The local archive at {path} belongs to a different Microsoft account."
-                )
+                raise AccountMismatch(f"The local store at {path} belongs to a different Microsoft account.")
 
     def _healthy(self) -> bool:
         try:
@@ -156,8 +96,21 @@ class Store:
         except sqlite3.DatabaseError:
             return False
 
-    def _quarantine(self) -> None:
-        target = self.path.parent / f"corrupt-{time.strftime('%Y%m%d-%H%M%S')}"
+    def _has_legacy_archive(self) -> bool:
+        """Whether the file still holds the message tables of an earlier version."""
+        try:
+            db = sqlite3.connect(self.path, timeout=15)
+            try:
+                names = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            finally:
+                db.close()
+        except sqlite3.DatabaseError:
+            return False
+        return bool(names & set(LEGACY_TABLES))
+
+    def _move_aside(self, folder_prefix: str, message: str) -> None:
+        """Move the store's files into a timestamped folder next to it. Nothing is deleted."""
+        target = self.path.parent / f"{folder_prefix}-{time.strftime('%Y%m%d-%H%M%S')}"
         target.mkdir(exist_ok=True)
         try:
             for suffix in ("", "-wal", "-shm"):
@@ -166,10 +119,10 @@ class Store:
                     os.replace(source, target / source.name)
         except PermissionError:
             raise ConnectorError(
-                "The local archive is damaged and another teams-connector process is using it. "
+                "The local store is in use by another teams-connector process. "
                 "Close the other connector processes (UI, MCP sessions) and retry."
             ) from None
-        log.warning("Local archive was damaged; moved to %s and starting a fresh one.", target)
+        log.warning(message, target)
 
     @contextmanager
     def _tx(self) -> Iterator[sqlite3.Connection]:
@@ -241,280 +194,6 @@ class Store:
             row = db.execute("SELECT data FROM chats WHERE id = ? AND is_deleted = 0", (chat_id,)).fetchone()
         return Chat.model_validate_json(row[0]) if row else None
 
-    def any_chat(self, chat_id: str) -> Chat | None:
-        """A chat even when it left the catalog (its retained messages are still archived)."""
-        with self._tx() as db:
-            row = db.execute("SELECT data FROM chats WHERE id = ?", (chat_id,)).fetchone()
-        return Chat.model_validate_json(row[0]) if row else None
-
-    # ---------------------------------------------------------------- messages
-
-    def save_messages(self, conversation_id: str, messages: Iterable[Message]) -> int:
-        """Merge fetched messages under the retention rules. Returns how many were new."""
-        now = time.time()
-        added = 0
-        stamps: list[str] = []
-        with self._tx() as db:
-            for incoming in messages:
-                row = db.execute(
-                    "SELECT data FROM messages WHERE conversation_id = ? AND id = ?",
-                    (conversation_id, incoming.id),
-                ).fetchone()
-                existing = Message.model_validate_json(row[0]) if row else None
-                merged = _merge_message(existing, incoming)
-                if existing is None:
-                    added += 1
-                if merged.sent_at:
-                    stamps.append(iso(merged.sent_at) or "")
-                db.execute(
-                    """INSERT OR REPLACE INTO messages (conversation_id, id, sent_at, edited_at, is_deleted,
-                           deleted_at, text_folded, data, stored_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        conversation_id,
-                        merged.id,
-                        iso(merged.sent_at),
-                        iso(merged.edited_at),
-                        int(merged.is_deleted),
-                        iso(merged.deleted_at),
-                        fold(merged.text),
-                        merged.model_dump_json(exclude=DERIVED_FIELDS),
-                        now,
-                    ),
-                )
-            if stamps:
-                db.execute(
-                    """INSERT INTO chat_state (conversation_id, oldest_message_at, newest_message_at)
-                       VALUES (?, ?, ?)
-                       ON CONFLICT (conversation_id) DO UPDATE SET
-                           oldest_message_at = MIN(COALESCE(oldest_message_at, excluded.oldest_message_at),
-                                                   excluded.oldest_message_at),
-                           newest_message_at = MAX(COALESCE(newest_message_at, excluded.newest_message_at),
-                                                   excluded.newest_message_at)""",
-                    (conversation_id, min(stamps), max(stamps)),
-                )
-        return added
-
-    def message(self, conversation_id: str, message_id: str) -> Message | None:
-        with self._tx() as db:
-            row = db.execute(
-                "SELECT data FROM messages WHERE conversation_id = ? AND id = ?",
-                (conversation_id, message_id),
-            ).fetchone()
-        return Message.model_validate_json(row[0]) if row else None
-
-    def newest_first(
-        self,
-        conversation_id: str,
-        *,
-        since: datetime | None,
-        until: datetime | None,
-        before: tuple[str, str] | None,
-        limit: int,
-    ) -> list[Message]:
-        """Archived messages newest first, strictly before the (sent_at, id) keyset position."""
-        where, args = self._range(conversation_id, since, until)
-        if before is not None:
-            where += " AND (sent_at < ? OR (sent_at = ? AND id < ?))"
-            args += [before[0], before[0], before[1]]
-        with self._tx() as db:
-            rows = db.execute(
-                f"SELECT data FROM messages WHERE {where} ORDER BY sent_at DESC, id DESC LIMIT ?",
-                [*args, limit],
-            ).fetchall()
-        return [Message.model_validate_json(r[0]) for r in rows]
-
-    def chronological(
-        self,
-        conversation_id: str,
-        *,
-        since: datetime | None,
-        until: datetime | None,
-        after: tuple[str, str] | None = None,
-        from_key: tuple[str, str] | None = None,
-        limit: int = 500,
-    ) -> list[Message]:
-        where, args = self._range(conversation_id, since, until)
-        if after is not None:
-            where += " AND (sent_at, id) > (?, ?)"
-            args += list(after)
-        if from_key is not None:
-            where += " AND (sent_at, id) >= (?, ?)"
-            args += list(from_key)
-        with self._tx() as db:
-            rows = db.execute(
-                f"SELECT data FROM messages WHERE {where} ORDER BY sent_at ASC, id ASC LIMIT ?",
-                [*args, limit],
-            ).fetchall()
-        return [Message.model_validate_json(r[0]) for r in rows]
-
-    def count(self, conversation_id: str, *, since: datetime | None, until: datetime | None) -> int:
-        where, args = self._range(conversation_id, since, until)
-        with self._tx() as db:
-            return int(db.execute(f"SELECT COUNT(*) FROM messages WHERE {where}", args).fetchone()[0])
-
-    def latest_cutoff(
-        self, conversation_id: str, *, since: datetime | None, until: datetime | None, limit: int
-    ) -> tuple[str, str] | None:
-        """The (sent_at, id) of the ``limit``-th newest message in range: the oldest of the latest N."""
-        if limit < 1:
-            return None
-        where, args = self._range(conversation_id, since, until)
-        with self._tx() as db:
-            row = db.execute(
-                f"SELECT sent_at, id FROM messages WHERE {where} "
-                "ORDER BY sent_at DESC, id DESC LIMIT 1 OFFSET ?",
-                [*args, limit - 1],
-            ).fetchone()
-        return (str(row[0]), str(row[1])) if row else None
-
-    @staticmethod
-    def _range(conversation_id: str, since: datetime | None, until: datetime | None) -> tuple[str, list]:
-        where = "conversation_id = ? AND sent_at IS NOT NULL"
-        args: list = [conversation_id]
-        if since is not None:
-            where += " AND sent_at >= ?"
-            args.append(iso(since))
-        if until is not None:
-            where += " AND sent_at <= ?"
-            args.append(iso(until))
-        return where, args
-
-    def save_roster(
-        self, conversation_id: str, participants: list[Participant] | None, *, error: str | None = None
-    ) -> None:
-        """Replace a chat's roster (or record why it could not be read; the previous one is kept)."""
-        now = time.time()
-        with self._tx() as db:
-            db.execute("INSERT OR IGNORE INTO chat_state (conversation_id) VALUES (?)", (conversation_id,))
-            if error is not None or participants is None:
-                db.execute(
-                    "UPDATE chat_state SET roster_error = ?, roster_synced_at = ? WHERE conversation_id = ?",
-                    (error, now, conversation_id),
-                )
-                return
-            db.execute("DELETE FROM participants WHERE conversation_id = ?", (conversation_id,))
-            db.executemany(
-                """INSERT OR IGNORE INTO participants (conversation_id, participant_id, name, name_folded)
-                   VALUES (?, ?, ?, ?)""",
-                [(conversation_id, p.id or "", p.name, fold(p.name)) for p in participants if p.name],
-            )
-            db.execute(
-                """UPDATE chat_state SET roster_complete = 1, roster_error = NULL, roster_synced_at = ?,
-                       unresolved_participants = ? WHERE conversation_id = ?""",
-                (now, sum(1 for p in participants if not p.name), conversation_id),
-            )
-
-    def participant_matches(self, query: str) -> dict[str, list[Participant]]:
-        """Participants whose name contains the query, by conversation."""
-        out: dict[str, list[Participant]] = {}
-        with self._tx() as db:
-            rows = db.execute(
-                """SELECT p.conversation_id, p.participant_id, p.name FROM participants p
-                   JOIN chats c ON c.id = p.conversation_id AND c.is_deleted = 0
-                   WHERE instr(p.name_folded, ?) > 0 ORDER BY p.name""",
-                (fold(query),),
-            ).fetchall()
-        for conversation_id, participant_id, name in rows:
-            out.setdefault(conversation_id, []).append(Participant(id=participant_id or None, name=name))
-        return out
-
-    # ---------------------------------------------------------------- per-chat state
-
-    def state(self, conversation_id: str) -> ChatState:
-        with self._tx() as db:
-            row = db.execute(
-                "SELECT * FROM chat_state WHERE conversation_id = ?", (conversation_id,)
-            ).fetchone()
-        return _state(row) if row else ChatState(conversation_id)
-
-    def states(self) -> dict[str, ChatState]:
-        with self._tx() as db:
-            rows = db.execute("SELECT * FROM chat_state").fetchall()
-        return {row["conversation_id"]: _state(row) for row in rows}
-
-    def save_history_progress(
-        self, conversation_id: str, *, link: str | None, complete: bool, missing_timestamps: int = 0
-    ) -> None:
-        with self._tx() as db:
-            db.execute(
-                """INSERT INTO chat_state (conversation_id, history_link, history_complete, history_synced_at,
-                       missing_timestamps)
-                   VALUES (?, ?, ?, ?, ?)
-                   ON CONFLICT (conversation_id) DO UPDATE SET history_link = excluded.history_link,
-                       history_complete = excluded.history_complete,
-                       history_synced_at = excluded.history_synced_at,
-                       missing_timestamps = chat_state.missing_timestamps + excluded.missing_timestamps""",
-                (conversation_id, link, int(complete), time.time(), missing_timestamps),
-            )
-
-    def touch_sync_attempt(self, conversation_id: str) -> None:
-        with self._tx() as db:
-            db.execute(
-                """INSERT INTO chat_state (conversation_id, sync_attempted_at) VALUES (?, ?)
-                   ON CONFLICT (conversation_id) DO UPDATE SET
-                       sync_attempted_at = excluded.sync_attempted_at""",
-                (conversation_id, time.time()),
-            )
-
-    def stored_counts(self) -> dict[str, int]:
-        with self._tx() as db:
-            rows = db.execute(
-                "SELECT conversation_id, COUNT(*) FROM messages GROUP BY conversation_id"
-            ).fetchall()
-        return {r[0]: int(r[1]) for r in rows}
-
-    def totals(self) -> ArchiveTotals:
-        with self._tx() as db:
-            one = lambda sql: int(db.execute(sql).fetchone()[0])  # noqa: E731
-            return ArchiveTotals(
-                chats=one("SELECT COUNT(*) FROM chats WHERE is_deleted = 0"),
-                messages=one("SELECT COUNT(*) FROM messages"),
-                participants=one("SELECT COUNT(*) FROM participants"),
-                complete_histories=one("SELECT COUNT(*) FROM chat_state WHERE history_complete = 1"),
-                complete_rosters=one("SELECT COUNT(*) FROM chat_state WHERE roster_complete = 1"),
-            )
-
-    # ---------------------------------------------------------------- backup
-
-    def backup_to(self, destination: str | Path, *, overwrite: bool = False) -> Path:
-        """A consistent online copy (SQLite backup API), owner metadata included."""
-        target = Path(destination).expanduser().resolve()
-        if target == self.path.resolve():
-            raise InvalidRequest("The backup destination is the live archive itself.")
-        if target.exists() and not overwrite:
-            raise InvalidRequest(f"{target} already exists; pass --overwrite to replace it.")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        temporary = target.with_name(f".{target.name}.tmp")
-        temporary.unlink(missing_ok=True)
-        try:
-            with (
-                contextlib.closing(sqlite3.connect(self.path, timeout=15)) as source,
-                contextlib.closing(sqlite3.connect(temporary)) as copy,
-            ):
-                source.backup(copy)
-            shutil.move(str(temporary), str(target))
-        finally:
-            temporary.unlink(missing_ok=True)
-        return target
-
-
-def _state(row: sqlite3.Row) -> ChatState:
-    return ChatState(
-        conversation_id=row["conversation_id"],
-        history_link=row["history_link"],
-        history_complete=bool(row["history_complete"]),
-        history_synced_at=row["history_synced_at"],
-        oldest_message_at=row["oldest_message_at"],
-        newest_message_at=row["newest_message_at"],
-        missing_timestamps=int(row["missing_timestamps"] or 0),
-        roster_complete=bool(row["roster_complete"]),
-        roster_error=row["roster_error"],
-        roster_synced_at=row["roster_synced_at"],
-        unresolved_participants=int(row["unresolved_participants"] or 0),
-        sync_attempted_at=row["sync_attempted_at"],
-    )
-
 
 def _merge_chat(existing: Chat | None, incoming: Chat) -> Chat:
     """New values win; a missing value keeps the known one, and an unresolved name (the id) never
@@ -528,31 +207,3 @@ def _merge_chat(existing: Chat | None, incoming: Chat) -> Chat:
     if incoming.name == incoming.id and existing.name != existing.id:
         data["name"] = existing.name
     return Chat.model_validate(data)
-
-
-def _merge_message(existing: Message | None, incoming: Message) -> Message:
-    if existing is None:
-        return incoming
-    previous_edit = iso(existing.edited_at) or ""
-    previous_delete = iso(existing.deleted_at) or ""
-    incoming_edit = iso(incoming.edited_at) or ""
-    if incoming.is_deleted:
-        # A deletion: keep the last known text (and the original metadata), mark the row deleted.
-        keep = existing.model_copy()
-        if not keep.text and incoming.text:
-            keep.text = incoming.text
-        keep.is_deleted = True
-        keep.deleted_at = max((d for d in (existing.deleted_at, incoming.deleted_at) if d), default=None)
-        keep.edited_at = existing.edited_at or incoming.edited_at
-        return keep
-    if existing.is_deleted and not (incoming_edit and incoming_edit > max(previous_delete, previous_edit)):
-        return existing  # a stale plain record is no evidence that the message was restored
-    if previous_edit and (not incoming_edit or incoming_edit < previous_edit):
-        return existing  # never let an older or unversioned record replace known edited text
-    merged = incoming.model_copy()
-    for key in ("author", "author_id", "sent_at", "subject", "reply_to_id", "system_event"):
-        if getattr(merged, key) is None and getattr(existing, key) is not None:
-            setattr(merged, key, getattr(existing, key))
-    if not merged.attachments and existing.attachments:
-        merged.attachments = list(existing.attachments)
-    return merged

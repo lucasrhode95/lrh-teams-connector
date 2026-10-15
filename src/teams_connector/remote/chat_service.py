@@ -1,7 +1,7 @@
-"""Teams Chat Service (private): chat history, chat rosters, and the paginated conversation listing.
+"""Teams Chat Service (private): chat history, chat members, and the paginated conversation listing.
 
 Graph cannot read chats for the Teams client (no Chat.Read), so one-on-one, group, meeting and
-self-chat history and rosters come from here. Continuation links are opaque and must stay on the
+self-chat history and members come from here. Continuation links are opaque and must stay on the
 account's regional Chat Service host and the same conversation.
 """
 
@@ -11,8 +11,8 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
 
-from teams_connector.domain.errors import InvalidRequest, Upstream
-from teams_connector.domain.models import Chat, Participant
+from teams_connector.domain.errors import InvalidRequest, NotFound, Upstream
+from teams_connector.domain.models import Chat, Message, Participant
 from teams_connector.remote import chat_service_mapping as mapping
 from teams_connector.remote.ports import HistoryPage, People
 from teams_connector.remote.teams_session import SkypeCredential, TeamsSession
@@ -108,8 +108,17 @@ class ChatService:
             floor=min(stamps) if stamps else None,
         )
 
+    async def message(self, chat: Chat, message_id: str) -> Message:
+        """One message by id. Teams answers an id it does not hold with 403, reported as an upstream error."""
+        url = f"{await self._messages_url(chat.id)}/{quote(message_id, safe='')}"
+        with operation("reading one message"):
+            data = await self._get(url)
+        if not data.get("id"):
+            raise NotFound("Teams returned no message for that id.")
+        return mapping.to_message(data, chat.id)
+
     async def members(self, chat: Chat) -> list[Participant]:
-        """The roster of a chat, with names from the roster or the directory."""
+        """The members of a chat, with names from the member list or the directory."""
         url = f"{await self._base()}/v1/threads/{quote(chat.id, safe='')}/members"
         with operation("listing chat members"):
             data = await self._get(url)
@@ -132,7 +141,7 @@ class ChatService:
             try:
                 names = await self._people.names(unnamed)
             except Upstream:
-                names = {}  # a name lookup must not make the roster unavailable
+                names = {}  # a name lookup must not make the member list unavailable
             people = [
                 p if p.name or not p.id else p.model_copy(update={"name": names.get(p.id)}) for p in people
             ]

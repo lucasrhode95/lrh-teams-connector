@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="2600" height="1760" viewBox="0 0 2600 1760" role="img" aria-labelledby="title description">
   <title id="title">Teams connector architecture</title>
-  <desc id="description">Short-lived entry points: the MCP server (one stdio process per agent session), the local export UI, and the auth and backup commands. MCP and UI are thin surfaces over one service layer that holds every domain decision. The service reads and writes an account-bound SQLite archive and calls the remote layer through ports. Teams' private services provide the chat catalog (CSA) and chat history and rosters (Chat Service), after an AuthZ exchange that yields a Skype token; Microsoft Graph provides channels, people, photos, shared files and sending; Search v2 provides online message discovery. Tokens come from the shared lrh-m365-auth cache.</desc>
+  <desc id="description">Short-lived entry points: the MCP server (one stdio process per agent session), the local export UI, and the auth command. MCP and UI are thin surfaces over one service layer that holds every domain decision. The service reads and writes an account-bound SQLite store of the chat catalog and calls the remote layer through ports. Teams' private services provide the chat catalog (CSA) and chat history and members (Chat Service), after an AuthZ exchange that yields a Skype token; Microsoft Graph provides channels, people, photos, shared files and sending; Search v2 provides online message discovery. Tokens come from the shared lrh-m365-auth cache.</desc>
   <defs>
     <style>
       text { font-family: Arial, Helvetica, sans-serif; }
@@ -26,7 +26,7 @@
 
   <rect width="2600" height="1760" fill="#fff"/>
   <text class="title" x="1300" y="70" text-anchor="middle">Teams connector architecture</text>
-  <text class="subtitle" x="1300" y="110" text-anchor="middle">Teams services for chats · Graph for channels, people, files and sending · Search v2 discovery · local archive</text>
+  <text class="subtitle" x="1300" y="110" text-anchor="middle">Teams services for chats · Graph for channels, people, files and sending · Search v2 discovery · local catalog</text>
 
   <!-- MCP surface. -->
   <rect x="80" y="170" width="790" height="210" rx="14" fill="#f7f9fc" stroke="#c7d5e2" stroke-width="1.5"/>
@@ -51,9 +51,9 @@
   <!-- No-daemon note. -->
   <rect x="1900" y="170" width="620" height="210" rx="14" fill="#eff8f6" stroke="#9fd3cb" stroke-width="1.5"/>
   <text class="note-title" x="1924" y="210">No always-on service</text>
-  <text class="detail" x="1924" y="246"><tspan class="code">mcp</tspan>, <tspan class="code">ui</tspan>, <tspan class="code">auth</tspan> and <tspan class="code">backup</tspan> are short-lived</text>
+  <text class="detail" x="1924" y="246"><tspan class="code">mcp</tspan>, <tspan class="code">ui</tspan> and <tspan class="code">auth</tspan> are short-lived</text>
   <text class="detail" x="1924" y="274">and may run at the same time. They share</text>
-  <text class="detail" x="1924" y="302">the token cache and the SQLite archive.</text>
+  <text class="detail" x="1924" y="302">the token cache and the SQLite store.</text>
   <text class="detail" x="1924" y="330">No background sync: history is fetched</text>
   <text class="detail" x="1924" y="358">only when a call asks for it.</text>
 
@@ -73,25 +73,25 @@
   <text class="section-title code" x="116" y="580">catalog.py</text>
   <text class="detail" x="116" y="615">chats and channels</text>
   <text class="detail" x="116" y="643">cached 10 minutes</text>
-  <text class="detail" x="116" y="671">name and roster search</text>
+  <text class="detail" x="116" y="671">name and member search</text>
 
   <rect x="366" y="544" width="248" height="160" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
   <text class="section-title code" x="382" y="580">history.py</text>
-  <text class="detail" x="382" y="615">remote pages merged</text>
-  <text class="detail" x="382" y="643">into the archive, read</text>
-  <text class="detail" x="382" y="671">back in bounded pages</text>
+  <text class="detail" x="382" y="615">pages from Teams,</text>
+  <text class="detail" x="382" y="643">newest first,</text>
+  <text class="detail" x="382" y="671">whole messages</text>
 
   <rect x="633" y="544" width="248" height="160" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
   <text class="section-title code" x="649" y="580">search.py</text>
   <text class="detail" x="649" y="615">online discovery</text>
-  <text class="detail" x="649" y="643">(Search v2) · local</text>
-  <text class="detail" x="649" y="671">scoped matching</text>
+  <text class="detail" x="649" y="643">(Search v2), one</text>
+  <text class="detail" x="649" y="671">query per page</text>
 
   <rect x="899" y="544" width="248" height="160" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
-  <text class="section-title code" x="915" y="580">archive.py</text>
-  <text class="detail" x="915" y="615">bounded, resumable</text>
-  <text class="detail" x="915" y="643">history and roster</text>
-  <text class="detail" x="915" y="671">sync · coverage</text>
+  <text class="section-title code" x="915" y="580">files.py</text>
+  <text class="detail" x="915" y="615">attachment downloads</text>
+  <text class="detail" x="915" y="643">profile photos, cached</text>
+  <text class="detail" x="915" y="671">one message, one file</text>
 
   <rect x="1166" y="544" width="248" height="160" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
   <text class="section-title code" x="1182" y="580">export/</text>
@@ -128,20 +128,20 @@
 
   <!-- Service uses store and remote. -->
   <path class="local-flow" d="M340 984 V1046"/>
-  <text class="flow-label" x="360" y="1022">archive</text>
+  <text class="flow-label" x="360" y="1022">catalog</text>
   <path class="call-flow" d="M1170 980 V1046"/>
   <text class="flow-label" x="1190" y="1022">domain calls through ports</text>
 
   <!-- Local store. -->
   <rect x="80" y="1050" width="520" height="330" rx="14" fill="#f7f9fc" stroke="#c7d5e2" stroke-width="1.5"/>
   <path d="M80 1124 V1064 Q80 1050 94 1050 H586 Q600 1050 600 1064 V1124 Z" fill="#183153"/>
-  <text class="card-title" x="100" y="1083">LOCAL ARCHIVE</text>
+  <text class="card-title" x="100" y="1083">LOCAL STORE</text>
   <text class="card-subtitle" x="100" y="1107"><tspan class="code">store/db.py</tspan> · SQLite per account (WAL)</text>
   <rect x="100" y="1140" width="480" height="220" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
   <text class="detail" x="120" y="1175">Chat catalog (fresh for 10 minutes)</text>
-  <text class="detail" x="120" y="1205">Messages read so far, kept until removed</text>
-  <text class="detail" x="120" y="1235">Participant rosters · sync progress</text>
-  <text class="detail" x="120" y="1265">Owner checked on open; <tspan class="code">backup</tspan> copies it</text>
+  <text class="detail" x="120" y="1205">Channel names and last activity</text>
+  <text class="detail" x="120" y="1235">Sync token and photo ids</text>
+  <text class="detail" x="120" y="1265">Owner checked; old stores moved aside</text>
   <text class="muted" x="120" y="1310">Not stored: tokens or headers.</text>
   <text class="muted" x="120" y="1338">Not encrypted by the app.</text>
 
@@ -157,7 +157,7 @@
 
   <rect x="915" y="1138" width="245" height="64" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
   <text class="section-title code" x="927" y="1162" style="font-size:20px">chat_service.py</text>
-  <text class="detail" x="927" y="1188" style="font-size:18px">history · rosters</text>
+  <text class="detail" x="927" y="1188" style="font-size:18px">history · members</text>
 
   <rect x="1170" y="1138" width="245" height="64" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
   <text class="section-title code" x="1182" y="1162" style="font-size:20px">csa.py</text>

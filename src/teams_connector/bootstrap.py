@@ -24,7 +24,6 @@ from teams_connector.remote.graph_teams import GraphChannels, GraphFiles, GraphP
 from teams_connector.remote.substrate_search import SubstrateChatSearch, SubstrateSearch
 from teams_connector.remote.teams_session import TeamsSession
 from teams_connector.remote.transport import Bearer, Transport
-from teams_connector.service.archive import Archive
 from teams_connector.service.catalog import Catalog
 from teams_connector.service.export.orchestrator import Exports
 from teams_connector.service.files import Files, Photos
@@ -42,7 +41,6 @@ class Services:
     catalog: Catalog
     history: History
     search: Search
-    archive: Archive
     exports: Exports
     sender: Sender
     files: Files
@@ -107,13 +105,13 @@ class AppContext:
             anchor_mailbox=f"Oid:{account.object_id}@{account.tenant_id}",
         )
         catalog = Catalog(store, catalog_source, channels, chat_service, members=member_search)
-        history = History(store, catalog, chat_service, channels, account.object_id)
+        history = History(catalog, chat_service, channels, account.object_id)
         search_source = SubstrateSearch(
             transport,
             Bearer(account_tokens, "m365.search"),
             anchor_mailbox=f"Oid:{account.object_id}@{account.tenant_id}",
         )
-        files = Files(store, GraphFiles(graph))
+        files = Files(history, GraphFiles(graph))
         person = Participant(id=account.object_id, name=name)
         return Services(
             account=account,
@@ -122,8 +120,7 @@ class AppContext:
             catalog=catalog,
             history=history,
             search=Search(store, search_source),
-            archive=Archive(store, catalog, history, chat_service, channels, person),
-            exports=Exports(store, catalog, history, files),
+            exports=Exports(catalog, history, files),
             sender=Sender(catalog, GraphWriter(graph)),
             files=files,
             photos=Photos(people),

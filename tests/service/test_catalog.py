@@ -83,7 +83,7 @@ async def test_partial_snapshot_is_completed_from_the_chat_service_listing(
     fake.chats["19:one@unq.gbl.spaces"].in_csa = False
     await services.catalog.refresh()
     chat = services.store.chat("19:one@unq.gbl.spaces")
-    assert chat is not None and chat.name == "Pat Peer"  # named from its roster
+    assert chat is not None and chat.name == "Pat Peer"  # named from its members
 
 
 async def test_empty_chats_and_kind_filters_and_paging(services: Services) -> None:
@@ -109,17 +109,12 @@ async def test_get_unknown_chat_is_not_found(services: Services) -> None:
         await services.catalog.get("19:nope@thread.v2")
 
 
-async def test_search_matches_names_and_indexed_participants(services: Services) -> None:
-    await services.archive.sync(include_rosters=True, max_pages=1)
-    found = await services.catalog.search("ray")
-    assert {m.chat.id for m in found.items} == {"19:general@thread.tacv2"}
-    match = found.items[0]
-    assert not match.name_matched and match.matched_participants[0].name == "Ray Fourth"
-    both = await services.catalog.search("quinn")
-    assert both.items[0].name_matched and both.items[0].matched_participants[0].name == "Quinn Third"
-    by_name = await services.catalog.search("sprint")
+async def test_search_matches_names_and_says_teams_was_not_asked(services: Services) -> None:
+    await services.catalog.list(refresh=True)
+    by_name = await services.catalog.search("sprint", refresh=False)
     assert by_name.items[0].name_matched and by_name.items[0].chat.id == "19:meeting_abc@thread.v2"
-    assert found.coverage.rosters_indexed >= 4
+    assert not by_name.coverage.complete
+    assert any("refresh=false" in note for note in by_name.coverage.notes)
 
 
 async def test_search_chats_refresh_false_is_cache_only(services: Services, fake: FakeTeams) -> None:
@@ -133,31 +128,3 @@ async def test_search_chats_refresh_false_is_cache_only(services: Services, fake
     found = await services.catalog.search("sprint", refresh=False)
     assert found.items and found.items[0].name_matched
     assert fake.calls == []
-
-
-async def test_chat_search_reports_missing_and_unresolved_rosters(
-    services: Services, fake: FakeTeams
-) -> None:
-    await services.catalog.list(refresh=True)
-    missing = await services.catalog.search("no-synthetic-match")
-    assert not missing.items
-    assert missing.coverage.rosters_missing == missing.coverage.chats
-    assert not missing.coverage.complete
-
-    fake.chats["19:one@unq.gbl.spaces"].members = [
-        ("33333333-3333-3333-3333-333333333333", ""),
-        ("66666666-6666-6666-6666-666666666666", ""),
-    ]
-    await services.archive.sync(conversation_id="19:one@unq.gbl.spaces", max_pages=1)
-    unresolved = await services.catalog.search("no-synthetic-match")
-    assert unresolved.coverage.unresolved_participants == 1
-    assert not unresolved.coverage.complete
-
-
-async def test_bounded_archive_sync_rotates_between_chats(services: Services) -> None:
-    first = await services.archive.sync(max_chats=1, max_pages=1, include_rosters=False, refresh_latest=False)
-    second = await services.archive.sync(
-        max_chats=1, max_pages=1, include_rosters=False, refresh_latest=False
-    )
-    assert len(first.items) == len(second.items) == 1
-    assert first.items[0].conversation_id != second.items[0].conversation_id
