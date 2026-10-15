@@ -94,6 +94,7 @@ The MCP server exposes the tools below. Each one's inputs, results and caveats a
 | `search_messages` | [`service/search.py`](src/teams_connector/service/search.py) | Search Teams messages online through Microsoft Search v2: any of up to 25 terms, optionally within chosen chats and dates; one page of hits with message ids |
 | `export_chats` | [`service/export/`](src/teams_connector/service/export/) | Export conversations to `.txt`, `.jsonl` or `.zip`, with their attachments |
 | `download_attachment` | [`service/files.py`](src/teams_connector/service/files.py) | Save the files a message names (shared files and pasted images), by message id or by its arrival time |
+| `get_presence` | [`service/presence.py`](src/teams_connector/service/presence.py) | Availability, activity, device and last-active time of the other person in a one-on-one chat; nothing richer |
 | `send_message` | [`service/send.py`](src/teams_connector/service/send.py) | Send one message (plain text, or HTML sent as written) after explicit authorization; the only write tool |
 
 Message timestamps are returned in UTC.

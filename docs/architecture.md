@@ -169,6 +169,14 @@ Example arguments for a bounded history read:
 }
 ```
 
+### Presence
+
+`get_presence` reads the availability, activity, device type and last-active time of the other person in a
+one-on-one chat. It reads the regional Unified Presence host with the `teams.spaces` bearer, sends only the
+person's id, keeps the result for a minute in the process, and never blocks the chat list. A failed read
+returns no presence and a reason. Other fields Teams returns (calendar, work location, capabilities) are not
+reported.
+
 ### Message search
 
 `search_messages` takes `terms`: one to 25 phrases, each at most 200 characters, with no double quotes and no

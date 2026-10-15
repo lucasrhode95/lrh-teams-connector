@@ -97,14 +97,6 @@ which requires admin consent
 ([research](api-research.md#meeting-recaps-and-transcripts-as-search-sources-2026-10-10)). Respect
 the download restriction the Teams UI showed for one meeting; a reference is not permission.
 
-### N5 — Presence
-
-Show availability, activity, last-active time and device type, and nothing richer (no status notes
-or calendar text) by default. Graph presence is not granted to the Teams client; Teams Web uses
-Unified Presence `v1/presence/getpresence/`
-([research](api-research.md#teams-web-source-build-26091712222)). Check it with app-owned sign-in.
-Cache it briefly, fail open, and never block chat listing.
-
 ## Validation
 
 ### P1.1 — Catalog against the Teams UI
