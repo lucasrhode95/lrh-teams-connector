@@ -63,7 +63,7 @@ endpoint does not change who owns a resource.
 - **Grants are per tenant.** The current split rests on one account's grants; reassess it before
   choosing a backend elsewhere.
 
-The current split ([research](api-research.md#microsoft-graph-with-the-teams-client-2026-10-01)):
+The current split ([research](api-research.md#microsoft-graph-with-the-teams-client)):
 
 | Capability | Backend | Why |
 |---|---|---|
@@ -73,9 +73,9 @@ The current split ([research](api-research.md#microsoft-graph-with-the-teams-cli
 | People's names and photos | Graph | |
 | Sending | Graph | Returns the server message id |
 | Downloading files linked from messages | Graph shares | |
-| Downloading pasted images | AMS, private (full-size views); Graph hosted copies for channel images | AMS holds them and the Skype token reads them ([research](api-research.md#inline-images-ams)); a channel's Graph copy is read with the Graph token |
+| Downloading pasted images | AMS, private (full-size views); Graph hosted copies for channel images | AMS holds them and the Skype token reads them ([research](api-research.md#ams-async-media-service)); a channel's Graph copy is read with the Graph token |
 | Online message discovery | Search v2 (`m365.search`) | Graph `chatMessage` search is denied to the tested client |
-| Presence of one-on-one peers | Teams Unified Presence, private, at the route AuthZ names (`presenceUPS`) | Graph presence needs `Presence.Read`, which the client lacks; the AuthZ route answers the `teams.spaces` bearer ([research](api-research.md#presence-through-authz-presenceups-2026-10-15)) |
+| Presence of one-on-one peers | Teams Unified Presence, private, at the route AuthZ names (`presenceUPS`) | Graph presence needs `Presence.Read`, which the client lacks; the AuthZ route answers the `teams.spaces` bearer ([research](api-research.md#unified-presence)) |
 
 Teams-native services stay where they are richer than Graph: presence and read state,
 broad heterogeneous search, and AMS media.
@@ -89,7 +89,7 @@ broad heterogeneous search, and AMS media.
   an unnamed group takes its members' sorted names, cut at 87 characters with ` +N`. An opaque id is
   shown only when no name resolves.
 - The exact rules and the evidence behind them are in the research's
-  [implementation decisions](api-research.md#implementation-decisions).
+  [naming rules](api-research.md#chat-rows).
 - The catalog answers from the local store for up to ten minutes; an explicit refresh waits for
   Teams.
 
@@ -97,7 +97,7 @@ broad heterogeneous search, and AMS media.
 
 **Teams is the record.** The connector keeps no local copy of message content. Teams itself keeps
 no readable copy of deleted text or of an edited message's earlier version
-([research](api-research.md#edit-and-delete)), so the connector shows what Teams returns now: an
+([research](api-research.md#edits-and-deletes)), so the connector shows what Teams returns now: an
 edited message with its newest text and `edited_at`, and a deleted message marked deleted with
 `deleted_at` and no text.
 
@@ -112,7 +112,7 @@ not deleted, and the catalog is rebuilt from Teams
 | Layer | Surface | Behavior |
 |---|---|---|
 | Conversation filter | Local UI | Filters the loaded catalog in the browser. Typing never calls Teams. |
-| Conversation search | MCP (`search_chats`) | Matches conversation names in the catalog and, with a refresh (the default), the named group and meeting chats Teams matches by a plain name or email, with the members that matched, and the one-on-ones with the people Teams suggests for it ([research](api-research.md#people-suggestions-with-teams-webs-request-2026-10-15)). `refresh=false` searches the cache only. Reports what it could not cover; older named chats matched only by a member are a known gap. |
+| Conversation search | MCP (`search_chats`) | Matches conversation names in the catalog and, with a refresh (the default), the named group and meeting chats Teams matches by a plain name or email, with the members that matched, and the one-on-ones with the people Teams suggests for it ([research](api-research.md#people-suggestions)). `refresh=false` searches the cache only. Reports what it could not cover; older named chats matched only by a member are a known gap. |
 | Message search | MCP (`search_messages`) | Search v2 on the server, across Teams or scoped to chosen conversations and dates. Takes a list of terms, any of which matches; each term is one phrase, never split and never read as a query operator. Matches words, word prefixes and phrases; returns message ids, totals, pages, and a confirmed zero. No local match modes (decided 2026-10-15).
 
 Calendar events, meeting recaps, transcript lists, transcript content and transcript-text search are
