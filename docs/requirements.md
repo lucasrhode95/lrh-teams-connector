@@ -73,7 +73,7 @@ The current split ([research](api-research.md#microsoft-graph-with-the-teams-cli
 | People's names and photos | Graph | |
 | Sending | Graph | Returns the server message id |
 | Downloading files linked from messages | Graph shares | |
-| Downloading pasted images | AMS, private (planned, roadmap N1) | AMS holds them; the Skype token reads them ([research](api-research.md#inline-images-ams)) |
+| Downloading pasted images | AMS, private (full-size views); Graph hosted copies for channel images | AMS holds them and the Skype token reads them ([research](api-research.md#inline-images-ams)); a channel's Graph copy is read with the Graph token |
 | Online message discovery | Search v2 (`m365.search`) | Graph `chatMessage` search is denied to the tested client |
 
 Teams-native services stay where they are richer than Graph: presence, Favorites and read state,
@@ -129,7 +129,7 @@ counts as broad Microsoft 365 search.
   Attachments are included by default, up to 200 references per conversation, 100 MiB per file and
   250 MiB per conversation. A failed download keeps the text and marks the attachment unavailable.
   TXT is for reading and keeps a lean header; JSONL is for code and keeps every field.
-- **Attachments by name** (decided 2026-10-15, roadmap N1): one text extraction serves
+- **Attachments by name** (decided and implemented 2026-10-15): one text extraction serves
   `get_messages`, exports and downloads. Files and pasted images appear in the text as markers with
   names derived from the message; `download_attachment` fetches the named files of one message, at
   full resolution, to local paths, and fetches each source once. Base64 image data never reaches a

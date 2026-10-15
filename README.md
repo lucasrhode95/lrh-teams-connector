@@ -93,7 +93,7 @@ The MCP server exposes the tools below. Each one's inputs, results and caveats a
 | `get_messages` | [`service/history.py`](src/teams_connector/service/history.py) | Read a conversation's history, newest pages first, with inclusive date bounds |
 | `search_messages` | [`service/search.py`](src/teams_connector/service/search.py) | Search Teams messages online through Microsoft Search v2: any of up to 25 terms, optionally within chosen chats and dates; one page of hits with message ids |
 | `export_chats` | [`service/export/`](src/teams_connector/service/export/) | Export conversations to `.txt`, `.jsonl` or `.zip`, with their attachments |
-| `download_attachment` | [`service/files.py`](src/teams_connector/service/files.py) | Save a file linked from a message, read again from Teams by its id |
+| `download_attachment` | [`service/files.py`](src/teams_connector/service/files.py) | Save the files a message names (shared files and pasted images), by message id or by its arrival time |
 | `send_message` | [`service/send.py`](src/teams_connector/service/send.py) | Send one message after explicit authorization; the only write tool |
 
 Message timestamps are returned in UTC.
@@ -122,7 +122,8 @@ The local store holds the chat catalog and account metadata, and nothing else. M
 kept: Teams is the record, and every history read goes to Teams. The store is separated by Microsoft
 account and checks its stored owner before use; it is not application-encrypted, so follow the storage
 rules for the device. Generated exports and downloaded message attachments are cleaned up after seven
-days the next time their output directory is used.
+days the next time their output directory is used. Downloads are cached per source under the data directory's
+`downloads` folder, so a file already there is returned without being fetched again.
 
 A store left by an earlier version that kept messages is moved, without deletion, into a
 `legacy-archive-<timestamp>` folder next to it the first time this version opens the account. The

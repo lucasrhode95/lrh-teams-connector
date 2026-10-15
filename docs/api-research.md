@@ -3434,3 +3434,47 @@ Live checks on the developer's account after the message archive was removed (ro
 - A download of a file linked from a message reached Graph's `/shares` route and was refused with HTTP
   400. The linked item was a SharePoint site-page attachment. This limitation predates the archive
   removal and is not addressed by it.
+
+## Inline images, sources and downloads (2026-10-15)
+
+Read-only probes through the connector's own session: the 25 most recently active chats (1,682 messages) and the
+8 most recently active channels (82 posts and replies). Only counts, attribute shapes and status codes were kept.
+
+### Chat Service
+
+- A pasted image is an `img` with `itemtype` `http://schema.skype.com/AMSImage`, `itemid` (the AMS object id),
+  and a `src` on an AMS host ending in `/views/imgo`. Of 67 such elements, 65 carry `itemscope="png"`; two carry
+  no `itemscope`. The connector names an image without a type `png`, the type AMS gives pasted images.
+- Emoji come in two forms: 15 external static images on the Teams CDN and 3 `data:image/png` URIs. Both carry
+  `itemtype` `http://schema.skype.com/Emoji`, an `alt` (the emoji) and a `title`. They render as their `alt`.
+- Giphy GIFs carry `itemtype` `http://schema.skype.com/Giphy` (4 elements) or are on a `*.giphy.com` host without
+  that type (1), with an `alt` and no `itemscope`. They render as `[GIF: alt]` followed by the link.
+- No `attachment` placeholder appears in these chats.
+- `properties.files` is a JSON string. Decoded, 21 messages carry 27 SharePoint or OneDrive files. Each file has
+  `fileName`, `fileType`, `itemid`, `version` and `fileInfo` with `shareUrl`, `fileUrl`, `siteUrl` and
+  `serverRelativeUrl`, and either `itemId` (20 files) or `shareID` (6 files, a spelling variant). An earlier count
+  of 1,233 messages tested the raw string and was wrong.
+
+### Graph (channels)
+
+- A pasted channel image is an `img` whose `src` is a `hostedContents/<id>/$value` URL on
+  `graph.microsoft.com`, with `itemid` set to an AMS object id (not the hosted-content id) and no `itemscope`.
+  Three such images were found.
+- `$expand=hostedContents($select=id,contentType)` is refused with HTTP 400, so nested selects are not used.
+  `$expand=hostedContents` returned the entries with `id`, `contentType` (null in the one sample) and
+  `contentBytes`, which the connector does not read.
+- `GET .../hostedContents/<id>/$value` returned HTTP 200 with `image/png`, 29,256 bytes in the probe.
+- Attachments: two SharePoint references and twelve announcement-banner cards.
+
+### Live results of the N1 branch (2026-10-15)
+
+- An AMS image read by message id downloaded its full-size view as `image/png`, 57,106 bytes. Read by arrival
+  time, the same message gave the same file.
+- A channel's hosted image downloaded through Graph as `image/png`, 170,032 bytes. The channel time lookup through
+  Chat Service returned one message with the same id as the Graph read.
+- An export of a conversation with six images downloaded all six and failed none.
+- Rendering across the same chats and channels (1,764 messages): 70 image markers, 23 file markers and 4 GIF
+  links. No text contains base64. One message's text contains the characters `data:`, with no base64 payload, so
+  it is not an image.
+- 23 messages show an AMS URL as link text: 18 without attachments and 5 with SharePoint files. These are not image
+  elements, are not fetched, and keep their link text.
