@@ -374,6 +374,7 @@ class GraphFileSharer:
             raise Upstream("Graph opened an upload session but returned no upload URL.")
         size = path.stat().st_size
         offset, limit, resumes = 0, size - 1, 0  # the next chunk starts at offset and ends by limit
+        final = True  # the range offset..limit is the only one missing: its last chunk can complete the file
         with path.open("rb") as handle:
             while True:
                 end = min(offset + UPLOAD_CHUNK_BYTES - 1, limit)
@@ -394,19 +395,20 @@ class GraphFileSharer:
                         await self._cancel(upload_url)
                         raise
                     resumes += 1
-                    body = await self._missing_ranges(upload_url, exc, last_chunk=end == size - 1)
+                    body = await self._missing_ranges(upload_url, exc, last_chunk=final and end == limit)
                     lowest = 0
                 missing = _next_expected_range(body, size)
                 if missing is None or not lowest <= missing[0] < size:
                     await self._cancel(upload_url)
                     raise Upstream("Graph's upload session did not name the next range to send.")
-                offset, limit = missing
+                offset, limit, final = missing
 
     async def _missing_ranges(
         self, upload_url: str, failure: ConnectorError, *, last_chunk: bool
     ) -> dict[str, Any]:
         """The session's status after a failed chunk. When it cannot be read the session is cancelled; if
-        the failed chunk was the last one, the file may have been completed, so the outcome is unknown."""
+        the failed chunk closed the last missing range, the file may have been completed, so the outcome is
+        unknown."""
         try:
             _, body = await self._graph.upload_session("GET", upload_url)
             return body
@@ -425,16 +427,18 @@ class GraphFileSharer:
             await self._graph.upload_session("DELETE", upload_url)
 
 
-def _next_expected_range(body: dict[str, Any], size: int) -> tuple[int, int] | None:
-    """The first range an upload session still misses, as (first byte, last byte): ``nextExpectedRanges[0]``,
-    "start-end" or "start-" (to the end of the file). Graph may list several ranges; each is sent in turn."""
+def _next_expected_range(body: dict[str, Any], size: int) -> tuple[int, int, bool] | None:
+    """The first range an upload session still misses, as (first byte, last byte, whether it is the only
+    one): ``nextExpectedRanges[0]``, "start-end" or "start-" (to the end of the file). Graph may list several
+    ranges; each is sent in turn, and sending the only one left completes the file."""
     ranges = body.get("nextExpectedRanges")
-    first = ranges[0] if isinstance(ranges, list) and ranges else None
+    ranges = ranges if isinstance(ranges, list) else []
+    first = ranges[0] if ranges else None
     start, _, end = first.partition("-") if isinstance(first, str) else ("", "", "")
     if not start.isdigit() or not (end.isdigit() or end == ""):
         return None
     last = min(int(end), size - 1) if end else size - 1
-    return (int(start), last) if int(start) <= last else None
+    return (int(start), last, len(ranges) == 1) if int(start) <= last else None
 
 
 def _uploaded(item: dict[str, Any]) -> UploadedFile:

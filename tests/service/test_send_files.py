@@ -245,6 +245,20 @@ async def test_a_bounded_missing_range_is_sent_without_overlapping_received_byte
     assert _chunk_puts(fake) == 3  # 0-9, then only 10-11, then 15-24
 
 
+async def test_an_unreadable_status_after_the_last_missing_range_is_an_unknown_outcome(
+    services: Services, fake: FakeTeams, large: Path
+) -> None:
+    data = large.read_bytes()
+    fake.upload_prefill = {offset: data[offset] for offset in range(12, 25)}  # only "10-11" stays missing
+    fake.chunk_failures = [(10, "lost")]  # completes the file, but the answer is lost
+    fake.fail_upload_status = True
+
+    with pytest.raises(WriteOutcomeUnknown, match="state could not be read.*video.mp4 may also have been"):
+        await services.sender.send(ONE, expected_chat_name="Pat Peer", files=[str(large)])
+
+    assert fake.uploads == [(config.CHAT_FILES_FOLDER, "video.mp4", data)] and fake.sent == []
+
+
 async def test_repeated_chunk_failures_cancel_the_session_and_post_nothing(
     services: Services, fake: FakeTeams, large: Path
 ) -> None:
