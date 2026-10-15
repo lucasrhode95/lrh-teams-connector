@@ -332,7 +332,8 @@ also appear as `RichText/Media_CallTranscript` messages.
 ## AMS (Async Media Service)
 
 Pasted images. Hosts from `regionGtms.ams` (`*.asm.skype.com`) and `regionGtms.amsV2`
-(`*.asyncgw.teams.microsoft.com`). Every inline image seen on 2026-10-15 was on the first (67 of 67).
+(`*.asyncgw.teams.microsoft.com`). Pasted images seen on 2026-10-15 were on the first host (67 of 67); the
+second host is checked below.
 
 Teams Web authenticates image loads with a cookie (it posts the Skype token to `<AMS host>/v1/skypetokenauth`;
 Source), but the header alone works. Live 2026-10-15, one self-chat image and one posted by someone else:
@@ -349,6 +350,17 @@ Source), but the header alone works. Live 2026-10-15, one self-chat image and on
   and `imgpsh_thumbnail_sx`. The bundle names more views (`imgt1`, `imgpsh_mobile_save`, …).
 - Teams Web saves every image as `MicrosoftTeams-image.png` (Source), so the connector names images by
   object id instead.
+
+**Second host, live 2026-10-15** (read-only, the 25 most recent chats; no ids, bodies or bytes kept). The 172
+pasted images in those chats: 171 on the first host, 1 on the second. With `Authorization: skype_token <token>`:
+
+- `views/imgpsh_fullsize` on the second host answered 200 `image/png` for all 10 objects first posted on the
+  first host, and 200 `image/jpeg` for the one image posted on the second host;
+- the same view without credentials answered 401 on the second host;
+- `GET /v1/objects/{id}` on the second host answered 200 for all 10 objects.
+
+The connector's AMS reader downloaded the second-host image in full (200,914 bytes, JPEG). So the Skype token
+reads pasted-image views on either host.
 
 **Uploads (not used by the connector; third party and Source).** Teams Web uploads a pasted image to AMS
 before sending and references it from the message:

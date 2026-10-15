@@ -13,6 +13,8 @@ from teams_connector.remote import chat_service_mapping, graph_mapping, inline_i
 OBJECT = "0-neu-d1-0123456789abcdef0123456789abcdef"
 AMS_SRC = f"https://eu-api.asm.skype.com/v1/objects/{OBJECT}/views/imgo"
 FULL_SIZE = f"https://eu-api.asm.skype.com/v1/objects/{OBJECT}/views/imgpsh_fullsize"
+AMSV2_SRC = f"https://eu-prod.asyncgw.teams.microsoft.com/v1/objects/{OBJECT}/views/imgo"
+AMSV2_FULL_SIZE = f"https://eu-prod.asyncgw.teams.microsoft.com/v1/objects/{OBJECT}/views/imgpsh_fullsize"
 AMS_TYPE = 'itemtype="http://schema.skype.com/AMSImage"'
 CONVERSATION = "19:one@unq.gbl.spaces"
 
@@ -29,6 +31,12 @@ def test_ams_image_is_named_by_object_id_and_its_file_type() -> None:
     (image,) = message.attachments
     assert (image.kind, image.source, image.source_id, image.url) == ("image", "ams", OBJECT, FULL_SIZE)
     assert image.name == f"{OBJECT}.jpeg"
+
+
+def test_ams_image_on_the_newer_media_host_is_fetched_from_that_host() -> None:
+    message = chat_message(f'<img src="{AMSV2_SRC}" {AMS_TYPE} itemscope="png" itemid="{OBJECT}">')
+    (image,) = message.attachments
+    assert (image.source, image.url) == ("ams", AMSV2_FULL_SIZE)
 
 
 def test_ams_image_without_a_file_type_is_named_png() -> None:

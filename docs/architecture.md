@@ -140,8 +140,8 @@ publication. URLs, query strings, bodies, authorization headers, message content
 are omitted from operational logs; credential-like values are redacted as another safeguard.
 
 Pasted images are fetched only from the URL their message names: AMS full-size views from `*.asm.skype.com`
-with the session's Skype token, and Graph's hosted copies of channel images with the Graph token. Nothing is
-downloaded while a message is read.
+or `*.asyncgw.teams.microsoft.com` (the two AMS hosts AuthZ names) with the session's Skype token,
+and Graph's hosted copies of channel images with the Graph token. Nothing is downloaded while a message is read.
 
 The local UI rejects non-local Host headers and requires a random per-process token on API calls.
 It uses a restrictive Content Security Policy and renders message content as text. The browser page

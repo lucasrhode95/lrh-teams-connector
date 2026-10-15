@@ -18,13 +18,6 @@ None open.
 
 Working behavior that could be cheaper, simpler or better informed.
 
-### N8 — AMS images on the newer media host
-
-Pasted images are fetched only from `*.asm.skype.com`, the host every inline image used on 2026-10-15
-(67 of 67). AuthZ also names `amsV2` (`*.asyncgw.teams.microsoft.com`), which recording cards already use.
-If an image arrives there, it shows its marker but is not downloadable. Allow that host for image views when
-one is seen.
-
 ## Enhancements
 
 ### P1.5 — Send host files as attachments

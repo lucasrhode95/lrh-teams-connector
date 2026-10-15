@@ -182,7 +182,7 @@ class FakeTeams:
             return self._csa(request)
         if url.hostname == "emea.ng.msg.teams.microsoft.com":
             return self._chat_service(request, path, parse_qs(url.query))
-        if url.hostname == "eu-api.asm.skype.com":
+        if url.hostname in ("eu-api.asm.skype.com", "eu-prod.asyncgw.teams.microsoft.com"):
             return self._ams(request, path)
         if url.hostname == "teams.microsoft.com" and path.startswith("/ups/emea/v1/presence/getpresence"):
             return self._presence(request)
