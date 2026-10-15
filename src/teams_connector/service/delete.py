@@ -17,7 +17,7 @@ from teams_connector.domain.errors import (
     InvalidRequest,
     WriteOutcomeUnknown,
 )
-from teams_connector.domain.models import DeletedMessage, DeleteResult, Message, NotDeletedMessage
+from teams_connector.domain.models import Chat, DeletedMessage, DeleteResult, Message, NotDeletedMessage
 from teams_connector.remote.ports import MessageDeleter
 from teams_connector.service.catalog import Catalog
 from teams_connector.service.history import History
@@ -49,34 +49,45 @@ class Deleter:
         if chat.kind not in DELETE_CHAT_KINDS:
             raise InvalidRequest("Messages can be deleted in chats only, not in channels.")
         result = DeleteResult(conversation_id=chat.id, chat_name=chat.name)
-        for message_id in ids:
+        for index, message_id in enumerate(ids):
             try:
-                message = await self._history.message(chat.id, message_id)
-            except AuthenticationRequired:
-                raise
-            except ConnectorError as exc:
-                result.skipped.append(NotDeletedMessage(message_id=message_id, reason=f"Not read: {exc}"))
-                continue
-            reason = _not_deletable(message)
-            if reason:
-                result.skipped.append(NotDeletedMessage(message_id=message_id, reason=reason))
-                continue
-            try:
-                await self._deleter.delete(chat, message_id)
-            except WriteOutcomeUnknown as exc:
-                result.uncertain.append(NotDeletedMessage(message_id=message_id, reason=str(exc)))
-                continue
-            except AuthenticationRequired:
-                raise
-            except ConnectorError as exc:
-                result.skipped.append(
-                    NotDeletedMessage(message_id=message_id, reason=f"Teams refused: {exc}")
+                await self._delete_one(chat, message_id, result)
+            except AuthenticationRequired as exc:
+                if not result.deleted and not result.uncertain:
+                    raise
+                # Some deletes already happened: report them, and leave the rest for after sign-in.
+                result.skipped.extend(
+                    NotDeletedMessage(message_id=rest, reason=f"Not attempted: {exc}") for rest in ids[index:]
                 )
-                continue
-            result.deleted.append(
-                DeletedMessage(message_id=message_id, sent_at=message.sent_at, files=_shared_files(message))
-            )
+                break
         return result
+
+    async def _delete_one(self, chat: Chat, message_id: str, result: DeleteResult) -> None:
+        """Read one message again and delete it once if the user wrote it; record the outcome."""
+        try:
+            message = await self._history.message(chat.id, message_id)
+        except AuthenticationRequired:
+            raise
+        except ConnectorError as exc:
+            result.skipped.append(NotDeletedMessage(message_id=message_id, reason=f"Not read: {exc}"))
+            return
+        reason = _not_deletable(message)
+        if reason:
+            result.skipped.append(NotDeletedMessage(message_id=message_id, reason=reason))
+            return
+        try:
+            await self._deleter.delete(chat, message_id)
+        except WriteOutcomeUnknown as exc:
+            result.uncertain.append(NotDeletedMessage(message_id=message_id, reason=str(exc)))
+            return
+        except AuthenticationRequired:
+            raise
+        except ConnectorError as exc:
+            result.skipped.append(NotDeletedMessage(message_id=message_id, reason=f"Teams refused: {exc}"))
+            return
+        result.deleted.append(
+            DeletedMessage(message_id=message_id, sent_at=message.sent_at, files=_shared_files(message))
+        )
 
 
 def _check_ids(message_ids: Sequence[str]) -> list[str]:
@@ -105,4 +116,5 @@ def _not_deletable(message: Message) -> str | None:
 
 
 def _shared_files(message: Message) -> list[str]:
-    return [item.name for item in message.attachments if item.source == "sharepoint"]
+    """The files a message shared from OneDrive or SharePoint, with or without a link we can follow."""
+    return [item.name for item in message.attachments if item.kind == "file" and item.source != "loop"]

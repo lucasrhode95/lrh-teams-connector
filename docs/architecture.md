@@ -288,48 +288,50 @@ once into the download cache (see Storage), and the tool returns the local paths
 SharePoint discovery belongs to the SharePoint connector. Email attachments belong to Outlook.
 
 **Meeting notes.** When a meeting ends, its "Facilitator" app posts a link to the meeting's Loop notes
-page ([research](api-research.md#loop-pages-and-meeting-notes)). A message from an app (`28:`) with a
-`FluidAutoEmbedLink` anchor to a `/:fl:/` link reads as `[Meeting notes] <link>` instead of the app's
-sentence, and carries a `loop` attachment named `Meeting notes.txt`; reading fetches nothing. A person's
-message with such a link keeps its text. Exports (with attachments) and `download_attachment` read the
-page with one Graph `GET /shares/{share}/driveItem/content?format=html` (`remote/loop_notes.py` cleans
-it) and keep the agenda and goal, the notes under their headings, and each task with its assignee and
-due date; the AI disclaimer, empty paragraphs, checkboxes and "Task list category" labels are dropped. An
-export reads each page once and writes the notes after the message; `download_attachment` saves them as
-a text file. The page is live, so the text starts with the time it was read and says later edits are not
-included, and the page is read again on every call rather than served from the download cache. A page
-Graph will not convert (no access, deleted, a conversion error) is reported as an unavailable attachment
-and the message text stays. Teams Web also checks the page's `opStream/capabilities` (`canExport`,
-`canExtract`) first; the connector has no SharePoint-audience token to do that, so it relies on Graph
-refusing a restricted page, which is unverified (roadmap N9).
+page ([research](api-research.md#loop-pages-and-meeting-notes)). An app (`28:`) message whose bot metadata
+names `eventType: TM_MeetingEnded` and whose HTML has a `FluidAutoEmbedLink` anchor to a `/:fl:/` link
+reads as `[Meeting notes] <link>` instead of the app's sentence, and carries a `loop` attachment named
+`Meeting notes.txt`; reading fetches nothing. Any other message with such a link keeps its text.
+
+Exports (with attachments) and `download_attachment` read the page with one Graph
+`GET /shares/{share}/driveItem/content?format=html`, and `remote/loop_notes.py` keeps the agenda and goal,
+the notes under their headings, and each task with its assignee and due date; the AI disclaimer, empty
+paragraphs, checkboxes and "Task list category" labels are dropped. An export reads each page once,
+within the conversation's attachment limits (200 items, 250 MiB), and writes the notes after the message; `download_attachment` saves them as a text file. The page is live, so
+the text starts with the time it was read and says later edits are not included, and the page is read
+again on every call rather than served from the download cache. A page Graph will not convert (no access,
+deleted, a conversion error) is reported as an unavailable attachment, and the message text stays. Teams
+Web also checks the page's `opStream/capabilities` (`canExport`, `canExtract`); the connector has no
+SharePoint-audience token for that, so it relies on Graph refusing a restricted page, which is unverified
+(roadmap N9).
 
 ### Send a message
 
 `send_message` is one of the two Teams write tools, with `delete_messages`. The user must explicitly
-authorize both the recipient
-and exact message content. Pass the current conversation name from `list_chats` as
-`expected_chat_name`; the service refreshes only that recipient (a chat's delta, or a channel's name from
-its team), then checks the name before sending. Pass exactly one of `text` (plain text; HTML
-characters are escaped) or `html` (HTML sent as written, after a passive check that refuses scripts, frames,
-form controls, event-handler attributes, `javascript:` and `vbscript:` URLs, embedded media, declarations
-and CDATA sections, and unfinished markup). The message is attempted once. A network failure after the
-request may leave the result uncertain, so inspect the conversation before deciding whether another send
-is needed. A search result or request to analyze a conversation does not authorize a send.
+authorize the recipient and the exact content, files and images. Pass the current conversation name from
+`list_chats` as `expected_chat_name`; the service refreshes only that recipient (a chat's delta, or a
+channel's name from its team), then checks the name before sending. Pass exactly one of `text` (plain
+text; HTML characters are escaped) or `html` (HTML sent as written, after a passive check that refuses
+scripts, frames, form controls, event-handler attributes, `javascript:` and `vbscript:` URLs, embedded
+media, declarations and CDATA sections, and unfinished markup); with files or images both may be omitted.
+The message is attempted once. A network failure after the request may leave the result uncertain, so
+inspect the conversation before deciding whether another send is needed. A search result or request to
+analyze a conversation does not authorize a send.
+
+Files and images go to one-on-one and group chats and the self chat, and may share a message. Every
+argument is checked before the first request.
 
 `images` sends local PNG or JPEG files inline, as Graph `hostedContents` in the same request
 ([research](api-research.md#sending-files)). Teams shows only images it hosts, so an `<img>` in `html` is
-allowed only when its `src` is the file name of one of `images`; the service rebuilds that tag to point
-at `../hostedContents/N/$value` and keeps only `alt`, `title`, `width`, `height` and `style`. Any other
-`<img>` is refused, so remote images stay blocked. Images the HTML does not name, and every image sent
-with `text`, follow the text, one paragraph each. Before any request the service refuses a file that is
-not PNG or JPEG (by its content) and images that would push the request past about 4 MiB (base64 adds a
-third, so about 3 MB of images); the error suggests `files` instead.
+allowed only when its `src` is the file name of one of `images`; the service rebuilds that tag to point at
+`../hostedContents/N/$value`, keeping only `alt`, `title`, `width`, `height` and `style`. Any other `<img>`
+is refused, so remote images stay blocked. Images the HTML does not name, and every image sent with
+`text`, follow the text, one paragraph each. A file that is not PNG or JPEG (by its content) is refused,
+and so are images that would push the request past about 4 MiB (base64 adds a third, so about 3 MB of
+images), counting the body and a reserve for each file's reference; the error suggests `files` instead.
 
-`files` attaches local files, by absolute path, in a one-on-one or group chat or the self chat: up to 10,
-each up to `config.MAX_SEND_FILE_BYTES` (2 GiB by default). With files or images, `text` and `html` may
-both be omitted, and images and files may share a message. The authorization covers every file and
-image. Before any request the service checks each path. It then does what Teams Web does, through Graph
-([research](api-research.md#sending-files)):
+`files` attaches up to 10 local files, by absolute path, each up to `config.MAX_SEND_FILE_BYTES` (2 GiB by
+default). The service does what Teams Web does, through Graph ([research](api-research.md#sending-files)):
 
 1. Upload each file to `config.CHAT_FILES_FOLDER` in the sender's OneDrive. A name clash is renamed. A
    file under 250 MiB goes up in one `PUT`. A larger one uses an upload session: `createUploadSession`,
@@ -339,16 +341,15 @@ image. Before any request the service checks each path. It then does what Teams 
    (`direct`). The self chat has nobody to share with, so this step is skipped there.
 3. Post the message with one `reference` attachment per file.
 
-Each request is made once, with one user-approved exception: after a failed chunk, the uploader reads
-the session's `nextExpectedRanges` and resends only the missing bytes, at most
-`graph_teams.UPLOAD_RESUMES` (3) times per file; then it cancels the session (`DELETE uploadUrl`) and
-the send fails. If the last chunk fails and the session's state cannot be read, the file may have been
-uploaded, so the outcome is reported as unknown. The message is posted only after every upload and
-share has succeeded. A
-share that fails for some members (Graph's `207 Multi-Status`) counts as failed.
-When something fails, the error names the files already in the sender's OneDrive, which stay there. A
-member without an object id in the directory, such as a federated user, makes the send fail before
-anything is uploaded. The result lists each file's name, as renamed, and its link.
+Each request is made once, with one user-approved exception: after a failed chunk, the uploader reads the
+session's `nextExpectedRanges` and resends only the missing bytes, at most `graph_teams.UPLOAD_RESUMES`
+(3) times per file; then it cancels the session (`DELETE uploadUrl`) and the send fails. If the last chunk
+fails and the session's state cannot be read, the file may have been uploaded, so the outcome is reported
+as unknown. The message is posted only after every upload and share has succeeded; a share that fails for
+some members (Graph's `207 Multi-Status`) counts as failed. When something fails, the error names the
+files already in the sender's OneDrive, which stay there. A member without an object id in the directory,
+such as a federated user, makes the send fail before anything is uploaded. The result lists each file's
+name, as renamed, and its link.
 
 ### Delete messages
 
@@ -365,6 +366,7 @@ so the rule lives in the tool description and the MCP instructions. The service 
    it can be undone in Teams.
 
 A refused delete is skipped and the rest continue; an ambiguous one (no response, or HTTP 504) is listed
-as uncertain and never resent. The result lists `deleted` (with each message's time and the names of
-the files it shared, which stay in the sender's OneDrive, still shared with the chat), `skipped` and
-`uncertain`. `get_messages` then shows a deleted message as `is_deleted` with no text.
+as uncertain and never resent. If sign-in fails after some deletes, the rest are skipped as not
+attempted, so the result still shows what happened. The result lists `deleted` (each message's time and
+the names of the files it shared, which stay in the sender's OneDrive, still shared with the chat),
+`skipped` and `uncertain`. `get_messages` then shows a deleted message as `is_deleted` with no text.

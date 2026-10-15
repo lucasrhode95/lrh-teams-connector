@@ -233,6 +233,18 @@ async def test_a_failed_chunk_resends_only_the_missing_ranges(
     assert fake.cancelled_uploads == [] and len(fake.sent) == 1
 
 
+async def test_a_bounded_missing_range_is_sent_without_overlapping_received_bytes(
+    services: Services, fake: FakeTeams, large: Path
+) -> None:
+    data = large.read_bytes()
+    fake.upload_prefill = {offset: data[offset] for offset in (12, 13, 14)}  # Graph names "10-11" and "15-"
+
+    await services.sender.send(ONE, expected_chat_name="Pat Peer", files=[str(large)])
+
+    assert fake.uploads == [(config.CHAT_FILES_FOLDER, "video.mp4", data)]
+    assert _chunk_puts(fake) == 3  # 0-9, then only 10-11, then 15-24
+
+
 async def test_repeated_chunk_failures_cancel_the_session_and_post_nothing(
     services: Services, fake: FakeTeams, large: Path
 ) -> None:

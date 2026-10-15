@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 
 from teams_connector.bootstrap import Services
-from teams_connector.domain.errors import InvalidRequest
+from teams_connector.domain.errors import AuthenticationRequired, InvalidRequest
 from teams_connector.service import delete
 from tests.fakes.teams_fake import ME, ME_NAME, FakeTeams, cs_message
 
@@ -24,7 +24,8 @@ async def test_only_the_users_own_messages_are_deleted(services: Services, fake:
             author=ME,
             name=ME_NAME,
             files=[
-                {"fileName": "plan.pdf", "fileInfo": {"shareUrl": "https://tenant.sharepoint.com/s/plan"}}
+                {"fileName": "plan.pdf", "fileInfo": {"shareUrl": "https://tenant.sharepoint.com/s/plan"}},
+                {"fileName": "linkless.txt"},  # no link to follow, but still in OneDrive
             ],
         )
     )
@@ -34,7 +35,10 @@ async def test_only_the_users_own_messages_are_deleted(services: Services, fake:
     )
 
     assert fake.deletes == [(ONE, "1002"), (ONE, "1004")]
-    assert [(m.message_id, m.files) for m in result.deleted] == [("1002", []), ("1004", ["plan.pdf"])]
+    assert [(m.message_id, m.files) for m in result.deleted] == [
+        ("1002", []),
+        ("1004", ["plan.pdf", "linkless.txt"]),
+    ]
     assert [(m.message_id, m.reason) for m in result.skipped] == [("1003", "Not your message.")]
     assert result.uncertain == []
 
@@ -76,6 +80,26 @@ async def test_a_refused_delete_is_skipped_and_the_rest_continue(services: Servi
 
     assert result.skipped[0].message_id == "1002" and result.skipped[0].reason.startswith("Teams refused:")
     assert [m.message_id for m in result.deleted] == ["1005"]
+
+
+async def test_a_sign_in_failure_midway_reports_what_was_done(services: Services, fake: FakeTeams) -> None:
+    fake.chats[ONE].messages.append(
+        cs_message("1005", "2026-09-05T10:00:00.000Z", "Another of mine", author=ME, name=ME_NAME)
+    )
+    fake.fail_deletes = {"1005": "401"}
+
+    result = await services.deleter.delete(ONE, expected_chat_name="Pat Peer", message_ids=["1002", "1005"])
+
+    assert [m.message_id for m in result.deleted] == ["1002"]
+    assert [m.message_id for m in result.skipped] == ["1005"]
+    assert result.skipped[0].reason.startswith("Not attempted:")
+
+
+async def test_a_sign_in_failure_before_any_delete_is_raised(services: Services, fake: FakeTeams) -> None:
+    fake.fail_deletes = {"1002": "401"}
+
+    with pytest.raises(AuthenticationRequired):
+        await services.deleter.delete(ONE, expected_chat_name="Pat Peer", message_ids=["1002"])
 
 
 async def test_the_self_chat_messages_can_be_deleted(services: Services, fake: FakeTeams) -> None:

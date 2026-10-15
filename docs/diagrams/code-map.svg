@@ -74,7 +74,8 @@
 <text class="group-title" x="360" y="626">Search</text>
 <g><title>One page of Search v2 message hits for the terms, scope and dates. → Search.search_messages</title><text class="detail small" x="360" y="656">• <tspan class="code">search_messages</tspan></text></g>
 <text class="group-title" x="360" y="722">Write</text>
-<g><title>Send one message, optionally with files, after explicit authorization; checks the live chat name; sent once. → Sender.send</title><text class="detail small" x="360" y="752">• <tspan class="code">send_message</tspan></text></g>
+<g><title>Send one message, optionally with files and inline images, after explicit authorization; checks the live chat name; sent once. → Sender.send</title><text class="detail small" x="360" y="752">• <tspan class="code">send_message</tspan></text></g>
+<g><title>Delete a confirmed set of the user's own chat messages; re-reads each, deletes each once, reports deleted, skipped and uncertain. → Deleter.delete</title><text class="detail small" x="360" y="779">• <tspan class="code">delete_messages</tspan></text></g>
 <text class="group-title" x="668" y="626">Export</text>
 <g><title>Export conversations to .txt, .jsonl or a .zip with attachments. → Exports.export</title><text class="detail small" x="668" y="656">• <tspan class="code">export_chats</tspan></text></g>
 <text class="group-title" x="668" y="776">Presence</text>
@@ -161,7 +162,7 @@
 <text class="group-title" x="1265" y="1406">Method</text>
 <g><title>Checks the destination against the live catalog and the expected chat name, uploads and shares any files once each, then attempts the send exactly once.</title><text class="detail" x="1265" y="1436">• <tspan class="code">send(...)</tspan></text></g>
 <text class="group-title" x="1265" y="1475">Rules</text>
-<text class="detail" x="1265" y="1505">the only write · never retried</text>
+<text class="detail" x="1265" y="1505">sent once · large-upload parts resumed</text>
 <text class="detail" x="1265" y="1532">uncertain result: inspect Teams first</text>
 <text class="muted" x="1265" y="1598">uses <tspan class="code">Catalog</tspan> · <tspan class="code">ChatWriter</tspan> · <tspan class="code">FileSharer</tspan></text>
 

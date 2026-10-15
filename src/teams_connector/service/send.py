@@ -15,6 +15,7 @@ are reported, never deleted, and nothing is retried.
 from __future__ import annotations
 
 import html as markup
+import json
 import math
 from collections.abc import Sequence
 from pathlib import Path
@@ -35,12 +36,16 @@ from teams_connector.service.passive_html import check_passive_html, with_hosted
 
 MAX_TEXT_CHARS = 10_000
 MAX_FILES = 10
-FILE_CHAT_KINDS = ("one_on_one", "group", "self")  # where files are supported; channels and meetings later
+# Where files and images can be sent; channels and meeting chats are untried (roadmap P1.5).
+FILE_CHAT_KINDS = ("one_on_one", "group", "self")
 MAX_IMAGES = 10
 # Graph refuses a message request over about 4 MiB (live, 2026-10-15: 4.08 MB passed, 4.47 MB did not), and
 # base64 adds a third to each image, so a message's images total under about 3 MB.
 MAX_IMAGE_REQUEST_BYTES = 4 * 1024 * 1024
 IMAGE_JSON_OVERHEAD = 200  # bytes per hostedContents entry besides its base64 data
+# Bytes a file adds to the post: its <attachment> tag and its reference entry (name and link, JSON-escaped).
+FILE_JSON_RESERVE = 2048
+REQUEST_JSON_RESERVE = 1024  # the request's own wrapper
 _IMAGE_SIGNATURES = {b"\x89PNG\r\n\x1a\n": "image/png", b"\xff\xd8\xff": "image/jpeg"}
 _GUID_CHARS = set("0123456789abcdef-")
 
@@ -93,7 +98,7 @@ class Sender:
         else:
             body = ""
         body = _with_images(body, inline, named)
-        _check_request_size(body, inline)
+        _check_request_size(body, inline, files=len(local_files))
         if not expected_chat_name or not expected_chat_name.strip():
             raise InvalidRequest("expected_chat_name must be the chat's current name from list_chats.")
         chat = await self._catalog.recipient(conversation_id)  # the live name of this recipient only
@@ -101,6 +106,10 @@ class Sender:
             raise InvalidRequest(
                 "expected_chat_name does not match the chat's current name; "
                 "check the recipient with list_chats."
+            )
+        if (local_files or inline) and chat.kind not in FILE_CHAT_KINDS:
+            raise InvalidRequest(
+                "Files and images can be sent to one-on-one and group chats and the self chat only."
             )
         content = text if text is not None else (html or "")
         uploaded: list[UploadedFile] = []
@@ -129,8 +138,6 @@ class Sender:
         object id in this directory (no id at all, or a federated or anonymous member) cannot be granted
         access, so the send is refused rather than posting a file someone cannot open. The self chat has
         nobody to share with."""
-        if chat.kind not in FILE_CHAT_KINDS:
-            raise InvalidRequest("Files can be sent to one-on-one and group chats and the self chat only.")
         if chat.kind == "self":
             return []
         people = []
@@ -203,6 +210,7 @@ def _check_images(images: Sequence[str]) -> list[tuple[str, HostedImage]]:
     if len(images) > MAX_IMAGES:
         raise InvalidRequest(f"Send at most {MAX_IMAGES} images with one message.")
     checked: list[tuple[str, HostedImage]] = []
+    total = 0  # bytes on disk so far: images that cannot fit even as base64 alone are not read
     for raw in images:
         if not isinstance(raw, str) or not raw.strip() or "\x00" in raw:
             raise InvalidRequest("Each image must be a non-empty path.")
@@ -213,7 +221,8 @@ def _check_images(images: Sequence[str]) -> list[tuple[str, HostedImage]]:
             raise InvalidRequest(f"Not a readable file: {raw}")
         if any(name == path.name for name, _ in checked):
             raise InvalidRequest(f"Two images are named {path.name}; the HTML names images by file name.")
-        if path.stat().st_size > MAX_IMAGE_REQUEST_BYTES:
+        total += path.stat().st_size
+        if 4 * math.ceil(total / 3) > MAX_IMAGE_REQUEST_BYTES:
             raise _too_large_for_inline()
         data = path.read_bytes()
         kind = next((kind for magic, kind in _IMAGE_SIGNATURES.items() if data.startswith(magic)), None)
@@ -235,12 +244,16 @@ def _with_images(body: str, images: list[tuple[str, HostedImage]], named: set[st
     )
 
 
-def _check_request_size(body: str, images: list[tuple[str, HostedImage]]) -> None:
-    """Refuse images that would push the request past Graph's limit, measured as sent (base64)."""
+def _check_request_size(body: str, images: list[tuple[str, HostedImage]], *, files: int) -> None:
+    """Refuse images that would push the request past Graph's limit: the body as JSON, each image as base64,
+    and a reserve for each file's reference and the request's wrapper. Checked before any upload."""
     if not images:
         return
-    size = len(body.encode("utf-8")) + sum(
-        4 * math.ceil(len(image.data) / 3) + IMAGE_JSON_OVERHEAD for _, image in images
+    size = (
+        len(json.dumps(body).encode("utf-8"))
+        + sum(4 * math.ceil(len(image.data) / 3) + IMAGE_JSON_OVERHEAD for _, image in images)
+        + files * FILE_JSON_RESERVE
+        + REQUEST_JSON_RESERVE
     )
     if size > MAX_IMAGE_REQUEST_BYTES:
         raise _too_large_for_inline()

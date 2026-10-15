@@ -28,8 +28,8 @@ Files and inline images work in one-on-one and group chats and the self chat, in
 or more through upload sessions ([architecture](architecture.md#send-a-message),
 [research](api-research.md#sending-files)). Still open:
 
-- **Channels and meeting chats:** channels store files in the team's SharePoint folder instead. Meeting
-  chats are untried. Inline images there are untried too.
+- **Channels and meeting chats:** files and images are refused there today. Channels store files in the
+  team's SharePoint folder instead; meeting chats are untried.
 
 ### N9 — Meeting notes from Loop pages
 

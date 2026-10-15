@@ -16,6 +16,7 @@ partial file.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import shutil
 import tempfile
@@ -187,15 +188,17 @@ class Exports:
 
     async def _add_meeting_notes(self, message: Message, notes: dict[str, str | None]) -> None:
         """Put each meeting-notes page the message links to after its marker, read once per export; a page
-        that cannot be read is marked unavailable, as an attachment would be."""
+        that cannot be read, or lies beyond the conversation's attachment limits (count and total size), is
+        marked unavailable, as an attachment would be."""
         for item in message.attachments:
             if item.source != "loop" or not item.url:
                 continue
             if item.url not in notes:
-                try:
-                    notes[item.url] = await self._files.meeting_notes(item.url)
-                except ConnectorError:
-                    notes[item.url] = None
+                read = sum(len(text.encode("utf-8")) for text in notes.values() if text)
+                notes[item.url] = None
+                if len(notes) <= MAX_ASSETS_PER_CONVERSATION and read < MAX_TOTAL_ASSET_BYTES:
+                    with contextlib.suppress(ConnectorError):  # an unreadable page stays None
+                        notes[item.url] = await self._files.meeting_notes(item.url)
             marker = f"[Meeting notes] {item.url}"
             document = notes[item.url]
             replacement = (
