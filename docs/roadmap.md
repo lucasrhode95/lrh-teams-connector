@@ -36,6 +36,16 @@ groups the existing sections by service without moving them. Still to decide: mo
 their owners (their anchors change, and links from other documents and the Outlook repository must follow),
 or keep the index and close D3.
 
+### S4 — Check the recipient against the stored catalog
+
+`send_message` refreshes the recipient from Teams before comparing `expected_chat_name` (S2). The
+message is addressed by id; the name only catches an agent that copied the wrong id, and the stored
+name catches that as well. A renamed chat keeps its id, and Teams refuses a send to a chat that is
+gone or that the user left. Compare against the stored catalog instead, and answer an id that is not
+stored with "run `list_chats` first". This drops the recipient refresh (`Catalog.recipient`'s refresh
+paths, `_refresh_channel` and the single-channel read). Lost: an untitled group whose members changed
+since the listing, whose generated name would no longer match.
+
 ### N8 — AMS images on the newer media host
 
 Pasted images are fetched only from `*.asm.skype.com`, the host every inline image used on 2026-10-15
@@ -106,12 +116,6 @@ Graph sends to the self chat, a one-on-one and a group chat were verified on 202
 (`/teams/{team}/channels/{channel}/messages`) and meeting chats may carry meeting policies. Send one
 disposable, user-approved message to each, then check that the returned id matches history and that
 a refusal is reported clearly.
-
-### N2 — Unread state
-
-`list_chats` reports CSA's `unread` flag. Checked 2026-10-15: reading unread meeting chats through the
-connector (history, a download, an export) left them unread on the next refresh. Still open: whether the flag
-follows the Teams client after a chat is read there, which needs a look at the client.
 
 ### A1 — Fresh-account sign-in
 

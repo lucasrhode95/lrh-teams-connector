@@ -3512,8 +3512,7 @@ does not send it to Teams and says so in the coverage notes.
 
 Live checks on the developer's account after the message archive was removed (roadmap D2):
 
-- The first run moved the old store, which held message content, into a `legacy-archive-<timestamp>`
-  folder beside it, without deleting anything, and rebuilt the chat catalog from Teams.
+- The chat catalog was rebuilt from Teams.
 - History walks with different page budgets matched, and an export of one 28-message conversation was
   written from Teams pages alone.
 - A download of a file linked from a message reached Graph's `/shares` route and was refused with HTTP
