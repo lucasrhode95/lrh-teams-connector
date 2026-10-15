@@ -79,14 +79,11 @@ class ChatMatch(Compact):
     matched_participants: list[Participant] = Field(default_factory=list)
 
 
-class RosterCoverage(Compact):
-    """How far participant search can be trusted: rosters are indexed by sync_archive."""
+class ChatSearchCoverage(Compact):
+    """Whether Teams' chat search answered for this query. Names are always searched from the catalog."""
 
-    complete: bool
-    chats: int
-    rosters_indexed: int
-    rosters_missing: int
-    unresolved_participants: int = 0
+    complete: bool  # Teams answered for a plain name or email; member matches are then as complete as Teams
+    chats: int  # chats in the local catalog
     notes: list[str] = Field(default_factory=list)
 
 
@@ -94,7 +91,7 @@ class ChatSearchResult(Compact):
     query: str
     items: list[ChatMatch]
     cursor: str | None = None
-    coverage: RosterCoverage
+    coverage: ChatSearchCoverage
 
 
 # ---------------------------------------------------------------------------------------------- messages
@@ -173,43 +170,6 @@ class MessageSearchResult(Compact):
 
 
 # ---------------------------------------------------------------------------------------------- archive
-
-
-class ChatArchiveState(Compact):
-    conversation_id: str
-    name: str
-    history_complete: bool  # the archive holds the chat's whole history (as of synced_at)
-    messages_stored: int
-    oldest_message_at: datetime | None = None
-    newest_message_at: datetime | None = None
-    synced_at: datetime | None = None
-    roster_complete: bool = False
-    unresolved_participants: int = 0
-    range_covered: bool | None = None  # status only: the requested range is fully in the archive
-    messages_added: int | None = None  # sync only
-    pages_fetched: int | None = None  # sync only
-    error: str | None = None
-
-
-class ArchiveTotals(Compact):
-    chats: int
-    messages: int
-    participants: int
-    complete_histories: int
-    complete_rosters: int
-
-
-class SyncResult(Compact):
-    items: list[ChatArchiveState]
-    pages_left: int
-    totals: ArchiveTotals
-
-
-class ArchiveStatus(Compact):
-    items: list[ChatArchiveState]
-    cursor: str | None = None
-    covered: int | None = None  # chats whose requested range is fully archived
-    totals: ArchiveTotals
 
 
 # ---------------------------------------------------------------------------------------------- writes

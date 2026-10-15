@@ -24,7 +24,6 @@ from teams_connector.remote.graph_teams import GraphChannels, GraphFiles, GraphP
 from teams_connector.remote.substrate_search import SubstrateChatSearch, SubstrateSearch
 from teams_connector.remote.teams_session import TeamsSession
 from teams_connector.remote.transport import Bearer, Transport
-from teams_connector.service.archive import Archive
 from teams_connector.service.catalog import Catalog
 from teams_connector.service.export.orchestrator import Exports
 from teams_connector.service.files import Files, Photos
@@ -42,7 +41,6 @@ class Services:
     catalog: Catalog
     history: History
     search: Search
-    archive: Archive
     exports: Exports
     sender: Sender
     files: Files
@@ -122,7 +120,6 @@ class AppContext:
             catalog=catalog,
             history=history,
             search=Search(store, search_source),
-            archive=Archive(store, catalog, history, chat_service, channels, person),
             exports=Exports(store, catalog, history, files),
             sender=Sender(catalog, GraphWriter(graph)),
             files=files,

@@ -62,10 +62,6 @@ def build_parser() -> argparse.ArgumentParser:
     ui.add_argument("--idle-minutes", type=float, default=30, help="Stop after this many idle minutes.")
     _add_unsecure(ui)
 
-    backup = sub.add_parser("backup", help="Make a consistent copy of the local archive.")
-    backup.add_argument("destination", help="Destination file, preferably ending in .sqlite3.")
-    backup.add_argument("--overwrite", action="store_true", help="Replace an existing destination file.")
-    _add_unsecure(backup)
     return parser
 
 
@@ -111,8 +107,6 @@ def main(argv: list[str] | None = None, *, provider_factory: type[TokenProvider]
         provider = provider_factory(unsecure=args.unsecure, login_command=f"{config.CLI_NAME} auth")
         if args.command == "auth":
             return _auth(provider, args)
-        if args.command == "backup":
-            return _backup(provider, args)
         return _status(provider, args)
     except AuthenticationRequired as exc:
         print(str(exc), file=sys.stderr)
@@ -143,20 +137,6 @@ def _auth(provider: TokenProvider, args: argparse.Namespace) -> int:
     first_error = next((result.error for result in results if result.error is not None), None)
     return EXIT_AUTH_REQUIRED if isinstance(first_error, AuthenticationRequired) else EXIT_ERROR
 
-
-def _backup(provider: TokenProvider, args: argparse.Namespace) -> int:
-    from teams_connector.store.db import Store, store_path
-
-    account = provider.cached_account()
-    if account is None:
-        raise AuthenticationRequired("No Teams sign-in found.", command=provider.sign_in_command())
-    path = store_path(account.fingerprint)
-    if not path.exists():
-        print("There is no local archive for this account yet.", file=sys.stderr)
-        return EXIT_ERROR
-    target = Store(path, account.fingerprint).backup_to(args.destination, overwrite=args.overwrite)
-    print(f"Teams archive backup created: {target}")
-    return EXIT_OK
 
 
 def _status(provider: TokenProvider, args: argparse.Namespace) -> int:

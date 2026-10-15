@@ -21,19 +21,17 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
-import shutil
 import sqlite3
 import time
 import unicodedata
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from teams_connector import config
-from teams_connector.domain.errors import AccountMismatch, ConnectorError, InvalidRequest
-from teams_connector.domain.models import ArchiveTotals, Chat, Message, Participant
+from teams_connector.domain.errors import AccountMismatch, ConnectorError
+from teams_connector.domain.models import Chat, Message
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -109,22 +107,6 @@ def from_iso(value: str | None) -> datetime | None:
 def fold(text: str) -> str:
     """Search normalization: NFKC, case folding, collapsed whitespace. Accents stay significant."""
     return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
-
-
-@dataclass
-class ChatState:
-    conversation_id: str
-    history_link: str | None = None
-    history_complete: bool = False
-    history_synced_at: float | None = None
-    oldest_message_at: str | None = None
-    newest_message_at: str | None = None
-    missing_timestamps: int = 0
-    roster_complete: bool = False
-    roster_error: str | None = None
-    roster_synced_at: float | None = None
-    unresolved_participants: int = 0
-    sync_attempted_at: float | None = None
 
 
 class Store:
@@ -379,141 +361,6 @@ class Store:
             where += " AND sent_at <= ?"
             args.append(iso(until))
         return where, args
-
-    def save_roster(
-        self, conversation_id: str, participants: list[Participant] | None, *, error: str | None = None
-    ) -> None:
-        """Replace a chat's roster (or record why it could not be read; the previous one is kept)."""
-        now = time.time()
-        with self._tx() as db:
-            db.execute("INSERT OR IGNORE INTO chat_state (conversation_id) VALUES (?)", (conversation_id,))
-            if error is not None or participants is None:
-                db.execute(
-                    "UPDATE chat_state SET roster_error = ?, roster_synced_at = ? WHERE conversation_id = ?",
-                    (error, now, conversation_id),
-                )
-                return
-            db.execute("DELETE FROM participants WHERE conversation_id = ?", (conversation_id,))
-            db.executemany(
-                """INSERT OR IGNORE INTO participants (conversation_id, participant_id, name, name_folded)
-                   VALUES (?, ?, ?, ?)""",
-                [(conversation_id, p.id or "", p.name, fold(p.name)) for p in participants if p.name],
-            )
-            db.execute(
-                """UPDATE chat_state SET roster_complete = 1, roster_error = NULL, roster_synced_at = ?,
-                       unresolved_participants = ? WHERE conversation_id = ?""",
-                (now, sum(1 for p in participants if not p.name), conversation_id),
-            )
-
-    def participant_matches(self, query: str) -> dict[str, list[Participant]]:
-        """Participants whose name contains the query, by conversation."""
-        out: dict[str, list[Participant]] = {}
-        with self._tx() as db:
-            rows = db.execute(
-                """SELECT p.conversation_id, p.participant_id, p.name FROM participants p
-                   JOIN chats c ON c.id = p.conversation_id AND c.is_deleted = 0
-                   WHERE instr(p.name_folded, ?) > 0 ORDER BY p.name""",
-                (fold(query),),
-            ).fetchall()
-        for conversation_id, participant_id, name in rows:
-            out.setdefault(conversation_id, []).append(Participant(id=participant_id or None, name=name))
-        return out
-
-    # ---------------------------------------------------------------- per-chat state
-
-    def state(self, conversation_id: str) -> ChatState:
-        with self._tx() as db:
-            row = db.execute(
-                "SELECT * FROM chat_state WHERE conversation_id = ?", (conversation_id,)
-            ).fetchone()
-        return _state(row) if row else ChatState(conversation_id)
-
-    def states(self) -> dict[str, ChatState]:
-        with self._tx() as db:
-            rows = db.execute("SELECT * FROM chat_state").fetchall()
-        return {row["conversation_id"]: _state(row) for row in rows}
-
-    def save_history_progress(
-        self, conversation_id: str, *, link: str | None, complete: bool, missing_timestamps: int = 0
-    ) -> None:
-        with self._tx() as db:
-            db.execute(
-                """INSERT INTO chat_state (conversation_id, history_link, history_complete, history_synced_at,
-                       missing_timestamps)
-                   VALUES (?, ?, ?, ?, ?)
-                   ON CONFLICT (conversation_id) DO UPDATE SET history_link = excluded.history_link,
-                       history_complete = excluded.history_complete,
-                       history_synced_at = excluded.history_synced_at,
-                       missing_timestamps = chat_state.missing_timestamps + excluded.missing_timestamps""",
-                (conversation_id, link, int(complete), time.time(), missing_timestamps),
-            )
-
-    def touch_sync_attempt(self, conversation_id: str) -> None:
-        with self._tx() as db:
-            db.execute(
-                """INSERT INTO chat_state (conversation_id, sync_attempted_at) VALUES (?, ?)
-                   ON CONFLICT (conversation_id) DO UPDATE SET
-                       sync_attempted_at = excluded.sync_attempted_at""",
-                (conversation_id, time.time()),
-            )
-
-    def stored_counts(self) -> dict[str, int]:
-        with self._tx() as db:
-            rows = db.execute(
-                "SELECT conversation_id, COUNT(*) FROM messages GROUP BY conversation_id"
-            ).fetchall()
-        return {r[0]: int(r[1]) for r in rows}
-
-    def totals(self) -> ArchiveTotals:
-        with self._tx() as db:
-            one = lambda sql: int(db.execute(sql).fetchone()[0])  # noqa: E731
-            return ArchiveTotals(
-                chats=one("SELECT COUNT(*) FROM chats WHERE is_deleted = 0"),
-                messages=one("SELECT COUNT(*) FROM messages"),
-                participants=one("SELECT COUNT(*) FROM participants"),
-                complete_histories=one("SELECT COUNT(*) FROM chat_state WHERE history_complete = 1"),
-                complete_rosters=one("SELECT COUNT(*) FROM chat_state WHERE roster_complete = 1"),
-            )
-
-    # ---------------------------------------------------------------- backup
-
-    def backup_to(self, destination: str | Path, *, overwrite: bool = False) -> Path:
-        """A consistent online copy (SQLite backup API), owner metadata included."""
-        target = Path(destination).expanduser().resolve()
-        if target == self.path.resolve():
-            raise InvalidRequest("The backup destination is the live archive itself.")
-        if target.exists() and not overwrite:
-            raise InvalidRequest(f"{target} already exists; pass --overwrite to replace it.")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        temporary = target.with_name(f".{target.name}.tmp")
-        temporary.unlink(missing_ok=True)
-        try:
-            with (
-                contextlib.closing(sqlite3.connect(self.path, timeout=15)) as source,
-                contextlib.closing(sqlite3.connect(temporary)) as copy,
-            ):
-                source.backup(copy)
-            shutil.move(str(temporary), str(target))
-        finally:
-            temporary.unlink(missing_ok=True)
-        return target
-
-
-def _state(row: sqlite3.Row) -> ChatState:
-    return ChatState(
-        conversation_id=row["conversation_id"],
-        history_link=row["history_link"],
-        history_complete=bool(row["history_complete"]),
-        history_synced_at=row["history_synced_at"],
-        oldest_message_at=row["oldest_message_at"],
-        newest_message_at=row["newest_message_at"],
-        missing_timestamps=int(row["missing_timestamps"] or 0),
-        roster_complete=bool(row["roster_complete"]),
-        roster_error=row["roster_error"],
-        roster_synced_at=row["roster_synced_at"],
-        unresolved_participants=int(row["unresolved_participants"] or 0),
-        sync_attempted_at=row["sync_attempted_at"],
-    )
 
 
 def _merge_chat(existing: Chat | None, incoming: Chat) -> Chat:

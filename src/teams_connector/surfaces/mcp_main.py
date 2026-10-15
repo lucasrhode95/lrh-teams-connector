@@ -20,7 +20,6 @@ from pydantic import Field
 
 from teams_connector.bootstrap import AppContext, Services
 from teams_connector.domain.models import (
-    ArchiveStatus,
     ChatKind,
     ChatPage,
     ChatSearchResult,
@@ -32,7 +31,6 @@ from teams_connector.domain.models import (
     MessageSearchResult,
     SavedFile,
     SendResult,
-    SyncResult,
 )
 
 log = logging.getLogger(__name__)
@@ -43,7 +41,7 @@ authorized message-send tool.
 
 - Finding conversations: list_chats lists chats and channels by recent activity (kind: one_on_one, \
 group, meeting, channel, or self for the user's own notes chat). search_chats finds conversations by \
-name or by an indexed participant's name (rosters are indexed by sync_archive; read its coverage).
+name, and with refresh by the members Teams matches for a plain name or email; read its coverage.
 - Reading: get_messages returns a conversation's history newest pages first, oldest first within a \
 page, with optional since/until and a total message_limit. Follow `cursor` for older messages. Long \
 a page holds whole messages up to max_chars (at least one), so no message text is cut. \
@@ -62,9 +60,8 @@ bounds and latest-N message_limit apply per conversation; export fetches the sel
 so a long selection takes a while. Read the returned file path with your file tools.
 - Attachments: download_attachment saves a message's shared file (from get_messages) and returns its \
 local path.
-- The archive retains every message the connector has read, indefinitely. Messages with is_deleted=true \
-were deleted in Teams and are shown from retention; edited ones show their newest text. sync_archive \
-fetches history and rosters in bounded, resumable batches; archive_status reports coverage.
+- Messages are read from Teams on each call; nothing is kept locally. Messages with is_deleted=true were \
+deleted in Teams, and Teams keeps no text for them; edited ones show their newest text.
 - Times are UTC; a date-time without an offset is taken as UTC.
 - Sending: never call send_message unless the user explicitly authorized sending that content to that \
 chat, in the current request or by confirming after you asked. If authorization is missing or \
@@ -308,42 +305,6 @@ def build_server(context: AppContext) -> FastMCP:
     ) -> SavedFile:
         """Save one shared file attached to an archived message as a local file and return its path."""
         return await (await services()).files.download_attachment(conversation_id, message_id, name)
-
-    @mcp.tool(annotations=READ_ONLY)
-    @_logged
-    async def sync_archive(
-        conversation_id: Annotated[str | None, Field(description="Just this conversation.")] = None,
-        max_chats: Annotated[int, Field(ge=1, le=200)] = 25,
-        max_pages: Annotated[int, Field(ge=1, le=200)] = 20,
-        include_rosters: bool = True,
-        refresh_latest: Annotated[
-            bool, Field(description="Also re-read the newest page of complete chats.")
-        ] = True,
-    ) -> SyncResult:
-        """Fetch history and rosters into the archive in bounded batches; repeated calls resume each chat
-        and rotate fairly across chats. Reads Teams; changes nothing there."""
-        return await (await services()).archive.sync(
-            conversation_id=conversation_id,
-            max_chats=max_chats,
-            max_pages=max_pages,
-            include_rosters=include_rosters,
-            refresh_latest=refresh_latest,
-        )
-
-    @mcp.tool(annotations=READ_ONLY)
-    @_logged
-    async def archive_status(
-        conversation_id: str | None = None,
-        since: Since = None,
-        until: Until = None,
-        limit: Annotated[int, Field(ge=1, le=200)] = 50,
-        cursor: str | None = None,
-    ) -> ArchiveStatus:
-        """Per-conversation archive coverage: history completeness, archived span, rosters, and whether
-        the requested range is fully archived."""
-        return (await services()).archive.status(
-            conversation_id=conversation_id, since=_utc(since), until=_utc(until), limit=limit, cursor=cursor
-        )
 
     @mcp.tool(annotations=SEND)
     @_logged
