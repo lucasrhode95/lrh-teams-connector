@@ -38,7 +38,8 @@ EXTENSIONS = {
     "image/bmp": "bmp",
 }
 PASTED_IMAGE_TYPE = "png"
-AMS_HOST = "asm.skype.com"
+# AMS hosts: AuthZ names ``ams`` (asm.skype.com) and ``amsV2`` (asyncgw); pasted images can come from either.
+AMS_HOSTS = ("asm.skype.com", "asyncgw.teams.microsoft.com")
 INLINE_IMAGE_TEXT = "[Image: inline image]"
 
 
@@ -159,7 +160,7 @@ def _full_size_url(src: str, object_id: str) -> str | None:
 
 
 def _is_ams_host(host: str) -> bool:
-    return host == AMS_HOST or host.endswith("." + AMS_HOST)
+    return any(host == known or host.endswith("." + known) for known in AMS_HOSTS)
 
 
 def _host(url: str) -> str:

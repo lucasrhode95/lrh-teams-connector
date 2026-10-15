@@ -243,3 +243,17 @@ async def test_an_export_that_renames_a_cached_file_reuses_it(services: Services
         contents = {Path(name).name: archive.read(name) for name in archive.namelist()}
     assert contents["notes.txt"] == b"other notes" and contents["notes-2.txt"] == b"shared notes"
     assert calls_to(fake, "sharepoint.com") == fetched + 1  # only the other file is fetched
+
+
+async def test_pasted_image_on_the_newer_media_host_is_fetched_from_that_host(
+    services: Services, fake: FakeTeams
+) -> None:
+    fake.images[OBJECT] = PICTURE
+    tag = AMS_TAG.replace("eu-api.asm.skype.com", "eu-prod.asyncgw.teams.microsoft.com")
+    fake.chats[ONE].messages.append(cs_message("2002", WHEN, f"Look {tag}"))
+
+    (saved,) = (
+        await services.files.download_attachments(ONE, message_id="2002", sent_at=None, names=None)
+    ).files
+    assert saved.name == f"{OBJECT}.png" and Path(saved.path).read_bytes() == PICTURE
+    assert calls_to(fake, "eu-prod.asyncgw.teams.microsoft.com") == 1

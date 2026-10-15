@@ -51,13 +51,6 @@ What the refresh catches today and the stored name would not, both since the age
 Not affected: Teams refuses a send to a chat that is gone or that the user left. Decide whether the
 untitled-group case is worth the refresh.
 
-### N8 — AMS images on the newer media host
-
-Pasted images are fetched only from `*.asm.skype.com`, the host every inline image used on 2026-10-15
-(67 of 67). AuthZ also names `amsV2` (`*.asyncgw.teams.microsoft.com`), which recording cards already use.
-If an image arrives there, it shows its marker but is not downloadable. Allow that host for image views when
-one is seen.
-
 ## Enhancements
 
 ### P1.5 — Send host files as attachments
@@ -127,3 +120,11 @@ a refusal is reported clearly.
 The 2026-10-12 shared-auth check reused existing grants
 ([research](api-research.md#shared-auth-live-validation-2026-10-12)). A new account's consent for the
 Teams profiles and `m365.search` has not been tried.
+
+### N8 — Pasted images on the `amsV2` host (validation)
+
+The connector now reads a pasted image from `*.asm.skype.com` or `*.asyncgw.teams.microsoft.com`
+(AuthZ's `ams` and `amsV2`) with the Skype token. Every pasted image seen on 2026-10-15 was on the first
+host (67 of 67), so the second is untested. Check the first image that arrives there: the Skype token must
+fetch its `views/imgpsh_fullsize`. If it does not, the image shows its marker only, and the second host
+comes out of `AMS_HOSTS`.
