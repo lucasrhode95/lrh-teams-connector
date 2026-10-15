@@ -427,6 +427,9 @@ people, sending and files ([requirements](requirements.md#4-backend-choice)).
   `$expand=hostedContents` works. `GET …/hostedContents/{id}/$value` returns the image.
 - **`$batch` (2026-10-15):** sub-request paths are percent-decoded, so channel ids with `:` and `@` must be
   encoded in them.
+- **File and image sends (2026-10-15):** OneDrive upload, `driveItem/invite` and chat messages with
+  `reference` attachments or `hostedContents` all work with this token
+  ([sending files](#sending-files-not-used-by-the-connector)).
 - **`/me/joinedTeams` (2026-10-12):** `$top` is refused with 400 (`Query option 'Top' is not allowed`).
 
 ## Search v2 and Substrate suggestions
@@ -582,10 +585,28 @@ Not seen in any send: `createLink`, `POST /v1/threads/{id}/files`, or Graph. The
 SharePoint's own page (`sharedialog.aspx`, SharePoint REST `GetSharingInformation` and `ShareLink`), not
 part of a send.
 
-Graph documents the same three steps (upload to `/me/drive`, `driveItem/invite`, a chat message with a
-`reference` attachment) but has no route for the `commands` default. Not yet tried: whether Graph's invite
-stays silent with `sendInvitation: false`, and whether a Graph `reference` attachment looks the same to the
-recipient as a Teams file share.
+**Through Graph, live 2026-10-15.** Teams client `teams.graph` token, three sends each to two one-on-one
+chats, with the same results in both. Each write was made once.
+
+| Step | Request | Result |
+|---|---|---|
+| Upload | `PUT /me/drive/root:/Microsoft Teams Chat Files/{name}:/content?@microsoft.graph.conflictBehavior=rename` | 201 drive item. Clashes renamed as in Teams Web. One 8 MB PUT worked. |
+| Grant | `POST /drives/{drive}/items/{item}/invite`, `{"recipients": [{"objectId": …}], "roles": ["write"], "requireSignIn": true, "sendInvitation": false}` | 200. Without a `Prefer` header: a direct permission (`grantedToV2`) and no link. With `Prefer: getDefaultLink`: the same `users`/`edit` link Teams Web gets, with `shareId`. |
+| Post | `POST /chats/{id}/messages`: `<attachment id="{eTag GUID}">` in the HTML, plus `attachments[]` entries of `contentType: reference` with `contentUrl` (the item's `webUrl`) and `name` | 201. Two files in one message worked. |
+
+What Chat Service stored:
+
+- **Files:** `properties.files` holds one entry per file, with the same keys as a Teams Web send.
+  - `state` and `fileChicletState.state` are `reference`; `fileChicletState.serviceName` is `teamsGraph`.
+  - `permissionScope` and `fileInfo.shareUrl`/`shareId` are `null`. A Graph attachment has no field for
+    them.
+  - `content` keeps only the caption, without the attachment tag.
+- **Inline image:** `hostedContents` (`<img src="../hostedContents/1/$value">`, a base64 PNG) was stored as
+  a pasted image would be: an `AMSImage` on the first AMS host (`views/imgpsh_fullsize`), listed in
+  `amsreferences`, with a `blurHash`.
+
+Both recipients opened every file, saw normal file cards and previews despite the empty `permissionScope`,
+and received no invitation email (`sendInvitation: false`). Confirmed by the recipients the same day.
 
 ## Meeting recaps and transcripts
 

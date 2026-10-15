@@ -41,22 +41,33 @@ Working behavior that could be cheaper, simpler or better informed.
   come later. Pasted images (AMS upload, `<img>` in the HTML) follow files; until then, HTML sends keep
   refusing `<img>`.
 
+**Route: Graph**, which the user chose on 2026-10-15 provided it can do what the Teams UI does. A live
+probe that day reproduced every step with the existing `teams.graph` token
+([research](api-research.md#sending-files-not-used-by-the-connector)):
+
+- upload to `Microsoft Teams Chat Files`, renaming on a clash, including 8 MB in one PUT;
+- `driveItem/invite` with `Prefer: getDefaultLink`, which returned the same specific-people edit link Teams
+  Web gets;
+- one chat message with several `reference` attachments;
+- `hostedContents` inline images, which Teams stored as AMS images like a paste. Images can therefore use
+  Graph too.
+
+Both recipients opened every file and saw normal file cards and previews, and neither received an
+invitation email.
+
+Gaps against Teams Web:
+
+- Chat Service stores a Graph attachment with `permissionScope` and `shareUrl`/`shareId` empty, because a
+  Graph attachment has no field for them. The recipients saw no difference.
+- Graph has no route for the chat-audience default Teams reads (`driveItem/commands` with
+  `audienceType="chat"`). The invite's `getDefaultLink` returned the same answer on this tenant, but
+  nothing shows the two always agree.
+
 **Next:**
 
-1. Choose the route. Graph documents upload, `driveItem/invite` and a `reference` attachment, and the Teams
-   client's Graph token held `Files.ReadWrite.All` (2026-10-01). Not yet known:
-   - whether the invite stays silent (`sendInvitation: false`);
-   - whether a `reference` attachment looks like a Teams file share to the recipient;
-   - how to read the tenant default without the SharePoint `commands` route.
-
-   Teams Web's own route needs a SharePoint-audience token for the OneDrive host and a Chat Service post
-   with `properties.files`.
-2. A probe needs the user's authorization for its destination, file and text. A real check needs a
-   recipient, because the self chat has no members to grant.
-3. Size: an 8 MB file uploaded in one PUT. Find the single-request limit before adding upload sessions.
-
-Validation: the 2026-10-15 captures don't show that recipients could open the files. Check that with the
-first connector send to a one-on-one and a group chat.
+1. Implement it for one-on-one and group chats: grant every member except the sender. Use the access policy
+   `default` (`getDefaultLink`); later options could be organization or direct grants.
+2. Find Graph's single-PUT size limit before adding upload sessions.
 
 ### P2.2f — Meeting recaps and transcripts
 
