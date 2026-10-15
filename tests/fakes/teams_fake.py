@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 
 import httpx
 from m365_auth import AccessToken, CacheStatus, ProfileStatus
@@ -263,7 +263,8 @@ class FakeTeams:
             body = json.loads(request.content)
             responses = []
             for item in body["requests"]:
-                sub = self._graph(httpx.Request("GET", GRAPH + item["url"]), item["url"].split("?")[0], {})
+                path_only = unquote(item["url"].split("?")[0])  # Graph decodes batch paths too
+                sub = self._graph(httpx.Request("GET", GRAPH + item["url"]), path_only, {})
                 responses.append({"id": item["id"], "status": sub.status_code, "body": sub.json()})
             return httpx.Response(200, json={"responses": responses})
         if request.method == "POST" and parts[-1] == "messages":

@@ -17,7 +17,7 @@ from typing import Any
 from teams_connector.domain.errors import InvalidRequest, NotFound
 from teams_connector.domain.models import Chat, Message, Participant
 from teams_connector.remote import graph_mapping
-from teams_connector.remote.graph import MAX_DOWNLOAD_BYTES, Graph, relative, segment
+from teams_connector.remote.graph import MAX_DOWNLOAD_BYTES, Graph, relative, segment, sub_failure
 from teams_connector.remote.ports import HistoryPage, RemoteFile, SendReceipt
 from teams_connector.remote.transport import operation
 
@@ -57,24 +57,32 @@ class GraphChannels:
         return [chat for group in groups for chat in group]
 
     async def locate(self, channel_ids: list[str]) -> list[Chat]:
+        """Omitted channels by id: every joined team is asked about every channel, in Graph batches. A
+        channel is taken from the first team, in listing order, that answers for it."""
         if not channel_ids:
             return []
-        found: list[Chat] = []
         with operation("finding channels by id"):
             teams = await self._teams()
-            for channel_id in channel_ids:
-                for team in teams:
-                    try:
-                        row = await self._graph.get(
-                            f"/teams/{segment(team['id'])}/channels/{segment(channel_id)}",
-                            {"$select": "id,displayName,membershipType"},
-                        )
-                    except (NotFound, InvalidRequest):
-                        continue
-                    if row.get("id"):
-                        found.append(graph_mapping.channel(team, row))
-                        break
-        return found
+            pairs = [(team, channel_id) for channel_id in channel_ids for team in teams]
+            responses = await self._graph.batch(
+                {
+                    str(index): relative(
+                        f"/teams/{segment(team['id'])}/channels/{segment(channel_id)}",
+                        {"$select": "id,displayName,membershipType"},
+                    )
+                    for index, (team, channel_id) in enumerate(pairs)
+                }
+            )
+            found: dict[str, Chat] = {}
+            for index, (team, channel_id) in enumerate(pairs):
+                if channel_id in found:
+                    continue
+                response = responses[str(index)]
+                if response.ok and response.body.get("id"):
+                    found[channel_id] = graph_mapping.channel(team, response.body)
+                elif response.status not in (400, 404):  # not in this team: keep looking
+                    raise sub_failure(response, detail="while finding channels by id")
+        return list(found.values())
 
     async def page(
         self,

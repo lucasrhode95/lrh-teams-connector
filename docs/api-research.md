@@ -3351,3 +3351,13 @@ text were not kept, and rendered lines were checked for their shape only):
 | `ThreadActivity/MeetingPolicyUpdated`, `AddCustomApp`, `DeleteMember` | 2, 2, 1 | no rendering; shown as `[<type>]` |
 
 No rendered line contained markup, an `8:orgid` identity or an `@` sign.
+
+## Omitted channels by id, batched (2026-10-15)
+
+**Evidence:** one read-only catalog refresh on the signed-in account, with the requests counted by
+kind (no response content kept). The refresh issued one Graph `$batch` request and no single channel
+GET. The number of stored channels was the same before and after (30), so the batched lookup
+found the same channels as the sequential one it replaces.
+
+Graph's `$batch` also decodes percent-encoded sub-request paths. Channel and thread ids contain `:` and
+`@`, which the client encodes in the URL; the test fake now decodes batch paths the same way.

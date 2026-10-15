@@ -98,24 +98,11 @@ the chat-list cache keeps member lists for that case. Chat *suggestions* need a 
 Substrate token, a new `lrh-m365-auth` profile, and return fewer chats than route 2, so they are not
 needed.
 
-### P1.6 — Look up omitted channels in one batch
-
-Graph's channel listing omits some channels, mostly shared ones, so every catalog refresh asks each
-joined team for each omitted channel, one request at a time
-([`GraphChannels.locate`](../src/teams_connector/remote/graph_teams.py)). The list includes every
-omitted channel stored earlier, so the cost recurs on each refresh.
-
-**Example:** 4 joined teams and 3 omitted channels cost up to 12 sequential GETs per refresh, and
-`send_message` refreshes the catalog before each send (S2).
-
-**Fix:** send the team × channel lookups as one Graph `$batch` (`Graph.batch` already exists), or
-remember which team each omitted channel belongs to and ask only that team.
-
 ### S2 — Check a send's recipient without a full catalog refresh
 
 `send_message` refreshes the whole catalog to confirm the recipient's current name
 ([`Sender.send`](../src/teams_connector/service/send.py)). That costs a CSA delta, the joined-teams
-and channel listings of every team, the omitted-channel lookups (P1.6) and a self-chat history read,
+and channel listings of every team, the omitted-channel lookups and a self-chat history read,
 where the check needs only the one conversation.
 
 **Fix:** refresh only what the recipient needs: the CSA delta for a chat, or one Graph GET of
