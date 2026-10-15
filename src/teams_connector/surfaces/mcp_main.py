@@ -370,15 +370,16 @@ def build_server(context: AppContext) -> FastMCP:
             list[str] | None,
             Field(
                 description="Absolute paths of local files to attach, one-on-one and group chats only: up to "
-                "10, each under 250 MiB. They are uploaded to your OneDrive and shared with the chat's other "
-                "members before the message is posted."
+                "10, each up to 2 GiB (config.MAX_SEND_FILE_BYTES). They are uploaded to your OneDrive and "
+                "shared with the chat's other members before the message is posted."
             ),
         ] = None,
     ) -> SendResult:
         """Send one message to a chat or channel, as plain text or as HTML sent as written, optionally with
         files. External side effect: only with the user's explicit authorization for this recipient, the
-        content and every file. Attempted once, never retried. If an upload, share or the post fails, files
-        already uploaded are named in the error and left in your OneDrive."""
+        content and every file. Attempted once, never retried; only a large file's failed upload parts are
+        resent, a few times at most. If an upload, share or the post fails, files already uploaded are named
+        in the error and left in your OneDrive."""
         return await (await services()).sender.send(
             conversation_id,
             expected_chat_name=expected_chat_name,

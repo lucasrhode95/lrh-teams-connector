@@ -10,13 +10,20 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import html
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from teams_connector.domain.errors import InvalidRequest, NotFound, Upstream
+from teams_connector.domain.errors import (
+    ConnectorError,
+    InvalidRequest,
+    NotFound,
+    Upstream,
+    WriteOutcomeUnknown,
+)
 from teams_connector.domain.models import Chat, Message, Participant
 from teams_connector.remote import graph_mapping
 from teams_connector.remote.graph import Graph, relative, segment, sub_failure
@@ -33,6 +40,9 @@ CHANNEL_PAGE = 50  # threads per page (Graph maximum for channel messages)
 PHOTO_SIZE = "64x64"
 MAX_PHOTO_BYTES = 2_000_000
 _GUID_CHARS = set("0123456789abcdef-")
+SINGLE_UPLOAD_BYTES = 250 * 1024 * 1024  # this size and larger need an upload session (live, 2026-10-15)
+UPLOAD_CHUNK_BYTES = 10 * 1024 * 1024  # Graph requires multiples of 320 KiB
+UPLOAD_RESUMES = 3  # status reads and resends of missing ranges after failed chunks, per file
 
 
 def _is_object_id(value: str) -> bool:
@@ -295,12 +305,16 @@ class GraphFileSharer:
         self._access = access
 
     async def upload(self, path: Path) -> UploadedFile:
-        """One single-request upload (Graph takes up to 250 MiB minus one byte this way)."""
-        target = f"/me/drive/root:/{segment(self._folder)}/{segment(path.name)}:/content"
+        """One file into the chat-files folder: a single PUT below 250 MiB (Graph's limit for one request),
+        an upload session from there on. A name clash is renamed."""
+        target = f"/me/drive/root:/{segment(self._folder)}/{segment(path.name)}:"
         with operation("uploading a file"):
-            item = await self._graph.put_content(
-                f"{target}?@microsoft.graph.conflictBehavior=rename", path.read_bytes()
-            )
+            if path.stat().st_size < SINGLE_UPLOAD_BYTES:
+                item = await self._graph.put_content(
+                    f"{target}/content?@microsoft.graph.conflictBehavior=rename", path.read_bytes()
+                )
+            else:
+                item = await self._upload_in_chunks(path, target)
         return _uploaded(item)
 
     async def share(self, file: UploadedFile, recipients: Sequence[str]) -> None:
@@ -330,6 +344,84 @@ class GraphFileSharer:
                 f"Graph could not share the file with {len(failed)} of {len(recipients)} chat members"
                 + (f" ({code})." if isinstance(code, str) and code else ".")
             )
+
+    async def _upload_in_chunks(self, path: Path, target: str) -> dict[str, Any]:
+        """An upload session: chunks read from disk one at a time and PUT, without the Graph token, to the
+        session's pre-authenticated ``uploadUrl``. The last chunk's answer is the drive item.
+
+        Each chunk is sent once. After a failed chunk the session's status names the ranges still missing
+        and only those are sent again, at most ``UPLOAD_RESUMES`` times per file (an exception to sending
+        each write once, approved by the user on 2026-10-15). Then the session is cancelled and the upload
+        fails.
+        """
+        session, _ = await self._graph.post(
+            f"{target}/createUploadSession",
+            {"item": {"@microsoft.graph.conflictBehavior": "rename"}},
+            idempotent=False,
+        )
+        upload_url = session.get("uploadUrl")
+        if not isinstance(upload_url, str) or not upload_url:
+            raise Upstream("Graph opened an upload session but returned no upload URL.")
+        size = path.stat().st_size
+        offset, resumes = 0, 0
+        with path.open("rb") as handle:
+            while True:
+                end = min(offset + UPLOAD_CHUNK_BYTES, size) - 1
+                handle.seek(offset)
+                chunk = handle.read(end - offset + 1)
+                try:
+                    status, body = await self._graph.upload_session(
+                        "PUT",
+                        upload_url,
+                        headers={"Content-Range": f"bytes {offset}-{end}/{size}"},
+                        content=chunk,
+                    )
+                    if status in (200, 201):
+                        return body
+                    lowest = offset + 1  # an accepted chunk moves the upload forward
+                except ConnectorError as exc:
+                    if resumes == UPLOAD_RESUMES:
+                        await self._cancel(upload_url)
+                        raise
+                    resumes += 1
+                    body = await self._missing_ranges(upload_url, exc, last_chunk=end == size - 1)
+                    lowest = 0
+                next_offset = _next_expected_offset(body)
+                if next_offset is None or not lowest <= next_offset < size:
+                    await self._cancel(upload_url)
+                    raise Upstream("Graph's upload session did not name the next range to send.")
+                offset = next_offset
+
+    async def _missing_ranges(
+        self, upload_url: str, failure: ConnectorError, *, last_chunk: bool
+    ) -> dict[str, Any]:
+        """The session's status after a failed chunk. When it cannot be read the session is cancelled; if
+        the failed chunk was the last one, the file may have been completed, so the outcome is unknown."""
+        try:
+            _, body = await self._graph.upload_session("GET", upload_url)
+            return body
+        except ConnectorError:
+            await self._cancel(upload_url)
+            if last_chunk:
+                raise WriteOutcomeUnknown(
+                    f"The last part of the upload failed ({failure}) and the upload's state could not be "
+                    "read; the file may or may not have been uploaded."
+                ) from failure
+            raise failure from None
+
+    async def _cancel(self, upload_url: str) -> None:
+        """Cancel an upload session (``DELETE uploadUrl``), once; a failure leaves it to expire."""
+        with contextlib.suppress(ConnectorError):  # an unused session expires on its own
+            await self._graph.upload_session("DELETE", upload_url)
+
+
+def _next_expected_offset(body: dict[str, Any]) -> int | None:
+    """The first missing byte of an upload session: the start of ``nextExpectedRanges[0]`` ("start-end" or
+    "start-")."""
+    ranges = body.get("nextExpectedRanges")
+    first = ranges[0] if isinstance(ranges, list) and ranges else None
+    start = first.split("-", 1)[0] if isinstance(first, str) else ""
+    return int(start) if start.isdigit() else None
 
 
 def _uploaded(item: dict[str, Any]) -> UploadedFile:

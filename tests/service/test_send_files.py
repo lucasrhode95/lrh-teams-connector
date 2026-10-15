@@ -13,6 +13,7 @@ import pytest
 from teams_connector import config
 from teams_connector.bootstrap import Services
 from teams_connector.domain.errors import InvalidRequest, Upstream, WriteOutcomeUnknown
+from teams_connector.remote import graph_teams
 from teams_connector.remote.graph import Graph
 from teams_connector.remote.graph_teams import GraphFileSharer
 from teams_connector.remote.transport import Bearer, Transport
@@ -149,14 +150,111 @@ async def test_bad_paths_are_refused_before_any_request(
     assert fake.calls == []
 
 
-async def test_a_file_too_large_for_one_upload_is_refused(
+async def test_a_file_over_the_configured_cap_is_refused(
     services: Services, fake: FakeTeams, notes: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(send, "MAX_FILE_BYTES", 4)
+    monkeypatch.setattr(config, "MAX_SEND_FILE_BYTES", 4 * 1024**2)
+    notes.write_bytes(b"x" * (4 * 1024**2 + 1))
 
-    with pytest.raises(InvalidRequest, match="250 MiB"):
+    with pytest.raises(InvalidRequest, match=r"the limit is 4 MiB \(config.MAX_SEND_FILE_BYTES\)"):
         await services.sender.send(ONE, expected_chat_name="Pat Peer", files=[str(notes)])
-    assert fake.uploads == []
+    assert fake.calls == []
+
+
+def test_the_default_cap_is_two_gib() -> None:
+    assert config.MAX_SEND_FILE_BYTES == 2 * 1024**3
+
+
+@pytest.fixture
+def large(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A 25-byte file that counts as large: upload sessions start at 16 bytes, in 10-byte chunks."""
+    monkeypatch.setattr(graph_teams, "SINGLE_UPLOAD_BYTES", 16)
+    monkeypatch.setattr(graph_teams, "UPLOAD_CHUNK_BYTES", 10)
+    path = tmp_path / "video.mp4"
+    path.write_bytes(bytes(range(65, 90)))
+    return path
+
+
+def _chunk_puts(fake: FakeTeams) -> int:
+    return sum(call.startswith("PUT tenant-my.sharepoint.com") for call in fake.calls)
+
+
+async def test_a_large_file_goes_up_in_chunks_without_credentials(
+    services: Services, fake: FakeTeams, large: Path
+) -> None:
+    result = await services.sender.send(ONE, expected_chat_name="Pat Peer", files=[str(large)])
+
+    assert fake.uploads == [(config.CHAT_FILES_FOLDER, "video.mp4", large.read_bytes())]
+    assert _chunk_puts(fake) == 3
+    assert fake.upload_session_auth and set(fake.upload_session_auth) == {None}
+    assert not any(c.startswith("PUT graph.microsoft.com") for c in fake.calls)  # no single PUT
+    assert [f.name for f in result.files] == ["video.mp4"] and len(fake.invites) == 1
+    assert len(fake.sent[-1][1]["attachments"]) == 1
+
+
+async def test_a_file_below_the_session_threshold_is_one_put(
+    services: Services, fake: FakeTeams, large: Path, notes: Path
+) -> None:
+    await services.sender.send(ONE, expected_chat_name="Pat Peer", files=[str(notes)])  # 15 bytes
+
+    assert fake.upload_sessions == {} and len(fake.uploads) == 1
+
+
+@pytest.mark.parametrize(
+    ("failure", "puts"),
+    [
+        ("500", 4),  # nothing kept: the chunk is sent again
+        ("lost", 3),  # kept but unanswered: the status says it arrived, so the next chunk follows
+    ],
+)
+async def test_a_failed_chunk_resends_only_the_missing_ranges(
+    services: Services, fake: FakeTeams, large: Path, failure: str, puts: int
+) -> None:
+    fake.chunk_failures = [(10, failure)]
+
+    await services.sender.send(ONE, expected_chat_name="Pat Peer", files=[str(large)])
+
+    assert fake.uploads == [(config.CHAT_FILES_FOLDER, "video.mp4", large.read_bytes())]
+    assert _chunk_puts(fake) == puts
+    assert sum(call.startswith("GET tenant-my.sharepoint.com") for call in fake.calls) == 1
+    assert fake.cancelled_uploads == [] and len(fake.sent) == 1
+
+
+async def test_repeated_chunk_failures_cancel_the_session_and_post_nothing(
+    services: Services, fake: FakeTeams, large: Path
+) -> None:
+    fake.chunk_failures = [(10, "500")] * (graph_teams.UPLOAD_RESUMES + 1)
+
+    with pytest.raises(Upstream):
+        await services.sender.send(ONE, expected_chat_name="Pat Peer", files=[str(large)])
+
+    assert _chunk_puts(fake) == 1 + graph_teams.UPLOAD_RESUMES + 1
+    assert fake.cancelled_uploads == ["1"]
+    assert fake.uploads == [] and fake.invites == [] and fake.sent == []
+
+
+async def test_an_unreadable_status_after_the_last_chunk_is_an_unknown_outcome(
+    services: Services, fake: FakeTeams, large: Path
+) -> None:
+    fake.chunk_failures = [(20, "lost")]
+    fake.fail_upload_status = True
+
+    with pytest.raises(WriteOutcomeUnknown, match="video.mp4 may also have been uploaded"):
+        await services.sender.send(ONE, expected_chat_name="Pat Peer", files=[str(large)])
+
+    assert len(fake.uploads) == 1 and fake.sent == []  # the fake completed it; nothing was posted
+
+
+async def test_an_unreadable_status_mid_file_cancels_and_reports_the_chunk_failure(
+    services: Services, fake: FakeTeams, large: Path
+) -> None:
+    fake.chunk_failures = [(10, "500")]
+    fake.fail_upload_status = True
+
+    with pytest.raises(Upstream, match="generalException"):
+        await services.sender.send(ONE, expected_chat_name="Pat Peer", files=[str(large)])
+
+    assert fake.cancelled_uploads == ["1"] and fake.uploads == [] and fake.sent == []
 
 
 async def test_a_failed_upload_posts_nothing_and_names_the_uploaded_files(

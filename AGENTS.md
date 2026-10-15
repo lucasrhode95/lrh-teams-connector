@@ -24,7 +24,7 @@ Run every check documented for this repository before each commit and fix failur
 
 ### Private data, external effects, and stored formats
 
-Never log or commit credentials, tokens, session cookies, private user content, or real identifiers. Use this repository's documented secure storage for authentication state. Do not perform external writes without the user's explicit request. Make each external write once; do not retry automatically, and report uncertain outcomes.
+Never log or commit credentials, tokens, session cookies, private user content, or real identifiers. Use this repository's documented secure storage for authentication state. Do not perform external writes without the user's explicit request. Make each external write once; do not retry automatically, and report uncertain outcomes. The one exception, approved by the user, is resending the missing ranges of a failed large-file upload part a bounded number of times (`docs/requirements.md`, sending files).
 
 Treat persisted data as the current format. Do not add backward-compatibility shims, old-format readers, automatic migrations, schema-version frameworks, or fallback behavior for previous application versions unless asked. Keep safeguards that protect current user data and account ownership.
 

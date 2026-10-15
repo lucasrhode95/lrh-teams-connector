@@ -24,17 +24,10 @@ None open.
 
 ### P1.5 — Send host files as attachments
 
-What files on `send_message` cannot do yet. One-on-one and group chats work
-([architecture](architecture.md#send-a-message), [research](api-research.md#sending-files)).
+What files on `send_message` cannot do yet. One-on-one and group chats work, including files of
+250 MiB or more through upload sessions ([architecture](architecture.md#send-a-message),
+[research](api-research.md#sending-files)).
 
-- **Files of 250 MiB or more:** refused today. A Graph upload session works
-  ([research](api-research.md#sending-files)): `createUploadSession`, then 10 MiB chunks PUT without
-  credentials to the SharePoint `uploadUrl`.
-  - The transport needs a narrow credential-free allowance for that URL.
-  - Read the file in chunks rather than all at once.
-  - Raise the size cap as a setting.
-  - Choose how a failed chunk is handled: fail the send and cancel the session (strict, within the
-    write-once rule), or resend the missing ranges (an explicit exception).
 - **Inline images:** proposed shape is an `images` list of local paths, with `<img src="name">` in `html`
   naming an entry. The connector swaps in `../hostedContents/N/$value` and adds the bytes. An `<img>` that
   names no entry is still refused, so remote images stay blocked.

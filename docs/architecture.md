@@ -135,7 +135,8 @@ raises `WriteOutcomeUnknown` so an agent can inspect the target before taking an
 
 Graph file-download endpoints can return a preauthenticated SharePoint redirect. The transport
 allows one HTTPS redirect to a SharePoint download host and does not forward the Graph bearer token
-to that host. Downloads have caller-supplied byte limits and are streamed to temporary files before
+to that host. Likewise, `Transport.upload_session` calls a Graph upload session's preauthenticated
+`uploadUrl` on `*.sharepoint.com` with no credential, and logs no part of its URL. Downloads have caller-supplied byte limits and are streamed to temporary files before
 publication. URLs, query strings, bodies, authorization headers, message content, and search terms
 are omitted from operational logs; credential-like values are redacted as another safeguard.
 
@@ -300,16 +301,22 @@ inspect the conversation before deciding whether another send is needed. A searc
 to analyze a conversation does not authorize a send.
 
 `files` attaches local files, by absolute path, to a message for a one-on-one or group chat: up to 10,
-each under 250 MiB. With files, `text` and `html` may both be omitted. The authorization covers every
+each up to `config.MAX_SEND_FILE_BYTES` (2 GiB by default). With files, `text` and `html` may both be omitted. The authorization covers every
 file. Before any request the service checks each path. It then does what Teams Web does, through Graph
 ([research](api-research.md#sending-files)):
 
-1. Upload each file to `config.CHAT_FILES_FOLDER` in the sender's OneDrive. A name clash is renamed.
+1. Upload each file to `config.CHAT_FILES_FOLDER` in the sender's OneDrive. A name clash is renamed. A
+   file under 250 MiB goes up in one `PUT`. A larger one uses an upload session: `createUploadSession`,
+   then 10 MiB chunks read from disk and `PUT` to the session's `uploadUrl`, without credentials.
 2. Share each file with the chat's other members from Chat Service, without an email. The access follows
    `config.SHARED_FILE_ACCESS`: the tenant's default link (`chat_default`) or direct grants (`direct`).
 3. Post the message with one `reference` attachment per file.
 
-Each request is made once. The message is posted only after every upload and share has succeeded. A
+Each request is made once, with one user-approved exception: after a failed chunk, the uploader reads
+the session's `nextExpectedRanges` and resends only the missing bytes, at most
+`graph_teams.UPLOAD_RESUMES` (3) times per file; then it cancels the session (`DELETE uploadUrl`) and
+the send fails. If the last chunk fails and the session's state cannot be read, the file may have been
+uploaded, so the outcome is reported as unknown. The message is posted only after every upload and share has succeeded. A
 share that fails for some members (Graph's `207 Multi-Status`) counts as failed.
 When something fails, the error names the files already in the sender's OneDrive, which stay there. A
 member without an object id in the directory, such as a federated user, makes the send fail before

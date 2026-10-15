@@ -24,6 +24,8 @@ CHAT_FILES_FOLDER = "Microsoft Teams Chat Files"
 # (Teams Web's behavior; specific people, edit, when checked); "direct" grants each of them edit access
 # without a link. Neither notifies anyone.
 SHARED_FILE_ACCESS: Literal["chat_default", "direct"] = "chat_default"
+# The largest file send_message accepts. Files of 250 MiB or more go up in a Graph upload session.
+MAX_SEND_FILE_BYTES = 2 * 1024**3
 
 
 def data_dir() -> Path:

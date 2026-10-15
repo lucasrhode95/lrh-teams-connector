@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
+from teams_connector import config
 from teams_connector.domain.errors import ConnectorError, InvalidRequest, Upstream, WriteOutcomeUnknown
 from teams_connector.domain.models import Chat, SendResult, SentFile
 from teams_connector.remote.ports import ChatWriter, FileSharer, MemberReader, UploadedFile
@@ -23,7 +24,6 @@ from teams_connector.service.passive_html import check_passive_html
 
 MAX_TEXT_CHARS = 10_000
 MAX_FILES = 10
-MAX_FILE_BYTES = 250 * 1024 * 1024 - 1  # Graph's largest single-request upload (live, 2026-10-15)
 FILE_CHAT_KINDS = ("one_on_one", "group")  # where files are supported; channels and meetings come later
 _GUID_CHARS = set("0123456789abcdef-")
 
@@ -143,7 +143,7 @@ class Sender:
 
 
 def _check_files(files: Sequence[str]) -> list[Path]:
-    """Local files to send: absolute paths of readable regular files, each small enough for one upload."""
+    """Local files to send: absolute paths of readable regular files within config.MAX_SEND_FILE_BYTES."""
     if len(files) > MAX_FILES:
         raise InvalidRequest(f"Send at most {MAX_FILES} files with one message.")
     paths = []
@@ -155,11 +155,17 @@ def _check_files(files: Sequence[str]) -> list[Path]:
             raise InvalidRequest(f"File paths must be absolute: {raw}")
         if not path.is_file():
             raise InvalidRequest(f"Not a readable file: {raw}")
-        size = path.stat().st_size
-        if size > MAX_FILE_BYTES:
-            raise InvalidRequest(f"{path.name} is too large to send: files must be smaller than 250 MiB.")
+        if path.stat().st_size > config.MAX_SEND_FILE_BYTES:
+            raise InvalidRequest(
+                f"{path.name} is too large to send: the limit is {_size(config.MAX_SEND_FILE_BYTES)} "
+                "(config.MAX_SEND_FILE_BYTES)."
+            )
         paths.append(path)
     return paths
+
+
+def _size(value: int) -> str:
+    return f"{value / 1024**3:g} GiB" if value >= 1024**3 else f"{value / 1024**2:g} MiB"
 
 
 def _with_uploads(

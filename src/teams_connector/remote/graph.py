@@ -102,6 +102,19 @@ class Graph:
         )
         return _json_object(response.content)
 
+    async def upload_session(
+        self,
+        method: str,
+        upload_url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        content: bytes | None = None,
+    ) -> tuple[int, dict[str, Any]]:
+        """A request to an upload session's pre-authenticated ``uploadUrl``, sent without the Graph token.
+        Returns the status and the JSON body (empty when there is none)."""
+        response = await self._transport.upload_session(method, upload_url, headers=headers, content=content)
+        return response.status_code, _json_object(response.content)
+
     async def page(
         self, path_or_link: str, params: Mapping[str, Any] | None = None
     ) -> tuple[list[dict[str, Any]], str | None]:

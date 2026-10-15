@@ -162,3 +162,33 @@ async def test_non_allowlisted_hosts_and_oversized_downloads_are_rejected() -> N
         await transport.aclose()
 
     assert requests == 1
+
+
+async def test_upload_sessions_reach_only_sharepoint_and_carry_no_credential() -> None:
+    seen: list[tuple[str, str | None]] = []
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.headers.get("authorization")))
+        if request.method == "PUT":
+            return httpx.Response(500, json={"error": {"code": "generalException"}})
+        return httpx.Response(200, json={"nextExpectedRanges": ["0-"]})
+
+    upload_url = "https://tenant-my.sharepoint.com/personal/user/_api/v2.0/drive/uploadSession/1"
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    transport = Transport(client=client)
+    try:
+        status = await transport.upload_session("GET", upload_url)
+        with pytest.raises(Upstream):
+            await transport.upload_session("PUT", upload_url, content=b"chunk")
+        for refused in (
+            "https://graph.microsoft.com/v1.0/me",
+            "http://tenant-my.sharepoint.com/upload",
+            "https://sharepoint.com.evil.invalid/upload",
+        ):
+            with pytest.raises(Upstream, match="non-allowlisted"):
+                await transport.upload_session("PUT", refused, content=b"chunk")
+    finally:
+        await transport.aclose()
+
+    assert status.status_code == 200
+    assert seen == [("GET", None), ("PUT", None)]  # the failed chunk was sent once
