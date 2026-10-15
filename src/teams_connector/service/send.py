@@ -95,14 +95,15 @@ class Sender:
         )
 
     async def _recipients(self, chat: Chat) -> list[str]:
-        """The chat's other people, by Entra object id. Apps are left out; anyone without an object id in
-        this directory (a federated or anonymous member) cannot be granted access, so the send is refused."""
+        """The chat's other people, by Entra object id. Apps (``28:``) are left out. Anyone else without an
+        object id in this directory (no id at all, or a federated or anonymous member) cannot be granted
+        access, so the send is refused rather than posting a file someone cannot open."""
         if chat.kind not in FILE_CHAT_KINDS:
             raise InvalidRequest("Files can be sent to one-on-one and group chats only.")
         people = []
         for member in await self._members.members(chat):
             member_id = (member.id or "").lower()
-            if not member_id or member_id == self._me_id or member_id.startswith("28:"):
+            if member_id == self._me_id or member_id.startswith("28:"):
                 continue
             if not _is_object_id(member_id):
                 raise InvalidRequest(

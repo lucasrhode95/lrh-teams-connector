@@ -165,6 +165,7 @@ class FakeTeams:
     invites: list[tuple[str, dict[str, Any], str | None]] = field(default_factory=list)
     fail_upload_names: set[str] = field(default_factory=set)  # file names whose upload answers 500
     fail_invites: bool = False
+    partial_invites: bool = False  # invites answer 207 with an error for the last recipient
     token_counter: int = 0
 
     # ------------------------------------------------------------------ routing
@@ -367,6 +368,10 @@ class FakeTeams:
             return httpx.Response(403, json={"error": {"code": "accessDenied", "message": "denied"}})
         body = json.loads(request.content)
         self.invites.append((item_id, body, request.headers.get("prefer")))
+        if self.partial_invites:
+            error = {"code": "notAllowed", "message": "synthetic", "innererror": {"code": "invalidRecipient"}}
+            granted = {"id": "perm", "roles": body["roles"]}
+            return httpx.Response(207, json={"value": [granted, {"error": error}]})
         return httpx.Response(200, json={"value": [{"id": "perm", "roles": body["roles"]}]})
 
     def _graph(self, request: httpx.Request, path: str, query: dict[str, list[str]]) -> httpx.Response:

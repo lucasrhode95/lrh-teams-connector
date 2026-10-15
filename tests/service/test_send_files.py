@@ -179,6 +179,26 @@ async def test_a_failed_share_posts_nothing(services: Services, fake: FakeTeams,
     assert fake.sent == []
 
 
+async def test_a_partly_failed_share_posts_nothing(services: Services, fake: FakeTeams, notes: Path) -> None:
+    fake.partial_invites = True
+    name = await _name(services, GROUP)
+
+    with pytest.raises(Upstream, match=r"Sharing notes.txt failed.*1 of 2 chat members \(notAllowed\)"):
+        await services.sender.send(GROUP, expected_chat_name=name, files=[str(notes)])
+    assert fake.sent == []
+
+
+async def test_a_member_without_an_id_refuses_the_send_before_any_upload(
+    services: Services, fake: FakeTeams, notes: Path
+) -> None:
+    name = await _name(services, GROUP)
+    fake.chats[GROUP].members.append(("", None))  # Chat Service lists a member with no usable id
+
+    with pytest.raises(InvalidRequest, match="outside your organization's directory"):
+        await services.sender.send(GROUP, expected_chat_name=name, files=[str(notes)])
+    assert fake.uploads == [] and fake.sent == []
+
+
 async def test_an_unconfirmed_post_reports_the_shared_files_and_is_not_retried(
     services: Services, fake: FakeTeams, notes: Path
 ) -> None:

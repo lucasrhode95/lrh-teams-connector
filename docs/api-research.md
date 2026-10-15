@@ -591,7 +591,7 @@ afterwards. Each write was made once.
 
 | Step | Request | Result |
 |---|---|---|
-| Upload | `PUT /me/drive/root:/Microsoft Teams Chat Files/{name}:/content?@microsoft.graph.conflictBehavior=rename` | 201 drive item. Clashes renamed as in Teams Web. The largest single PUT accepted was 262,143,999 bytes (250 MiB minus one). Exactly 250 MiB answered 499 `clientDisconnected`, and anything larger answered 400 `invalidRequest`, both only after the whole body had been sent (about 20 s). |
+| Upload | `PUT /me/drive/root:/Microsoft Teams Chat Files/{name}:/content?@microsoft.graph.conflictBehavior=rename` | 201 drive item. Clashes renamed as in Teams Web. A missing folder is created: the first PUT into a new folder answered 201. The largest single PUT accepted was 262,143,999 bytes (250 MiB minus one). Exactly 250 MiB answered 499 `clientDisconnected`, and anything larger answered 400 `invalidRequest`, both only after the whole body had been sent (about 20 s). |
 | Grant | `POST /drives/{drive}/items/{item}/invite`, `{"recipients": [{"objectId": …}], "roles": ["write"], "requireSignIn": true, "sendInvitation": false}` | 200. Without a `Prefer` header: a direct permission (`grantedToV2`) and no link. With `Prefer: getDefaultLink`: the same `users`/`edit` link Teams Web gets, with `shareId`. In a four-member group chat, one invite for the three other members returned one link with three grantees. |
 | Post | `POST /chats/{id}/messages`: `<attachment id="{eTag GUID}">` in the HTML, plus `attachments[]` entries of `contentType: reference` with `contentUrl` (the item's `webUrl`) and `name` | 201. Two files in one message worked. |
 

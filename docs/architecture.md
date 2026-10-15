@@ -309,7 +309,8 @@ file. Before any request the service checks each path. It then does what Teams W
    `config.SHARED_FILE_ACCESS`: the tenant's default link (`chat_default`) or direct grants (`direct`).
 3. Post the message with one `reference` attachment per file.
 
-Each request is made once. The message is posted only after every upload and share has succeeded.
+Each request is made once. The message is posted only after every upload and share has succeeded. A
+share that fails for some members (Graph's `207 Multi-Status`) counts as failed.
 When something fails, the error names the files already in the sender's OneDrive, which stay there. A
 member without an object id in the directory, such as a federated user, makes the send fail before
 anything is uploaded. The result lists each file's name, as renamed, and its link.

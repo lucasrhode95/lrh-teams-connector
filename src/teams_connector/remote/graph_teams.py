@@ -304,6 +304,8 @@ class GraphFileSharer:
         return _uploaded(item)
 
     async def share(self, file: UploadedFile, recipients: Sequence[str]) -> None:
+        """One invite for every recipient. A partial success (HTTP 207, with an ``error`` entry for some
+        recipients) is a failure: the message must not be posted when anyone cannot open the file."""
         body = {
             "recipients": [{"objectId": oid} for oid in recipients],
             "roles": ["write"],
@@ -312,11 +314,21 @@ class GraphFileSharer:
         }
         prefer = "getDefaultLink" if self._access == "chat_default" else None
         with operation("sharing a file"):
-            await self._graph.post(
+            data, _ = await self._graph.post(
                 f"/drives/{segment(file.drive_id)}/items/{segment(file.item_id)}/invite",
                 body,
                 idempotent=False,
                 prefer=prefer,
+            )
+        entries = data.get("value")
+        entries = entries if isinstance(entries, list) else []
+        failed = [e for e in entries if isinstance(e, dict) and e.get("error")]
+        if failed:
+            error = failed[0]["error"]
+            code = error.get("code") if isinstance(error, dict) else None
+            raise Upstream(
+                f"Graph could not share the file with {len(failed)} of {len(recipients)} chat members"
+                + (f" ({code})." if isinstance(code, str) and code else ".")
             )
 
 
