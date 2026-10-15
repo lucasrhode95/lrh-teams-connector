@@ -22,6 +22,7 @@ from tests.fakes.msal_fakes import TENANT, USER_OID, jwt
 
 CHAT_SERVICE = "https://emea.ng.msg.teams.microsoft.com"
 GRAPH = "https://graph.microsoft.com/v1.0"
+PRESENCE = "https://teams.microsoft.com/ups/emea"
 ME = USER_OID
 ME_NAME = "Mia Example"
 PEER = "33333333-3333-3333-3333-333333333333"
@@ -65,17 +66,6 @@ def cs_message(
         "from": f"{CHAT_SERVICE}/v1/users/ME/contacts/8:orgid:{author}",
         "properties": properties,
     }
-
-
-def _channel_message(channel: FakeChannel, message_id: str) -> dict[str, Any] | None:
-    """A channel post or reply by id, as Graph returns one channel message."""
-    for root in channel.threads:
-        if root["id"] == message_id:
-            return root
-        for reply in root.get("replies", []):
-            if reply["id"] == message_id:
-                return reply
-    return None
 
 
 def graph_message(
@@ -162,6 +152,7 @@ class FakeTeams:
     images: dict[str, bytes] = field(default_factory=dict)  # AMS object id -> full-size image bytes
     hosted: dict[str, bytes] = field(default_factory=dict)  # Graph hosted-content id -> image bytes
     favorite_ids: set[str] = field(default_factory=set)  # chats in the Favorites sidebar folder
+    folders_fail: bool = False  # the sidebar folders answer 503
     presence_fails: bool = False  # the regional presence service answers 503
     delta_rows: list[dict[str, Any]] = field(default_factory=list)  # rows returned for the next delta
     deleted_chat_ids: list[str] = field(default_factory=list)
@@ -179,6 +170,8 @@ class FakeTeams:
 
     def _folders(self) -> httpx.Response:
         """The sidebar folders: Favorites lists ``favorite_ids``; the other folder is empty."""
+        if self.folders_fail:
+            return httpx.Response(503, json={"errorCode": "ServiceUnavailable"})
         favorites = [{"conversationId": chat_id} for chat_id in sorted(self.favorite_ids)]
         return httpx.Response(
             200,
@@ -199,7 +192,7 @@ class FakeTeams:
                 200,
                 json={
                     "tokens": {"skypeToken": "skype-token", "expiresIn": 86400},
-                    "regionGtms": {"chatService": CHAT_SERVICE},
+                    "regionGtms": {"chatService": CHAT_SERVICE, "presenceUPS": PRESENCE},
                 },  # fmt: skip
             )
         if url.hostname == "teams.microsoft.com" and path.endswith("/users/me/conversationFolders"):
@@ -210,7 +203,7 @@ class FakeTeams:
             return self._chat_service(request, path, parse_qs(url.query))
         if url.hostname == "eu-api.asm.skype.com":
             return self._ams(request, path)
-        if url.hostname and url.hostname.endswith(".presence.teams.microsoft.com"):
+        if url.hostname == "teams.microsoft.com" and path.startswith("/ups/emea/v1/presence/getpresence"):
             return self._presence(request)
         if url.hostname == "graph.microsoft.com":
             return self._graph(request, path.removeprefix("/v1.0"), parse_qs(url.query))
@@ -263,15 +256,15 @@ class FakeTeams:
             ]  # fmt: skip
             return httpx.Response(200, json={"conversations": rows, "_metadata": {}})
         if parts[:4] == ["v1", "users", "ME", "conversations"] and parts[-1] == "messages":
-            chat = self.chats.get(parts[4])
-            if chat is None:
+            records = self._cs_records(parts[4])
+            if records is None:
                 return httpx.Response(404, json={"errorCode": "NotFound"})
             start = int(query.get("startTime", ["0"])[0])
             end = int(query.get("endTime", [str(2**62)])[0])
             size = int(query.get("pageSize", ["100"])[0])
             offset = int(query.get("syncState", ["0"])[0])
             ordered = sorted(
-                (m for m in chat.messages if start <= ms(m["originalarrivaltime"]) <= end),
+                (m for m in records if start <= ms(m["originalarrivaltime"]) <= end),
                 key=lambda m: m["originalarrivaltime"],
                 reverse=True,
             )
@@ -286,10 +279,10 @@ class FakeTeams:
             parts[:4] == ["v1", "users", "ME", "conversations"]
             and len(parts) == 7
             and parts[5] == "messages"
-            and parts[4] in self.chats
+            and self._cs_records(parts[4]) is not None
         ):
             # one message by id; Teams answers an id it does not hold with 403
-            rows = [m for m in self.chats[parts[4]].messages if m["id"] == parts[6]]
+            rows = [m for m in self._cs_records(parts[4]) or [] if m["id"] == parts[6]]
             if not rows:
                 return httpx.Response(403, json={"errorCode": "Forbidden"})
             return httpx.Response(200, json=rows[0])
@@ -301,10 +294,26 @@ class FakeTeams:
             return httpx.Response(200, json={"members": members})
         return httpx.Response(404, json={"errorCode": "NotFound"})
 
+    def _cs_records(self, conversation_id: str) -> list[dict[str, Any]] | None:
+        """Chat Service records of a chat, or of a channel's posts and replies (a reply names its root)."""
+        if conversation_id in self.chats:
+            return self.chats[conversation_id].messages
+        channel = self.channels.get(conversation_id)
+        if channel is None:
+            return None
+        records = []
+        for root in channel.threads:
+            for raw in [root, *root.get("replies", [])]:
+                record = cs_message(raw["id"], raw["createdDateTime"])
+                record["content"] = raw["body"]["content"]
+                record["rootMessageId"] = root["id"]
+                records.append(record)
+        return records
+
     # ------------------------------------------------------------------ Graph
 
     def _presence(self, request: httpx.Request) -> httpx.Response:
-        """Regional Unified Presence: the teams.spaces bearer is accepted; one row per requested MRI. The
+        """Unified Presence at AuthZ's presenceUPS: the teams.spaces bearer is accepted; one row per MRI. The
         response carries fields the connector does not report, so they can be checked as dropped."""
         if not request.headers.get("authorization", "").startswith("Bearer "):
             return httpx.Response(401, json={"errorCode": "911"})
@@ -343,8 +352,8 @@ class FakeTeams:
 
     def _graph(self, request: httpx.Request, path: str, query: dict[str, list[str]]) -> httpx.Response:
         parts = path.strip("/").split("/")
-        if len(parts) == 9 and parts[6] == "hostedContents" and parts[8] == "$value":
-            data = self.hosted.get(parts[7])
+        if len(parts) in (9, 11) and parts[-3] == "hostedContents" and parts[-1] == "$value":
+            data = self.hosted.get(parts[-2])
             if data is None:
                 return _not_found()
             return httpx.Response(200, content=data, headers={"content-type": "image/png"})
@@ -387,8 +396,13 @@ class FakeTeams:
                 return _page([{"userId": oid, "displayName": name} for oid, name in channel.members])
             if parts[4] == "messages" and len(parts) == 5:
                 return self._threads(channel, query)
-            if parts[4] == "messages" and len(parts) == 6:
-                found = _channel_message(channel, parts[5])
+            if parts[4] == "messages" and len(parts) == 6:  # a root post only, as Graph answers
+                found = next((root for root in channel.threads if root["id"] == parts[5]), None)
+                return httpx.Response(200, json=found) if found is not None else _not_found()
+            if parts[4] == "messages" and len(parts) == 8 and parts[6] == "replies":
+                root = next((root for root in channel.threads if root["id"] == parts[5]), None)
+                replies = root.get("replies", []) if root else []
+                found = next((reply for reply in replies if reply["id"] == parts[7]), None)
                 return httpx.Response(200, json=found) if found is not None else _not_found()
         if parts[0] == "users" and len(parts) == 2:
             name = self.users.get(parts[1])

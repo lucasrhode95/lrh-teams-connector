@@ -54,7 +54,7 @@ async def test_mcp_exposes_current_contract_and_reads_synthetic_chats(context: A
         assert "19:one@unq.gbl.spaces" in {row["id"] for row in result.structuredContent["items"]}
 
 
-async def test_mcp_rejects_an_empty_search_and_an_unconfirmed_send(
+async def test_mcp_rejects_an_empty_search_and_a_send_to_a_misnamed_chat(
     context: AppContext, fake: FakeTeams
 ) -> None:
     async with create_connected_server_and_client_session(build_server(context)) as client:
@@ -65,9 +65,8 @@ async def test_mcp_rejects_an_empty_search_and_an_unconfirmed_send(
             "send_message",
             {
                 "conversation_id": "19:one@unq.gbl.spaces",
-                "expected_chat_name": "Pat Peer",
+                "expected_chat_name": "Someone else",
                 "text": "synthetic message",
-                "user_confirmation": "",
             },
         )
         assert send.isError

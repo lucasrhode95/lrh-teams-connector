@@ -10,8 +10,8 @@ from datetime import datetime
 from typing import Any
 
 from teams_connector.domain.models import Attachment, Chat, Message, Participant
-from teams_connector.remote import inline_images, teams_html
-from teams_connector.remote.chat_service_mapping import file_markers, mapping, parse_time
+from teams_connector.remote import teams_html
+from teams_connector.remote.chat_service_mapping import file_markers, mapping, parse_time, shared_file
 from teams_connector.remote.csa_mapping import channel_name
 
 _CARD = "application/vnd.microsoft.card."
@@ -72,14 +72,7 @@ def to_message(raw: dict[str, Any], conversation_id: str) -> Message:
             name = str(item.get("name") or "file")
             url = item.get("contentUrl")
             link = url if isinstance(url, str) and url else None
-            files.append(
-                Attachment(
-                    name=inline_images.unique_name(name, used),
-                    kind="file",
-                    source="sharepoint" if link else None,
-                    url=link,
-                )
-            )
+            files.append(shared_file(name, link, used))
         elif content_type.startswith(_CARD):
             card = item.get("content")
             if isinstance(card, str):

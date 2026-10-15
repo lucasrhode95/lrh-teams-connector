@@ -164,3 +164,23 @@ async def test_a_tampered_cursor_is_refused(services: Services) -> None:
     with pytest.raises(InvalidRequest):
         await search.search_messages(cursor=cursor)
     assert stub.queries == []
+
+
+async def test_a_cursor_cannot_carry_its_own_query(services: Services) -> None:
+    search, stub = _search(services)
+    for state in (
+        {"query": "anything at all"},  # a raw query is never read from a cursor
+        {"terms": ['x" OR "y'], "conversation_ids": []},  # terms are checked again, as on a new request
+        {"terms": ["budget"], "conversation_ids": ["19:a) OR (b"]},
+    ):
+        cursor = cursors.encode(
+            "search_messages",
+            **state,
+            offset=5,
+            page_size=5,
+            cvid="00000000-0000-0000-0000-000000000001",
+            logical_id="00000000-0000-0000-0000-000000000002",
+        )
+        with pytest.raises(InvalidRequest):
+            await search.search_messages(cursor=cursor)
+    assert stub.queries == []

@@ -15,6 +15,7 @@ import re
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any
+from urllib.parse import urlsplit
 
 from teams_connector.domain.models import Attachment
 from teams_connector.remote import inline_images
@@ -24,6 +25,9 @@ _URI_OBJECT_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _TAG_RE = re.compile(r"<Swift\b[^>]*>", re.IGNORECASE)
+_RECORDING_TYPE = "video.2/callrecording"
+_RECORDING_TITLE_RE = re.compile(r"<Title\b[^>]*>(.*?)</Title\s*>", re.IGNORECASE | re.DOTALL)
+_RECORDING_LINK_RE = re.compile(r"<a\b[^>]*\bhref=\"([^\"]+)\"", re.IGNORECASE)
 _TAG_END_RE = re.compile(r"</Swift\s*>", re.IGNORECASE)
 
 
@@ -204,6 +208,10 @@ def _rewrite_swift_uriobjects(source: str, *, as_html: bool) -> tuple[str, bool]
         nonlocal found
         outer_attrs = _tag_attributes(match.group("attributes"), "URIObject")
         inner = match.group("content")
+        if outer_attrs.get("type", "").casefold().startswith(_RECORDING_TYPE):
+            found = True
+            marker = _recording_marker(inner)
+            return html.escape(marker, quote=False) if as_html else marker
         visible_source, encoded_payloads = _remove_swift_payload_elements(inner)
         if outer_attrs.get("type", "").casefold() != "swift.1":
             # Even if a non-card URIObject has a Swift field, never print its
@@ -240,6 +248,22 @@ def _rewrite_swift_uriobjects(source: str, *, as_html: bool) -> tuple[str, bool]
     # markup is malformed and did not match the complete URIObject wrapper.
     rewritten, orphan_payloads = _remove_swift_payload_elements(rewritten)
     return rewritten, found or bool(orphan_payloads)
+
+
+def _recording_marker(inner: str) -> str:
+    """A meeting recording card as one line: its title and the link Teams shows to play it (the OneDrive or
+    SharePoint copy). The card's other fields (media-service views, meeting and call ids) are left out."""
+    title_match = _RECORDING_TITLE_RE.search(inner)
+    title = (
+        " ".join(html.unescape(re.sub(r"<[^>]*>", "", title_match.group(1))).split()) if title_match else ""
+    )
+    marker = f"[Recording: {title}]" if title else "[Recording]"
+    link_match = _RECORDING_LINK_RE.search(inner)
+    link = html.unescape(link_match.group(1)).strip() if link_match else ""
+    host = (urlsplit(link).hostname or "").casefold() if link.startswith("https://") else ""
+    if host == "sharepoint.com" or host.endswith(".sharepoint.com"):
+        return f"{marker} {link}"
+    return marker
 
 
 class TeamsHtmlParser(HTMLParser):
@@ -289,7 +313,7 @@ class TeamsHtmlParser(HTMLParser):
         elif tag in self.BLOCK_TAGS:
             self._newline(2)
         elif tag == "br":
-            self._newline(1)
+            self.parts.append("\n")  # hard break: two in a row, or one after a paragraph, leave a blank line
         elif tag in {"ul", "ol"}:
             self.list_stack.append({"tag": tag, "next": self._positive_int(attributes.get("start"), 1)})
         elif tag == "li":

@@ -40,7 +40,7 @@ from teams_connector.domain.errors import (
 
 log = logging.getLogger(__name__)
 
-ALLOWED_HOSTS = frozenset({"graph.microsoft.com", "outlook.office.com"})
+ALLOWED_HOSTS = frozenset({"graph.microsoft.com", "outlook.office.com", "substrate.office.com"})
 ALLOWED_HOST_SUFFIXES = ("teams.microsoft.com", "teams.cloud.microsoft", "asm.skype.com")  # Teams and AMS
 DOWNLOAD_HOST_SUFFIXES = (".sharepoint.com",)  # pre-authenticated download URLs only
 RETRY_STATUSES = frozenset({408, 429, 500, 502, 503, 504})

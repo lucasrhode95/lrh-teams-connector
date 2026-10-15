@@ -1,8 +1,7 @@
 """Sending a message: validated against the live catalog, attempted exactly once.
 
 The caller (MCP client) is responsible for the user's explicit authorization of the recipient and the
-content; ``user_confirmation`` records it but is not permission by itself. The value is neither logged nor
-stored.
+content. The send checks the recipient: ``expected_chat_name`` must match the chat's current name.
 
 The body is either plain text, escaped and sent as paragraphs, or HTML, checked for active and unfinished
 markup and sent as written.
@@ -17,7 +16,6 @@ from teams_connector.service.catalog import Catalog
 from teams_connector.service.passive_html import check_passive_html
 
 MAX_TEXT_CHARS = 10_000
-MAX_CONFIRMATION_CHARS = 1_000
 
 
 def _normalized_name(value: str) -> str:
@@ -56,7 +54,6 @@ class Sender:
         expected_chat_name: str,
         text: str | None = None,
         html: str | None = None,
-        user_confirmation: str,
     ) -> SendResult:
         """Entry point: one message, as plain ``text`` or as ``html``. Exactly one of the two is required."""
         if (text is None) == (html is None):
@@ -67,14 +64,6 @@ class Sender:
             _check_html(html or "")
         if not expected_chat_name or not expected_chat_name.strip():
             raise InvalidRequest("expected_chat_name must be the chat's current name from list_chats.")
-        if (
-            not user_confirmation
-            or not user_confirmation.strip()
-            or len(user_confirmation) > MAX_CONFIRMATION_CHARS
-        ):
-            raise InvalidRequest(
-                "user_confirmation must record the user's explicit authorization to send this."
-            )
         chat = await self._catalog.recipient(conversation_id)  # the live name of this recipient only
         if _normalized_name(chat.name) != _normalized_name(expected_chat_name):
             raise InvalidRequest(

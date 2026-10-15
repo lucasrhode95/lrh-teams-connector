@@ -5,7 +5,9 @@ from datetime import UTC, datetime
 import pytest
 
 from teams_connector.bootstrap import Services
-from teams_connector.domain.errors import InvalidRequest
+from teams_connector.domain.errors import InvalidRequest, Upstream
+from teams_connector.remote.ports import HistoryPage
+from teams_connector.service.history import History
 from tests.fakes.teams_fake import FakeTeams, cs_message, graph_message
 
 ONE = "19:one@unq.gbl.spaces"
@@ -142,3 +144,39 @@ async def test_invalid_requests(services: Services) -> None:
         )
     with pytest.raises(InvalidRequest):
         await services.history.get_messages(ONE, since=datetime(2026, 1, 1))  # no timezone
+
+
+async def test_the_cursor_skips_new_arrivals_that_push_its_marker_past_the_first_page(
+    services: Services, fake: FakeTeams
+) -> None:
+    long_chat(fake)
+    first = await services.history.get_messages(ONE, page_size=20)
+    assert [m.id for m in first.items] == [f"m{i:03d}" for i in range(100, 120)] and first.cursor
+    fake.chats[ONE].messages += [
+        cs_message(f"n{i:03d}", f"2026-07-{1 + i // 24:02d}T{i % 24:02d}:00:00.000Z", f"New {i}")
+        for i in range(150)
+    ]  # newer than everything returned: the marked message is now on the second remote page
+
+    seen: list[str] = []
+    page = await services.history.get_messages(ONE, cursor=first.cursor)
+    while True:
+        seen = [m.id for m in page.items] + seen
+        if not page.cursor:
+            break
+        page = await services.history.get_messages(ONE, cursor=page.cursor)
+    assert seen == [f"m{i:03d}" for i in range(100)]  # nothing repeated, nothing new mixed in
+
+
+class _RepeatingReader:
+    """A history reader whose continuation always points back at the same page."""
+
+    async def page(self, chat: object, **_: object) -> HistoryPage:
+        return HistoryPage(messages=[], next_link="https://emea.ng.msg.teams.microsoft.com/same", scanned=0)
+
+
+async def test_an_export_stops_when_teams_repeats_a_continuation(services: Services) -> None:
+    chat = await services.catalog.get(ONE)
+    history = History(services.catalog, _RepeatingReader(), _RepeatingReader(), "me")  # type: ignore[arg-type]
+    with pytest.raises(Upstream):
+        async for _ in history.selection(chat, since=None, until=None):
+            pass

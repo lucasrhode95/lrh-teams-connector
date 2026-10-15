@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="2600" height="1760" viewBox="0 0 2600 1760" role="img" aria-labelledby="title description">
   <title id="title">Teams connector architecture</title>
-  <desc id="description">Short-lived entry points: the MCP server (one stdio process per agent session), the local export UI, and the auth command. MCP and UI are thin surfaces over one service layer that holds every domain decision. The service reads and writes an account-bound SQLite store of the chat catalog and calls the remote layer through ports. Teams' private services provide the chat catalog (CSA) and chat history and members (Chat Service), after an AuthZ exchange that yields a Skype token; Microsoft Graph provides channels, people, photos, shared files and sending; Search v2 provides online message discovery. Tokens come from the shared lrh-m365-auth cache.</desc>
+  <desc id="description">Short-lived entry points: the MCP server (one stdio process per agent session), the local export UI, and the auth command. MCP and UI are thin surfaces over one service layer that holds every domain decision. The service reads and writes an account-bound SQLite store of the chat catalog and calls the remote layer through ports. Teams' private services provide the chat catalog and Favorites (CSA), chat history and members (Chat Service), pasted images (AMS) and presence, after an AuthZ exchange that yields a Skype token and the service routes; Microsoft Graph provides channels, people, photos, shared files and sending; Search v2 provides online message discovery and chats by member, and Teams Web's suggestions route the people for one-on-ones. Tokens come from the shared lrh-m365-auth cache.</desc>
   <defs>
     <style>
       text { font-family: Arial, Helvetica, sans-serif; }
@@ -141,7 +141,7 @@
   <text class="detail" x="120" y="1175">Chat catalog (fresh for 10 minutes)</text>
   <text class="detail" x="120" y="1205">Channel names and last activity</text>
   <text class="detail" x="120" y="1235">Sync token and photo ids</text>
-  <text class="detail" x="120" y="1265">Owner checked; old stores moved aside</text>
+  <text class="detail" x="120" y="1265">Owner checked; damaged stores moved aside</text>
   <text class="muted" x="120" y="1310">Not stored: tokens or headers.</text>
   <text class="muted" x="120" y="1338">Not encrypted by the app.</text>
 
@@ -177,7 +177,7 @@
 
   <rect x="1170" y="1212" width="245" height="64" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
   <text class="section-title code" x="1182" y="1236" style="font-size:20px">substrate_search.py</text>
-  <text class="detail" x="1182" y="1262" style="font-size:18px">message search (v2)</text>
+  <text class="detail" x="1182" y="1262" style="font-size:18px">messages · chats · people</text>
 
   <rect x="1425" y="1212" width="245" height="64" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
   <text class="section-title code" x="1437" y="1236" style="font-size:20px">*_mapping.py</text>
@@ -259,25 +259,25 @@
   <rect x="1938" y="1194" width="32" height="26" rx="5" fill="#5b5fc7"/>
   <text class="badge" x="1954" y="1213" text-anchor="middle">T</text>
   <text class="section-title" x="1980" y="1215">Teams AuthZ (private)</text>
-  <text class="detail" x="1940" y="1248" style="font-size:18px">Skype token + regional Chat Service address</text>
+  <text class="detail" x="1940" y="1248" style="font-size:18px">Skype token · Chat Service and presence routes</text>
 
   <rect x="1920" y="1274" width="580" height="80" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
   <rect x="1938" y="1286" width="32" height="26" rx="5" fill="#5b5fc7"/>
   <text class="badge" x="1954" y="1305" text-anchor="middle">T</text>
-  <text class="section-title" x="1980" y="1307">Chat Service (private)</text>
-  <text class="detail" x="1940" y="1340" style="font-size:18px">conversations · messages · members (Skype token)</text>
+  <text class="section-title" x="1980" y="1307">Chat Service, AMS, presence (private)</text>
+  <text class="detail" x="1940" y="1340" style="font-size:18px">messages · members · pasted images · presence</text>
 
   <rect x="1920" y="1366" width="580" height="80" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
   <rect x="1938" y="1378" width="32" height="26" rx="5" fill="#5b5fc7"/>
   <text class="badge" x="1954" y="1397" text-anchor="middle">T</text>
   <text class="section-title" x="1980" y="1399">Chat Service Aggregator (private)</text>
-  <text class="detail" x="1940" y="1432" style="font-size:18px">chat catalog snapshot or delta (CSA)</text>
+  <text class="detail" x="1940" y="1432" style="font-size:18px">chat catalog snapshot or delta · Favorites folder</text>
 
   <rect x="1920" y="1458" width="580" height="80" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
   <rect x="1938" y="1470" width="32" height="26" rx="5" fill="#b7791f"/>
   <text class="badge" x="1954" y="1489" text-anchor="middle">O</text>
-  <text class="section-title" x="1980" y="1491">Search v2 (private)</text>
-  <text class="detail" x="1940" y="1524" style="font-size:18px">Teams messages · <tspan class="code">searchservice/api/v2/query</tspan></text>
+  <text class="section-title" x="1980" y="1491">Search v2 and suggestions (private)</text>
+  <text class="detail" x="1940" y="1524" style="font-size:18px">messages · chats by member · people suggestions</text>
 
   <rect x="1920" y="1550" width="580" height="84" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
   <text class="section-title" x="1940" y="1584">Entra ID</text>

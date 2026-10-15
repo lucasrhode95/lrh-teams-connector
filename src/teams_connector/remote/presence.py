@@ -1,15 +1,14 @@
 """Teams presence (Unified Presence, regional): availability, activity, last-active time and device.
 
-The lookup is a read: a POST of the person's MRI, sent with the ``teams.spaces`` bearer to the regional host
-``{region}.presence.teams.microsoft.com``. The region is the first label of the Chat Service host from AuthZ.
-Only the fields the connector reports are kept: calendar data, work location, forced availability and
-capabilities are dropped here. The live check (2026-10-15) covered one region; the flat host redirects to it.
+The lookup is a read: a POST of the person's MRI, sent with the ``teams.spaces`` bearer to the presence
+service AuthZ names for the account (``regionGtms.presenceUPS``, such as ``https://teams.microsoft.com/ups/emea``),
+as Teams Web does. Only the fields the connector reports are kept: calendar data, work location, forced
+availability and capabilities are dropped here. Checked live on 2026-10-15 in one region.
 """
 
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import urlsplit
 
 from teams_connector.domain.errors import Upstream
 from teams_connector.domain.models import Presence
@@ -29,10 +28,9 @@ class TeamsPresence:
     async def presence(self, user_id: str) -> Presence | None:
         """Entry point: the presence of one person by Entra object id. The id is only sent as its MRI."""
         info = await self._session.info()
-        region = (urlsplit(info.chat_service_url).hostname or "").split(".")[0]
-        if not region:
-            raise Upstream("No regional Chat Service host to read presence from.")
-        url = f"https://{region}.presence.teams.microsoft.com/v1/presence/getpresence"
+        if info.presence_url is None:
+            raise Upstream("Teams AuthZ named no presence service for this account.")
+        url = f"{info.presence_url}/v1/presence/getpresence/"
         with operation("reading presence"):
             data = await self._transport.json(
                 "POST",

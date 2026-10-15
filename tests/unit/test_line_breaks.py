@@ -21,6 +21,16 @@ def test_an_empty_paragraph_keeps_its_blank_line() -> None:
     assert _text("<p>a</p><p></p><p>b</p>") == "a\n\nb"
 
 
+def test_explicit_breaks_keep_their_blank_line() -> None:
+    assert _text("<p>a<br><br>b</p>") == "a\n\nb"
+    assert _text("a<br><br>b") == "a\n\nb"
+    assert _text("<p>a</p><br><p>b</p>") == "a\n\nb"
+
+
+def test_a_trailing_break_adds_no_line() -> None:
+    assert _text("<p>a<br></p><p>b</p>") == "a\nb"
+
+
 def test_line_breaks_between_paragraphs_are_layout_not_blank_lines() -> None:
     assert _text("<p>first line</p>\r\n<p>second line</p>") == "first line\nsecond line"
 

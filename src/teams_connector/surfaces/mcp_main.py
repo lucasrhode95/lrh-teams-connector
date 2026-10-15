@@ -71,11 +71,12 @@ deleted in Teams, and Teams keeps no text for them; edited ones show their newes
 - Times are UTC; a date-time without an offset is taken as UTC.
 - Sending: never call send_message unless the user explicitly authorized sending that content to that \
 chat, in the current request or by confirming after you asked. If authorization is missing or \
-ambiguous, ask and wait. user_confirmation records the authorization; it is not permission by itself. \
-One authorization is not ongoing consent. Search, summaries and exports never imply permission to \
-send. A send is attempted once: if its outcome is unknown, check the chat before trying again.
+ambiguous, ask and wait. One authorization is not ongoing consent. Search, summaries and exports \
+never imply permission to send. A send is attempted once: if its outcome is unknown, check the chat \
+before trying again.
 - Pass text (plain, escaped) or html (sent as written: bold, lists, links, code) to send_message, never \
-both. Active HTML (scripts, forms, event handlers, javascript: links) and unfinished markup are refused.
+both. Active HTML (scripts, forms, event handlers, javascript: links), images and other embedded media, \
+declarations and unfinished markup are refused.
 - If a tool says sign-in is required, ask the user to run the quoted `teams-connector auth` command in \
 a terminal; never attempt to sign in yourself. "Access denied" errors are about that item, not the \
 sign-in.
@@ -331,7 +332,8 @@ def build_server(context: AppContext) -> FastMCP:
         ] = None,
     ) -> DownloadedFiles:
         """Save the files a message names (shared files and pasted images) as local files and return their
-        paths. Pass exactly one of message_id or sent_at."""
+        paths. Pass exactly one of message_id or sent_at. A file that cannot be fetched is listed under
+        unavailable with its reason; the others are still saved. SharePoint pages ([Page: …]) are links."""
         if (message_id is None) == (sent_at is None):
             raise InvalidRequest("Pass exactly one of message_id or sent_at.")
         when = _utc(sent_at) if sent_at is not None else None
@@ -346,13 +348,6 @@ def build_server(context: AppContext) -> FastMCP:
         expected_chat_name: Annotated[
             str, Field(description="The chat's exact current name from list_chats; checked before sending.")
         ],
-        user_confirmation: Annotated[
-            str,
-            Field(
-                description="A short quote or record of the user's explicit authorization for this recipient "
-                "and content. Never invent or infer it; it does not authorize anything by itself."
-            ),
-        ],
         text: Annotated[
             str | None,
             Field(description="Plain text, up to 10,000 characters; HTML characters are escaped. Or html."),
@@ -361,7 +356,7 @@ def build_server(context: AppContext) -> FastMCP:
             str | None,
             Field(
                 description="HTML, up to 10,000 characters, sent as written (bold, lists, links, code). "
-                "Active content and unfinished markup are refused. Pass exactly one of text or html."
+                "Active content, images and unfinished markup are refused. Pass exactly one of text or html."
             ),
         ] = None,
     ) -> SendResult:
@@ -373,7 +368,6 @@ def build_server(context: AppContext) -> FastMCP:
             expected_chat_name=expected_chat_name,
             text=text,
             html=html,
-            user_confirmation=user_confirmation,
         )
 
     return mcp

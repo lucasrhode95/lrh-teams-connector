@@ -7,6 +7,7 @@ import json
 import re
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 from teams_connector.domain.models import Attachment, Message
 from teams_connector.remote import chat_events, inline_images, teams_html
@@ -170,6 +171,7 @@ def to_message(raw: dict[str, Any], conversation_id: str) -> Message:
         fingerprint = json.dumps([conversation_id, raw.get("sequenceId"), str(sent_at), author, text])
         message_id = "generated:" + hashlib.sha256(fingerprint.encode()).hexdigest()
     subject = props.get("subject")
+    root = raw.get("rootMessageId")  # set in channels: a reply names its thread's root post
     return Message(
         id=str(message_id),
         conversation_id=conversation_id,
@@ -183,12 +185,27 @@ def to_message(raw: dict[str, Any], conversation_id: str) -> Message:
         is_deleted=is_deleted,
         deleted_at=deleted_at,
         attachments=[*inline, *files],
+        reply_to_id=str(root) if root and str(root) != str(message_id) else None,
     )
 
 
 def file_markers(files: list[Attachment]) -> list[str]:
-    """Marker lines for the message's SharePoint and OneDrive files, shown after its text."""
-    return [f"[File: {item.name}]" for item in files]
+    """Marker lines for the message's SharePoint and OneDrive files, shown after its text. A SharePoint page
+    shows its link: it is a page to open, not a file to download."""
+    return [
+        f"[Page: {item.name}] {item.url}" if item.kind == "link" else f"[File: {item.name}]" for item in files
+    ]
+
+
+def shared_file(name: str, link: str | None, used: set[str], content_type: str | None = None) -> Attachment:
+    """One shared SharePoint or OneDrive item, named by its file name. A SharePoint site page (an ``.aspx``
+    page, such as a news post) is a link only: Graph's sharing route does not serve it as a file."""
+    unique = inline_images.unique_name(name, used)
+    if link and _is_site_page(name, link):
+        return Attachment(name=unique, kind="link", url=link)
+    return Attachment(
+        name=unique, kind="file", source="sharepoint" if link else None, url=link, content_type=content_type
+    )
 
 
 def _files(raw: dict[str, Any], props: dict[str, Any], used: set[str]) -> list[Attachment]:
@@ -207,15 +224,13 @@ def _files(raw: dict[str, Any], props: dict[str, Any], used: set[str]) -> list[A
         file_type = str(item.get("fileType") or item.get("contentType") or "")
         link = url.strip() if isinstance(url, str) and url.strip() else None
         out.append(
-            Attachment(
-                name=inline_images.unique_name(str(name) if name else "file", used),
-                kind="file",
-                source="sharepoint" if link else None,
-                url=link,
-                content_type=file_type if "/" in file_type else None,
-            )
+            shared_file(str(name) if name else "file", link, used, file_type if "/" in file_type else None)
         )
     return out
+
+
+def _is_site_page(name: str, link: str) -> bool:
+    return name.casefold().endswith(".aspx") or "/sitepages/" in urlsplit(link).path.casefold()
 
 
 def _as_items(value: Any) -> list[Any]:

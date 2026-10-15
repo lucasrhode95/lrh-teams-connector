@@ -4,7 +4,8 @@ Adapters (wired in bootstrap.py):
 
 - ChatCatalog: remote/csa.py (Teams Chat Service Aggregator; Graph cannot list chats for this client).
 - ChannelDirectory: remote/graph_teams.py (Graph joined teams and channels).
-- HistoryReader: remote/chat_service.py for chats, remote/graph_teams.py for channels.
+- HistoryReader: remote/chat_service.py for chats (ChatHistoryReader), remote/graph_teams.py for channels
+  (ChannelHistoryReader).
 - MemberReader: remote/chat_service.py for chats, remote/graph_teams.py for channels.
 - People, ChatWriter, FileReader: remote/graph_teams.py. ImageReader: remote/image_readers.py.
 - PresenceReader: remote/presence.py. FavoriteFolders: remote/csa.py (the sidebar folders).
@@ -104,10 +105,23 @@ class ChatMemberHit:
     matching_members: list[Participant]
 
 
+@dataclass(frozen=True)
+class ChatMemberResult:
+    """Teams' named-chat matches for one query. ``truncated``: Teams matched more than were read."""
+
+    hits: list[ChatMemberHit]
+    truncated: bool
+
+
 class ChatMemberSearch(Protocol):
-    async def named_chats(self, text: str) -> list[ChatMemberHit]:
+    async def named_chats(self, text: str) -> ChatMemberResult:
         """Named group and meeting chats matched by a plain name or email, with their matching members.
-        One-on-one chats are not included: they are found by name in the catalog."""
+        One-on-one chats are not included: ``people`` finds them."""
+        ...
+
+    async def people(self, text: str) -> list[Participant]:
+        """The people Teams suggests for a plain name or email, by Entra object id; never the signed-in
+        user. A one-on-one chat's id names both of its people."""
         ...
 
 
@@ -132,6 +146,13 @@ class HistoryReader(Protocol):
 class ChatHistoryReader(HistoryReader, Protocol):
     async def messages_at(self, chat: Chat, sent_at: datetime) -> list[Message]:
         """The messages that arrived at exactly ``sent_at``: one lookup by time, in chats and channels."""
+        ...
+
+
+class ChannelHistoryReader(HistoryReader, Protocol):
+    async def reply(self, chat: Chat, root_id: str, message_id: str) -> Message:
+        """One reply in a channel thread, read through its root post: the root-message route does not
+        answer for replies."""
         ...
 
 

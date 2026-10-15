@@ -216,10 +216,17 @@ class SavedFile(Compact):
     size: int
 
 
+class UnavailableFile(Compact):
+    name: str
+    reason: str
+
+
 class DownloadedFiles(Compact):
-    """The files one download call saved, in the order of the message's attachments."""
+    """The files one download call saved, in the order of the message's attachments, and those it could
+    not fetch. A call that saves none fails instead."""
 
     files: list[SavedFile]
+    unavailable: list[UnavailableFile] = Field(default_factory=list)
 
 
 class ExportRequest(BaseModel):

@@ -107,6 +107,7 @@ class AppContext:
             transport,
             Bearer(account_tokens, "m365.search"),
             anchor_mailbox=f"Oid:{account.object_id}@{account.tenant_id}",
+            me_id=account.object_id,
         )
         catalog = Catalog(
             store,

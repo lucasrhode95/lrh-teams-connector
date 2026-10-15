@@ -75,7 +75,7 @@ The current split ([research](api-research.md#microsoft-graph-with-the-teams-cli
 | Downloading files linked from messages | Graph shares | |
 | Downloading pasted images | AMS, private (full-size views); Graph hosted copies for channel images | AMS holds them and the Skype token reads them ([research](api-research.md#inline-images-ams)); a channel's Graph copy is read with the Graph token |
 | Online message discovery | Search v2 (`m365.search`) | Graph `chatMessage` search is denied to the tested client |
-| Presence of one-on-one peers | Teams Unified Presence, regional, private | Graph presence needs `Presence.Read`, which the client lacks; the regional host answers the `teams.spaces` bearer ([research](api-research.md#presence-through-the-regional-host-2026-10-15)) |
+| Presence of one-on-one peers | Teams Unified Presence, private, at the route AuthZ names (`presenceUPS`) | Graph presence needs `Presence.Read`, which the client lacks; the AuthZ route answers the `teams.spaces` bearer ([research](api-research.md#presence-through-authz-presenceups-2026-10-15)) |
 
 Teams-native services stay where they are richer than Graph: presence, Favorites and read state,
 broad heterogeneous search, and AMS media.
@@ -114,7 +114,7 @@ Teams ([architecture](architecture.md#requests-caching-and-storage)). Downloaded
 | Layer | Surface | Behavior |
 |---|---|---|
 | Conversation filter | Local UI | Filters the loaded catalog in the browser. Typing never calls Teams. |
-| Conversation search | MCP (`search_chats`) | Matches conversation names in the catalog and, with a refresh (the default), the named group and meeting chats Teams matches by a plain name or email, with the members that matched. `refresh=false` searches the cache only. Reports what it could not cover. |
+| Conversation search | MCP (`search_chats`) | Matches conversation names in the catalog and, with a refresh (the default), the named group and meeting chats Teams matches by a plain name or email, with the members that matched, and the one-on-ones with the people Teams suggests for it ([research](api-research.md#people-suggestions-with-teams-webs-request-2026-10-15)). `refresh=false` searches the cache only. Reports what it could not cover; older named chats matched only by a member are a known gap. |
 | Message search | MCP (`search_messages`) | Search v2 on the server, across Teams or scoped to chosen conversations and dates. Takes a list of terms, any of which matches; each term is one phrase, never split and never read as a query operator. Matches words, word prefixes and phrases; returns message ids, totals, pages, and a confirmed zero. No local match modes (decided 2026-10-15).
 
 Calendar events, meeting recaps, transcript lists, transcript content and transcript-text search are
@@ -135,8 +135,9 @@ counts as broad Microsoft 365 search.
 - **Attachments by name** (decided and implemented 2026-10-15): one text extraction serves
   `get_messages`, exports and downloads. Files and pasted images appear in the text as markers with
   names derived from the message; `download_attachment` fetches the named files of one message, at
-  full resolution, to local paths, and fetches each source once. Base64 image data never reaches a
-  response, and nothing is downloaded while reading.
+  full resolution, to local paths, and fetches each source once; a file it cannot fetch is reported
+  while the others are saved. SharePoint pages and meeting recordings are links, not downloads. Base64
+  image data never reaches a response, and nothing is downloaded while reading.
 - **Meeting and membership events** read as one short line each, never as their raw markup. The
   line keeps what Teams shows (a meeting's subject, duration and participants, members who joined or
   left, a new topic) and drops identifiers and flags.
@@ -145,5 +146,6 @@ counts as broad Microsoft 365 search.
   user's unread state in Teams stays as it was. Checked 2026-10-15 on unread meeting chats: after history reads, a download and an export, they were still unread.
 - **Sending** needs the user's explicit authorization for both the recipient and the exact content.
   The current conversation name must match `expected_chat_name`. Text is escaped, sent once, and the
-  server message id is returned. HTML (`html`, decided 2026-10-15) is sent as written after the passive check. Verified live for the self chat, one-on-one and group chats
+  server message id is returned. HTML (`html`, decided 2026-10-15) is sent as written after the passive check, which also refuses
+  images and other embedded media (Teams shows only images it hosts). Verified live for the self chat, one-on-one and group chats
   (2026-10-14); channels and meeting chats are roadmap S3.
