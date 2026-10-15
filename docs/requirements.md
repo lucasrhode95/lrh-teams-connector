@@ -107,7 +107,7 @@ A small local cache of the chat list stays, holding no message text: the catalog
 names worked out for untitled chats, the channels Graph's listing omits, and photo ids. It holds no
 chat member lists; participant matches come from Teams' chat search (roadmap P2.2b). A store from the
 version that kept messages is moved aside, not deleted, on first use, and the catalog is rebuilt from
-Teams ([architecture](architecture.md#requests-caching-and-storage)).
+Teams ([architecture](architecture.md#requests-caching-and-storage)). Downloaded attachments are kept per source for a week, so a repeat download is served from disk; they are files Teams shares, not message text.
 
 ## 7. Search
 
