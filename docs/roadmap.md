@@ -45,9 +45,9 @@ Working behavior that could be cheaper, simpler or better informed.
 probe that day reproduced every step with the existing `teams.graph` token
 ([research](api-research.md#sending-files-not-used-by-the-connector)):
 
-- upload to `Microsoft Teams Chat Files`, renaming on a clash, including 8 MB in one PUT;
+- upload to `Microsoft Teams Chat Files`, renaming on a clash, in one PUT for any file under 250 MiB;
 - `driveItem/invite` with `Prefer: getDefaultLink`, which returned the same specific-people edit link Teams
-  Web gets;
+  Web gets, for one recipient or for all of a group chat's other members in one request;
 - one chat message with several `reference` attachments;
 - `hostedContents` inline images, which Teams stored as AMS images like a paste. Images can therefore use
   Graph too.
@@ -67,8 +67,9 @@ Gaps against Teams Web:
 
 1. Implement it for one-on-one and group chats: grant every member except the sender. Use the access policy
    `default` (`getDefaultLink`); later options could be organization or direct grants.
-2. Find Graph's single-PUT size limit before adding upload sessions.
-
+2. Check each file's size before uploading. A single PUT takes anything under 250 MiB (262,144,000 bytes).
+   Larger files need a Graph upload session. Graph rejects an oversized PUT only after receiving the whole
+   body, with a misleading 499 or 400.
 ### P2.2f — Meeting recaps and transcripts
 
 Four separate capabilities, none implemented: finding recaps, listing a meeting's transcripts,
