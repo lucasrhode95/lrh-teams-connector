@@ -120,8 +120,9 @@ class Attachment(Compact):
 
     name: str
     kind: Literal["file", "image", "link"] = "file"
-    source: Literal["sharepoint", "ams", "graph", "data"] | None = None
-    url: str | None = None  # sharing URL (sharepoint), full-size AMS or Graph hosted-content URL (ams, graph)
+    source: Literal["sharepoint", "ams", "graph", "data", "loop"] | None = None
+    # sharing URL (sharepoint), full-size AMS or Graph hosted-content URL (ams, graph), Loop page link (loop)
+    url: str | None = None
     source_id: str | None = None  # AMS object id (ams, graph) or SHA-256 of the decoded bytes (data)
     content_type: str | None = None
     size: int | None = None

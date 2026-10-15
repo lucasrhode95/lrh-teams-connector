@@ -8,6 +8,7 @@ Graph host.
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -196,6 +197,14 @@ class Graph:
         return await self._transport.get_bytes(
             self._absolute(path), credential=self._credential, headers=PREFER, max_bytes=max_bytes
         )
+
+    async def download_bytes(self, path: str, *, max_bytes: int) -> bytes:
+        """A small GET body that may come through one SharePoint redirect, as ``download`` does."""
+        buffer = io.BytesIO()
+        await self._transport.download(
+            self._absolute(path), buffer, credential=self._credential, headers=PREFER, max_bytes=max_bytes
+        )
+        return buffer.getvalue()
 
     async def download(
         self, path: str, dest: Path, *, max_bytes: int = MAX_DOWNLOAD_BYTES

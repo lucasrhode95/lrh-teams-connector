@@ -139,6 +139,11 @@ counts as broad Microsoft 365 search.
   full resolution, to local paths, and fetches each source once; a file it cannot fetch is reported
   while the others are saved. SharePoint pages and meeting recordings are links, not downloads. Base64
   image data never reaches a response, and nothing is downloaded while reading.
+- **Meeting notes** (decided and implemented 2026-10-15): the meeting app's link to a Loop notes page reads
+  as a `[Meeting notes]` marker with the link. Exports and `download_attachment` read the live page once
+  per call and keep only its agenda and goal, notes, and tasks with assignee and due date, saying when it
+  was read. A page that cannot be read is reported like an unavailable attachment. A page that forbids
+  export must not be exported.
 - **Meeting and membership events** read as one short line each, never as their raw markup. The
   line keeps what Teams shows (a meeting's subject, duration and participants, members who joined or
   left, a new topic) and drops identifiers and flags.

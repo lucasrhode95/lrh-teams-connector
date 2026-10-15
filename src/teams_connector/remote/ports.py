@@ -7,7 +7,8 @@ Adapters (wired in bootstrap.py):
 - HistoryReader: remote/chat_service.py for chats (ChatHistoryReader), remote/graph_teams.py for channels
   (ChannelHistoryReader).
 - MemberReader: remote/chat_service.py for chats, remote/graph_teams.py for channels.
-- People, ChatWriter, FileSharer, FileReader: remote/graph_teams.py. ImageReader: remote/image_readers.py.
+- People, ChatWriter, FileSharer, FileReader, MeetingNotesReader: remote/graph_teams.py. ImageReader:
+  remote/image_readers.py.
 - MessageDeleter: remote/chat_service.py.
 - PresenceReader: remote/presence.py.
 
@@ -79,6 +80,14 @@ class HostedImage:
 def hosted_image_src(number: int) -> str:
     """How a message body names its ``number``-th inline image (1-based)."""
     return f"../hostedContents/{number}/$value"
+
+
+@dataclass(frozen=True)
+class MeetingNotes:
+    """A Loop meeting-notes page as plain text, read at one moment (the page is live)."""
+
+    title: str | None
+    text: str
 
 
 @dataclass(frozen=True)
@@ -209,6 +218,12 @@ class ChatWriter(Protocol):
         """Send once: the HTML ``body``, which names every one of ``images`` (``hosted_image_src``), with
         ``attachments`` after it (``body`` may then be empty). Never retried: an ambiguous outcome raises
         WriteOutcomeUnknown."""
+        ...
+
+
+class MeetingNotesReader(Protocol):
+    async def meeting_notes(self, url: str) -> MeetingNotes:
+        """The content of the Loop page a meeting-notes link names, read now, in one request."""
         ...
 
 

@@ -33,32 +33,19 @@ or more through upload sessions ([architecture](architecture.md#send-a-message),
 
 ### N9 — Meeting notes from Loop pages
 
-When a meeting ends, a "Facilitator" bot posts a link to the meeting's Loop notes page: agenda and goal,
-notes, and a task table. Today the connector shows the sentence and the link only. Graph converts the page
-to HTML ([research](api-research.md#loop-pages-and-meeting-notes)).
+The meeting app's notes link reads as a marker, and exports and `download_attachment` read the page as
+text ([architecture](architecture.md#exports)). Still open:
 
-- **Reading (`get_messages`):** show a marker and fetch nothing, as for files: `[Meeting notes: <page
-  name>] <link>` instead of the bot's sentence. Detect it by the `FluidAutoEmbedLink` item with a `/:fl:/`
-  link.
-- **Exports and `download_attachment`:** fetch `content?format=html` once and keep only the valid content,
-  as plain text after the message:
-  - the agenda and goal;
-  - the notes, under their headings;
-  - each task with its assignee and due date.
-
-  Drop the AI disclaimer and its link, the empty paragraphs, the checkboxes and the "Task list category"
-  labels. `download_attachment` saves the cleaned notes as a text file.
-- **Failures:** a page that cannot be read (no access, deleted, a conversion error) is reported like an
-  unavailable attachment, and the message text stays.
-- **Freshness:** the page is live, so the export shows the notes as they are at export time; say so in the
-  output.
 - **Restrictions:** Teams Web checks `opStream/capabilities` (`canExport`, `canExtract`) before showing a
-  page. Respect them: a page that forbids export is reported, not fetched. Find out whether Graph's
-  `?format=html` already refuses such pages, or whether the connector must check, which needs a
-  SharePoint-audience token.
-- **Open:**
-  - Do Loop components that people paste into a chat use the same embed? Handle them the same way if so.
-  - Should the PDF (`?format=pdf`) be offered as the downloaded file instead of text?
+  page. Find out whether Graph's `?format=html` refuses a page that forbids export. If it does not, the
+  connector must check, which needs a SharePoint-audience token: a new shared auth profile, for the user
+  to decide.
+- **Pasted Loop components:** do they use the same embed? A person's message with one keeps its text and
+  link today; handle it like the notes if the page converts the same way.
+- **Page name in the marker:** the app's message carries no page name, so reading shows
+  `[Meeting notes] <link>`; the title appears only once the page is read. Is there a name to show without
+  reading the page?
+- Should the PDF (`?format=pdf`) be offered as the downloaded file instead of text?
 
 ### P2.2f — Meeting recaps and transcripts
 

@@ -2,7 +2,8 @@
 
 1. Read each chat's selection from Teams page by page, newest first, and spool each page's records to the
    export's own temporary file (bounded by the latest-N limit). Each downloadable attachment gets its final
-   name here, so the text already names the file written beside it.
+   name here, so the text already names the file written beside it. Meeting notes are read here too, once
+   per page link, and written as text after their message.
 2. Write each chat's file oldest first by copying the spooled pages in reverse. The attachments are fetched
    through the download cache and written beside the text under those names; one that cannot be fetched is
    marked in the text instead.
@@ -85,7 +86,9 @@ class Exports:
                 stem = self._unique_stem(chat, used)
                 spool = work / f"{stem}.spool"
                 text_name = f"{stem}{suffix}"
-                spans, references, written = await self._spool(chat, request, spool, report, state, text_name)
+                spans, references, written, notes = await self._spool(
+                    chat, request, spool, report, state, text_name
+                )
                 text_path = work / f"{stem}{suffix}"
                 report(phase="writing", chat_index=index)
                 self._assemble(chat, text_path, spool, spans, request, exported_at, written, report, state)
@@ -100,7 +103,9 @@ class Exports:
                     attachments_downloaded,
                     attachments_failed,
                 )
-                attachments_total += total
+                downloaded += notes.count(True)
+                failed += notes.count(False)
+                attachments_total += total + len(notes)
                 attachments_downloaded += downloaded
                 attachments_failed += failed
                 outputs.append(per_chat)
@@ -146,14 +151,16 @@ class Exports:
         report: Callable[..., None],
         state: ExportProgress,
         text_name: str,
-    ) -> tuple[list[Span], dict[str, Attachment], int]:
+    ) -> tuple[list[Span], dict[str, Attachment], int, list[bool]]:
         """Read the selection from Teams, newest page first, and spool each page's records. Returns the page
-        spans, the attachments the messages reference by their final names, and the message count. The chat's
-        own file name is taken first, so no attachment can replace it in the ZIP."""
+        spans, the attachments the messages reference by their final names, the message count, and whether
+        each meeting-notes page could be read. The chat's own file name is taken first, so no attachment can
+        replace it in the ZIP."""
         spans: list[Span] = []
         references: dict[str, Attachment] = {}
         names: dict[tuple[str, str], str] = {}
         used: set[str] = {text_name.casefold()}
+        notes: dict[str, str | None] = {}  # page link -> the notes as text, or None when unreadable
         written = 0
         with spool.open("wb") as output:
             async for page in self._history.selection(
@@ -161,6 +168,8 @@ class Exports:
             ):
                 start = output.tell()
                 for message in page:
+                    if request.include_attachments:
+                        await self._add_meeting_notes(message, notes)
                     _name_attachments(message, names, used, references)
                     record = (
                         formatter.txt_message(message)
@@ -174,7 +183,27 @@ class Exports:
                     pages_fetched=state.pages_fetched + 1,
                     messages_retrieved=state.messages_retrieved + len(page),
                 )
-        return spans, references, written
+        return spans, references, written, [value is not None for value in notes.values()]
+
+    async def _add_meeting_notes(self, message: Message, notes: dict[str, str | None]) -> None:
+        """Put each meeting-notes page the message links to after its marker, read once per export; a page
+        that cannot be read is marked unavailable, as an attachment would be."""
+        for item in message.attachments:
+            if item.source != "loop" or not item.url:
+                continue
+            if item.url not in notes:
+                try:
+                    notes[item.url] = await self._files.meeting_notes(item.url)
+                except ConnectorError:
+                    notes[item.url] = None
+            marker = f"[Meeting notes] {item.url}"
+            document = notes[item.url]
+            replacement = (
+                f"[Attachment unavailable: {item.name}] {item.url}"
+                if document is None
+                else f"{marker}\n{document}"
+            )
+            message.text = message.text.replace(marker, replacement)
 
     def _assemble(
         self,
@@ -264,7 +293,7 @@ def _name_attachments(
     """Give each downloadable attachment one name for this export. A source keeps its name wherever it
     appears; a different source whose name is taken gets a number. The marker is renamed to match."""
     for index, attachment in enumerate(message.attachments):
-        if attachment.source is None:
+        if attachment.source is None or attachment.source == "loop":  # notes go in the text instead
             continue
         key = (attachment.source, attachment.source_id or attachment.url or attachment.name)
         final = names.get(key)
