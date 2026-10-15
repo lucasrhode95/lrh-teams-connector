@@ -8,6 +8,7 @@ Graph host.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -74,21 +75,32 @@ class Graph:
         data = await self._transport.json("GET", url, credential=self._credential, headers=PREFER)
         return data if isinstance(data, dict) else {}
 
-    async def post(self, path: str, body: Any, *, idempotent: bool) -> tuple[dict[str, Any], dict[str, str]]:
-        """POST JSON. Read-style POSTs ($batch) are idempotent and retried; writes are sent once."""
+    async def post(
+        self, path: str, body: Any, *, idempotent: bool, prefer: str | None = None
+    ) -> tuple[dict[str, Any], dict[str, str]]:
+        """POST JSON. Read-style POSTs ($batch) are idempotent and retried; writes are sent once. ``prefer``
+        replaces the default ``Prefer`` header."""
         response = await self._transport.request(
             "POST",
             self._absolute(path),
             credential=self._credential,
-            headers=PREFER,
+            headers={"Prefer": prefer} if prefer else PREFER,
             json_body=body,
             retry=idempotent,
         )
-        try:
-            data = response.json() if response.content.strip() else {}
-        except ValueError:
-            data = {}
-        return (data if isinstance(data, dict) else {}), dict(response.headers)
+        return _json_object(response.content), dict(response.headers)
+
+    async def put_content(self, path: str, data: bytes) -> dict[str, Any]:
+        """PUT raw bytes (a file's content). A write: sent once, never retried."""
+        response = await self._transport.request(
+            "PUT",
+            self._absolute(path),
+            credential=self._credential,
+            headers={"Content-Type": "application/octet-stream"},
+            content=data,
+            retry=False,
+        )
+        return _json_object(response.content)
 
     async def page(
         self, path_or_link: str, params: Mapping[str, Any] | None = None
@@ -180,6 +192,15 @@ class Graph:
             return await self._transport.download(
                 self._absolute(path), handle, credential=self._credential, headers=PREFER, max_bytes=max_bytes
             )
+
+
+def _json_object(content: bytes) -> dict[str, Any]:
+    """A write's JSON body as an object; an empty or non-object body is an empty object."""
+    try:
+        data = json.loads(content) if content.strip() else {}
+    except ValueError:
+        data = {}
+    return data if isinstance(data, dict) else {}
 
 
 def _retry_after(headers: Mapping[str, str]) -> float:

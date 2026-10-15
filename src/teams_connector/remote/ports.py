@@ -7,7 +7,7 @@ Adapters (wired in bootstrap.py):
 - HistoryReader: remote/chat_service.py for chats (ChatHistoryReader), remote/graph_teams.py for channels
   (ChannelHistoryReader).
 - MemberReader: remote/chat_service.py for chats, remote/graph_teams.py for channels.
-- People, ChatWriter, FileReader: remote/graph_teams.py. ImageReader: remote/image_readers.py.
+- People, ChatWriter, FileSharer, FileReader: remote/graph_teams.py. ImageReader: remote/image_readers.py.
 - PresenceReader: remote/presence.py.
 
 Swapping an adapter (another tenant, a policy change) must not change anything above this file.
@@ -15,6 +15,7 @@ Swapping an adapter (another tenant, a policy change) must not change anything a
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -51,6 +52,18 @@ class HistoryPage:
 class SendReceipt:
     message_id: str | None
     sent_at: datetime | None
+
+
+@dataclass(frozen=True)
+class UploadedFile:
+    """A file uploaded to the sender's OneDrive for a message. ``attachment_id`` is the GUID of its eTag,
+    which Graph's ``reference`` attachment and the body's ``<attachment>`` tag must share."""
+
+    item_id: str
+    drive_id: str
+    name: str
+    web_url: str
+    attachment_id: str
 
 
 @dataclass(frozen=True)
@@ -170,9 +183,22 @@ class PresenceReader(Protocol):
 
 
 class ChatWriter(Protocol):
-    async def send(self, chat: Chat, content: str, *, as_html: bool) -> SendReceipt:
-        """Send once: ``content`` as plain text, or as HTML sent as written when ``as_html``. Never retried:
-        an ambiguous outcome raises WriteOutcomeUnknown."""
+    async def send(
+        self, chat: Chat, content: str, *, as_html: bool, attachments: Sequence[UploadedFile] = ()
+    ) -> SendReceipt:
+        """Send once: ``content`` as plain text, or as HTML sent as written when ``as_html``, referencing
+        ``attachments`` (``content`` may then be empty). Never retried: an ambiguous outcome raises
+        WriteOutcomeUnknown."""
+        ...
+
+
+class FileSharer(Protocol):
+    async def upload(self, path: Path) -> UploadedFile:
+        """Upload one local file to the sender's chat-files folder, renaming on a name clash. Sent once."""
+        ...
+
+    async def share(self, file: UploadedFile, recipients: Sequence[str]) -> None:
+        """Grant people (Entra object ids) access to an uploaded file without notifying them. Sent once."""
         ...
 
 

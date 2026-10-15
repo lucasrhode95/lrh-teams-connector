@@ -241,7 +241,7 @@ The connector sends through Graph, which returns the new id in its body. Chat Se
 | `DELETE …/messages/{messageId}?behavior=softDelete` | Delete; undo is `DELETE …/messages/{messageId}/properties?name=deletetime` | Capture, 2026-10-14 |
 | `PUT` / `DELETE …/messages/{messageId}/properties?name=emotions` | Add or remove a reaction: `{"emotions": {"key": "like", "value": "<messageId>"}}` | Third party |
 | `POST /v1/users/ME/drafts` | Scheduled message: `draftType: "ScheduledDraft"`, `innerThreadId`, `draftDetails.sendAt` | Third party |
-| `POST /v1/threads/{threadId}/files` | Thread file reference (Source, 2026-10-01); no file send called it ([sending files](#sending-files-not-used-by-the-connector)) | Capture, 2026-10-15 |
+| `POST /v1/threads/{threadId}/files` | Thread file reference (Source, 2026-10-01); no file send called it ([sending files](#sending-files)) | Capture, 2026-10-15 |
 | `GET /v1/users/ME/properties`, `GET /v1/threads/{id}/consumptionhorizons` | User properties; read horizons | Third party; Capture |
 
 ## Message content
@@ -429,7 +429,7 @@ people, sending and files ([requirements](requirements.md#4-backend-choice)).
   encoded in them.
 - **File and image sends (2026-10-15):** OneDrive upload, `driveItem/invite` and chat messages with
   `reference` attachments or `hostedContents` all work with this token
-  ([sending files](#sending-files-not-used-by-the-connector)).
+  ([sending files](#sending-files)).
 - **`/me/joinedTeams` (2026-10-12):** `$top` is refused with 400 (`Query option 'Top' is not allowed`).
 
 ## Search v2 and Substrate suggestions
@@ -548,7 +548,7 @@ Shared files live in SharePoint or OneDrive; a message names them in `properties
 Beyond the documentation (live, 2026-10-15): a SharePoint site page (`.aspx`, such as a news post) shared in
 a message is refused by `/shares` with HTTP 400, so it is a link, not a file.
 
-### Sending files (not used by the connector)
+### Sending files
 
 Teams Web, Capture 2026-10-15: a one-on-one and a four-member group chat, a repeated name, an 8 MB file and an
 existing OneDrive file. Channel sends were not captured. The OneDrive calls use a Teams Web client
@@ -585,7 +585,7 @@ Not seen in any send: `createLink`, `POST /v1/threads/{id}/files`, or Graph. The
 SharePoint's own page (`sharedialog.aspx`, SharePoint REST `GetSharingInformation` and `ShareLink`), not
 part of a send.
 
-**Through Graph, live 2026-10-15.** Teams client `teams.graph` token. Three sends each to two one-on-one
+**Through Graph, live 2026-10-15; the connector's route.** Teams client `teams.graph` token. Three sends each to two one-on-one
 chats gave the same results in both. One send went to a group chat, and its message was deleted right
 afterwards. Each write was made once.
 

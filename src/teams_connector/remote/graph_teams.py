@@ -1,4 +1,5 @@
-"""Microsoft Graph adapters: channels, channel history and members, people, photos, sending, files.
+"""Microsoft Graph adapters: channels, channel history and members, people, photos, sending (with files),
+shared files.
 
 Live evidence (docs/api-research.md, "Microsoft Graph with the Teams client"): with the Teams
 client, Graph serves channels (more completely than the private catalog), people, photos, shared
@@ -10,15 +11,22 @@ from __future__ import annotations
 import asyncio
 import base64
 import html
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from teams_connector.domain.errors import InvalidRequest, NotFound
+from teams_connector.domain.errors import InvalidRequest, NotFound, Upstream
 from teams_connector.domain.models import Chat, Message, Participant
 from teams_connector.remote import graph_mapping
 from teams_connector.remote.graph import Graph, relative, segment, sub_failure
-from teams_connector.remote.ports import HistoryPage, RemoteFile, SendReceipt, SharedFile
+from teams_connector.remote.ports import (
+    HistoryPage,
+    RemoteFile,
+    SendReceipt,
+    SharedFile,
+    UploadedFile,
+)
 from teams_connector.remote.transport import operation
 
 CHANNEL_PAGE = 50  # threads per page (Graph maximum for channel messages)
@@ -241,28 +249,89 @@ def _paragraph(text: str) -> str:
 
 
 class GraphWriter:
-    """ChatWriter over Graph: chats via /chats/{id}/messages, channel posts via the team channel."""
+    """ChatWriter over Graph: chats via /chats/{id}/messages, channel posts via the team channel. Files go
+    as ``reference`` attachments, each matched by an ``<attachment>`` tag in the body."""
 
     def __init__(self, graph: Graph) -> None:
         self._graph = graph
 
-    async def send(self, chat: Chat, content: str, *, as_html: bool) -> SendReceipt:
-        body = content if as_html else _paragraph(content)
+    async def send(
+        self, chat: Chat, content: str, *, as_html: bool, attachments: Sequence[UploadedFile] = ()
+    ) -> SendReceipt:
+        body = content if as_html or not content else _paragraph(content)
+        body += "".join(f'<attachment id="{file.attachment_id}"></attachment>' for file in attachments)
         if chat.kind == "channel":
             if not chat.team_id:
                 raise InvalidRequest(f"Channel {chat.id} has no team; refresh the chat list.")
             path = f"/teams/{segment(chat.team_id)}/channels/{segment(chat.id)}/messages"
         else:
             path = f"/chats/{segment(chat.id)}/messages"
+        payload: dict[str, Any] = {"body": {"contentType": "html", "content": body}}
+        if attachments:
+            payload["attachments"] = [
+                {"id": f.attachment_id, "contentType": "reference", "contentUrl": f.web_url, "name": f.name}
+                for f in attachments
+            ]
         with operation("sending the message"):
-            data, _ = await self._graph.post(
-                path, {"body": {"contentType": "html", "content": body}}, idempotent=False
-            )
+            data, _ = await self._graph.post(path, payload, idempotent=False)
         message_id = data.get("id")
         return SendReceipt(
             message_id=str(message_id) if message_id else None,
             sent_at=graph_mapping.created(data),
         )
+
+
+class GraphFileSharer:
+    """FileSharer over Graph, as Teams Web sends a file (docs/api-research.md, "Sending files"): upload to
+    the sender's OneDrive chat-files folder, then ``driveItem/invite`` without an invitation email.
+
+    ``access`` is config.SHARED_FILE_ACCESS: "chat_default" asks for the tenant's default link
+    (``Prefer: getDefaultLink``), "direct" grants each person access without a link.
+    """
+
+    def __init__(self, graph: Graph, *, folder: str, access: Literal["chat_default", "direct"]) -> None:
+        self._graph = graph
+        self._folder = folder
+        self._access = access
+
+    async def upload(self, path: Path) -> UploadedFile:
+        """One single-request upload (Graph takes up to 250 MiB minus one byte this way)."""
+        target = f"/me/drive/root:/{segment(self._folder)}/{segment(path.name)}:/content"
+        with operation("uploading a file"):
+            item = await self._graph.put_content(
+                f"{target}?@microsoft.graph.conflictBehavior=rename", path.read_bytes()
+            )
+        return _uploaded(item)
+
+    async def share(self, file: UploadedFile, recipients: Sequence[str]) -> None:
+        body = {
+            "recipients": [{"objectId": oid} for oid in recipients],
+            "roles": ["write"],
+            "requireSignIn": True,
+            "sendInvitation": False,
+        }
+        prefer = "getDefaultLink" if self._access == "chat_default" else None
+        with operation("sharing a file"):
+            await self._graph.post(
+                f"/drives/{segment(file.drive_id)}/items/{segment(file.item_id)}/invite",
+                body,
+                idempotent=False,
+                prefer=prefer,
+            )
+
+
+def _uploaded(item: dict[str, Any]) -> UploadedFile:
+    """The uploaded drive item. Its eTag (``"{GUID},n"``) names the attachment."""
+    parent = item.get("parentReference")
+    drive_id = parent.get("driveId") if isinstance(parent, dict) else None
+    fields = (item.get("id"), drive_id, item.get("name"), item.get("webUrl"), item.get("eTag"))
+    if not all(isinstance(value, str) and value for value in fields):
+        raise Upstream("Graph accepted the upload but did not describe the uploaded file.")
+    item_id, drive, name, web_url, etag = (str(value) for value in fields)
+    guid = etag.strip('"').split(",")[0].strip("{}").lower()
+    if not _is_object_id(guid):
+        raise Upstream("Graph accepted the upload but its version tag has no file id.")
+    return UploadedFile(item_id=item_id, drive_id=drive, name=name, web_url=web_url, attachment_id=guid)
 
 
 class GraphFiles:

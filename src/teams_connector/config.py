@@ -1,9 +1,10 @@
-"""Product names, local data location, and fixed public Teams service URLs."""
+"""Product names, local data location, fixed public Teams service URLs, and file-send settings."""
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Literal
 
 APP_NAME = "lrh-teams-connector"
 CLI_NAME = "teams-connector"
@@ -15,6 +16,14 @@ SEARCH_URL = "https://outlook.office.com/searchservice/api/v2/query"
 PEOPLE_SUGGESTIONS_URL = "https://substrate.office.com/search/api/v1/suggestions?scenario=powerbar"
 AUTHZ_URL = "https://authsvc.teams.microsoft.com/v1.0/authz"
 CSA_UPDATES_URL = "https://teams.microsoft.com/api/csa/api/v1/teams/users/me/updates"
+
+# Files sent with a message go to this folder of the sender's OneDrive, as Teams Web does. Teams may
+# use a localized name in other tenants.
+CHAT_FILES_FOLDER = "Microsoft Teams Chat Files"
+# Who may open a sent file: "chat_default" gives the chat's other members the tenant's default link
+# (Teams Web's behavior; specific people, edit, when checked); "direct" grants each of them edit access
+# without a link. Neither notifies anyone.
+SHARED_FILE_ACCESS: Literal["chat_default", "direct"] = "chat_default"
 
 
 def data_dir() -> Path:

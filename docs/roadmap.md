@@ -22,54 +22,27 @@ Working behavior that could be cheaper, simpler or better informed.
 
 ### P1.5 — Send host files as attachments
 
-`send_message` sends text only. Decided 2026-10-15:
+Files on `send_message` work for one-on-one and group chats (implemented 2026-10-15; see
+[architecture](architecture.md#send-a-message)): Graph upload to `config.CHAT_FILES_FOLDER`, a
+`driveItem/invite` per file following `config.SHARED_FILE_ACCESS`, then one post with `reference`
+attachments. The 2026-10-15 probes of these Graph calls were confirmed by their recipients
+([research](api-research.md#sending-files)). Open:
 
-- **Shape:** an optional list of host file paths on `send_message`, beside `text` or `html`. One
-  authorization covers the recipient, the text and the files. Any readable path the user approves.
-- **Automatic, like Teams:** the caller names files only. The connector uploads each one to the sender's
-  OneDrive `Microsoft Teams Chat Files` folder (renaming on a clash), grants the conversation's other members
-  access, and posts the message referencing the files
-  ([research](api-research.md#sending-files-not-used-by-the-connector)).
-- **Access:** the tenant default Teams reads for the file: for chats on 2026-10-15, edit rights for the
-  specific people in the chat. Keep this behind one policy setting so "anyone in the organization" or a
-  fixed "chat members only" can replace it.
-- **Several files, all or nothing:** every upload and grant finishes before the post. If one fails, nothing
-  is posted.
-- **Partial outcomes:** if the files were uploaded but the post failed or is uncertain, report the uploaded
-  files and their links. Never retry the post, and never delete the uploads.
-- **Order:** one-on-one and group chats first. Channels upload to the team's SharePoint folder instead and
-  come later. Pasted images (AMS upload, `<img>` in the HTML) follow files; until then, HTML sends keep
-  refusing `<img>`.
+- **First connector send:** check that the implementation matches the probes, with a file to a chat whose
+  recipient agrees, as in S3.
+- **Files of 250 MiB or more:** refused today. A single PUT takes at most 262,143,999 bytes; larger files
+  need a Graph upload session (`createUploadSession`, then ranged PUTs to its `uploadUrl`).
+- **Pasted images:** `hostedContents` (`<img src="../hostedContents/1/$value">`) was stored as an AMS image,
+  as a paste is. Once implemented, HTML sends can stop refusing such an `<img>`.
+- **Other conversations:**
+  - Channels store files in the team's SharePoint folder instead.
+  - Meeting chats and the self chat are untried with Graph `reference` attachments; the self chat has no
+    one to share with.
+- **Known gaps against Teams Web:**
+  - Graph attachments leave `permissionScope` and `shareUrl` empty; recipients saw no difference.
+  - Graph cannot read the chat-audience default (`driveItem/commands`); `getDefaultLink` matched it on one
+    tenant.
 
-**Route: Graph**, which the user chose on 2026-10-15 provided it can do what the Teams UI does. A live
-probe that day reproduced every step with the existing `teams.graph` token
-([research](api-research.md#sending-files-not-used-by-the-connector)):
-
-- upload to `Microsoft Teams Chat Files`, renaming on a clash, in one PUT for any file under 250 MiB;
-- `driveItem/invite` with `Prefer: getDefaultLink`, which returned the same specific-people edit link Teams
-  Web gets, for one recipient or for all of a group chat's other members in one request;
-- one chat message with several `reference` attachments;
-- `hostedContents` inline images, which Teams stored as AMS images like a paste. Images can therefore use
-  Graph too.
-
-Both recipients opened every file and saw normal file cards and previews, and neither received an
-invitation email.
-
-Gaps against Teams Web:
-
-- Chat Service stores a Graph attachment with `permissionScope` and `shareUrl`/`shareId` empty, because a
-  Graph attachment has no field for them. The recipients saw no difference.
-- Graph has no route for the chat-audience default Teams reads (`driveItem/commands` with
-  `audienceType="chat"`). The invite's `getDefaultLink` returned the same answer on this tenant, but
-  nothing shows the two always agree.
-
-**Next:**
-
-1. Implement it for one-on-one and group chats: grant every member except the sender. Use the access policy
-   `default` (`getDefaultLink`); later options could be organization or direct grants.
-2. Check each file's size before uploading. A single PUT takes anything under 250 MiB (262,144,000 bytes).
-   Larger files need a Graph upload session. Graph rejects an oversized PUT only after receiving the whole
-   body, with a misleading 499 or 400.
 ### P2.2f — Meeting recaps and transcripts
 
 Four separate capabilities, none implemented: finding recaps, listing a meeting's transcripts,

@@ -194,12 +194,20 @@ class MessageSearchResult(Compact):
 # ---------------------------------------------------------------------------------------------- writes
 
 
+class SentFile(Compact):
+    """A file sent with a message: its name in the sender's OneDrive (renamed on a clash) and its link."""
+
+    name: str
+    url: str
+
+
 class SendResult(Compact):
     conversation_id: str
     chat_name: str
     message_id: str | None = None
     sent_at: datetime | None = None
     characters: int
+    files: list[SentFile] = Field(default_factory=list)
     status: Literal["accepted"] = "accepted"
 
 
