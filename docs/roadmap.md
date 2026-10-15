@@ -105,14 +105,6 @@ Unified Presence `v1/presence/getpresence/`
 ([research](api-research.md#teams-web-source-build-26091712222)). Check it with app-owned sign-in.
 Cache it briefly, fail open, and never block chat listing.
 
-### N6 — Favorites
-
-`GET {csa}/api/v1/teams/users/me/conversationFolders` returns the sidebar folders, including
-`Favorites` with its chats, using the CSA credential the connector already has
-([research](api-research.md#sidebar-folders-live)). Old pinned chats were migrated into Favorites.
-Expose the Favorites folder (for example a `favorite` flag in `list_chats`), behind a setting until
-checked on more accounts. Do not infer it from `isSticky`.
-
 ## Validation
 
 ### P1.1 — Catalog against the Teams UI

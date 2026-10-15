@@ -91,6 +91,8 @@ broad heterogeneous search, and AMS media.
   [implementation decisions](api-research.md#implementation-decisions).
 - The catalog answers from the local store for up to ten minutes; an explicit refresh waits for
   Teams.
+- Favorites: with `TEAMS_CONNECTOR_FAVORITES` set to `1`, the chats in the Teams Favorites folder are marked;
+  the setting is off by default until the folder is checked on more accounts.
 
 ## 6. Local data (decided 2026-10-14)
 

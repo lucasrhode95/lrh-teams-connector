@@ -48,6 +48,9 @@ class Chat(Compact):
     unread: bool | None = None
     is_empty: bool | None = None  # the catalog reports no messages
     photo_user_id: str | None = None  # the person whose photo represents the chat (self, one-on-one peer)
+    favorite: bool | None = (
+        None  # in the Teams Favorites folder; reported only when TEAMS_CONNECTOR_FAVORITES is on
+    )
 
 
 class Participant(Compact):

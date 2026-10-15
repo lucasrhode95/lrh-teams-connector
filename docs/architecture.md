@@ -144,7 +144,9 @@ diagnostics.
 1. Call `list_chats` to browse current chats and channels. It returns up to 50 items by default,
    supports `limit` up to 200 and opaque continuation `cursor`, and can filter by `kind`. A cached
    catalog up to ten minutes old may answer unless `refresh=true`. `coverage.source` identifies
-   whether the response used the local catalog or a refresh.
+   whether the response used the local catalog or a refresh. With `TEAMS_CONNECTOR_FAVORITES` set to `1`,
+   `favorite` marks the chats in the Teams Favorites folder, read with each refresh; the setting is off by
+   default.
 2. Use `search_chats` to match a conversation name. With `refresh=true` (the default) it also
    asks Teams for named group and meeting chats that match a plain name or email, and lists the members
    that matched. Read the coverage notes: one-on-one chats are matched by name, and a query with query
