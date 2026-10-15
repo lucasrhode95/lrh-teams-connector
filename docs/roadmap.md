@@ -12,11 +12,42 @@ Snapshot **2026-10-15**.
 Write each bug as **Seen** (a synthetic example: the call and what came back), **Expected**,
 **Cause** and **Fix**.
 
-None open.
+### B4 — Export UI: the attachments checkbox sits above its label
+
+- **Seen:** in the export UI, the "Include message attachments" checkbox shows on its own line, with its
+  text on the line below.
+- **Expected:** the checkbox and its text on one line, like any checkbox.
+- **Cause:** `app.css` styles every `label` as `display: grid; gap: 6px` (for the stacked filter fields),
+  and the checkbox is wrapped in a plain `label`, so the input and its `<span>` become two grid rows.
+- **Fix:** give checkbox labels their own class, laid out inline (`display: flex; align-items: center;
+  gap: 8px`), and keep the grid rule for field labels only.
 
 ## Improvements
 
 Working behavior that could be cheaper, simpler or better informed.
+
+### U1 — Date picker: match the Outlook connector
+
+The export UI's date-range picker differs from `lrh-outlook-connector`'s, though both are the same
+custom calendar. Make Teams behave like Outlook, keeping only differences one product needs.
+
+| Behavior | Teams today | Outlook |
+|---|---|---|
+| First weekday | Monday | Sunday |
+| Empty range label | "Unlimited" | "Any date" |
+| Future dates | selectable | disabled |
+| Second click before the start | restarts the range there | swaps, making the range from that day to the start |
+| After the second click | the calendar closes | stays open until Done |
+| Today button | none | jumps to the current month |
+| Clear outside the calendar | none | a × beside the toggle |
+| Hint text | "Click once for one day…" | none |
+| Keyboard and focus | none | focuses the chosen day; Escape and Done return focus to the toggle |
+| Changing month | arrows only | arrows, mouse wheel and swipe |
+| Placement | always opens the same way | opens to whichever side has room |
+| Day state for assistive tech | none | `aria-pressed` on days in the range |
+
+Decide the first weekday deliberately (Outlook's Sunday or a locale-based one) and change both connectors
+together if it changes.
 
 ## Enhancements
 
