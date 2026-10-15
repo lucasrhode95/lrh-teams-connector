@@ -143,8 +143,9 @@ class People(Protocol):
 
 
 class ChatWriter(Protocol):
-    async def send(self, chat: Chat, text: str) -> SendReceipt:
-        """Send plain text once. Never retried: an ambiguous outcome raises WriteOutcomeUnknown."""
+    async def send(self, chat: Chat, content: str, *, as_html: bool) -> SendReceipt:
+        """Send once: ``content`` as plain text, or as HTML sent as written when ``as_html``. Never retried:
+        an ambiguous outcome raises WriteOutcomeUnknown."""
         ...
 
 

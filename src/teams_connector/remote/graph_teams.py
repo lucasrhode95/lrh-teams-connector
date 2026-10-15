@@ -222,15 +222,20 @@ class GraphPeople:
         return content, kind
 
 
+def _paragraph(text: str) -> str:
+    """Plain text as one paragraph: escaped, with each line break kept as ``<br>``."""
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    return "<p>" + "<br>".join(html.escape(line, quote=False) for line in lines) + "</p>"
+
+
 class GraphWriter:
     """ChatWriter over Graph: chats via /chats/{id}/messages, channel posts via the team channel."""
 
     def __init__(self, graph: Graph) -> None:
         self._graph = graph
 
-    async def send(self, chat: Chat, text: str) -> SendReceipt:
-        lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-        content = "<p>" + "<br>".join(html.escape(line, quote=False) for line in lines) + "</p>"
+    async def send(self, chat: Chat, content: str, *, as_html: bool) -> SendReceipt:
+        body = content if as_html else _paragraph(content)
         if chat.kind == "channel":
             if not chat.team_id:
                 raise InvalidRequest(f"Channel {chat.id} has no team; refresh the chat list.")
@@ -239,7 +244,7 @@ class GraphWriter:
             path = f"/chats/{segment(chat.id)}/messages"
         with operation("sending the message"):
             data, _ = await self._graph.post(
-                path, {"body": {"contentType": "html", "content": content}}, idempotent=False
+                path, {"body": {"contentType": "html", "content": body}}, idempotent=False
             )
         message_id = data.get("id")
         return SendReceipt(
