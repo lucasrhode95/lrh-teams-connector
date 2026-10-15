@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import zipfile
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -168,7 +169,9 @@ async def test_latest_n_and_dates_and_deleted_marker(services: Services, fake: F
     )
     text = Path(artifact.path).read_text(encoding="utf-8")
     assert "First hello" not in text and artifact.message_count == 2
-    assert "[Soft deleted at 2026-09-04T00:00:00.000Z]" in text and "notes.txt" in text  # retained text
+    assert (
+        "[Soft deleted at 2026-09-04T00:00:00.000Z]" in text and "notes.txt" not in text
+    )  # Teams keeps no text
 
 
 async def test_several_chats_always_return_outer_zip_and_jsonl(services: Services) -> None:
@@ -193,8 +196,7 @@ async def test_several_chats_always_return_outer_zip_and_jsonl(services: Service
     assert [r["id"] for r in lines] == ["5003", "5001", "5002"] and lines[2]["reply_to_id"] == "5001"
 
 
-async def test_download_attachment_of_an_archived_message(services: Services) -> None:
-    await services.history.get_messages(ONE)
+async def test_download_attachment_reads_its_message_from_teams(services: Services) -> None:
     saved = await services.files.download_attachment(ONE, "1003")
     assert Path(saved.path).read_bytes() == b"shared notes" and saved.name == "notes.txt"
     with pytest.raises(NotFound):
@@ -206,19 +208,25 @@ async def test_cancelled_export_during_fetch_publishes_no_file(
 ) -> None:
     entered = asyncio.Event()
     export_dir = tmp_path / "exports"
-    monkeypatch.setattr(localfiles, "kept_dir", lambda _: export_dir)
 
-    async def wait_for_cancel(*_: object, **__: object) -> None:
+    def kept(_: str) -> Path:
+        export_dir.mkdir(parents=True, exist_ok=True)
+        return export_dir
+
+    monkeypatch.setattr(localfiles, "kept_dir", kept)
+
+    async def wait_for_cancel(*_: object, **__: object) -> AsyncIterator[list[object]]:
         entered.set()
         await asyncio.Future()
+        yield []  # never reached: the read waits until the export is cancelled
 
-    monkeypatch.setattr(services.history, "fetch_range", wait_for_cancel)
+    monkeypatch.setattr(services.history, "selection", wait_for_cancel)
     task = asyncio.create_task(services.exports.export(ExportRequest(conversation_ids=[ONE])))
     await entered.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert not export_dir.exists()
+    assert list(export_dir.iterdir()) == []
 
 
 def test_failed_zip_packaging_removes_the_partial_output(

@@ -186,7 +186,7 @@ def build_server(context: AppContext) -> FastMCP:
             Field(description="Continuation; it restores the original options, which are then ignored."),
         ] = None,
     ) -> MessagePage:
-        """One page of a conversation's history (Teams merged with the local archive), oldest first within
+        """One page of a conversation's history ), oldest first within
         the page; the cursor continues with older messages."""
         return await (await services()).history.get_messages(
             conversation_id,
@@ -303,7 +303,7 @@ def build_server(context: AppContext) -> FastMCP:
             str | None, Field(description="Attachment name, when the message has several.")
         ] = None,
     ) -> SavedFile:
-        """Save one shared file attached to an archived message as a local file and return its path."""
+        """Save one shared file attached to a message as a local file and return its path."""
         return await (await services()).files.download_attachment(conversation_id, message_id, name)
 
     @mcp.tool(annotations=SEND)

@@ -1,12 +1,13 @@
 """ExportRequest → ExportArtifact: the only export path (MCP and UI).
 
-1. Fetch each chat's selection newest first into the archive (bounded by the latest-N limit).
-2. Write each chat's archived selection oldest first, streaming from the archive in batches (retained
-   messages the server no longer returns are included and deleted ones are labelled).
+1. Read each chat's selection from Teams page by page, newest first, and spool each page's records to the
+   export's own temporary file (bounded by the latest-N limit).
+2. Write each chat's file oldest first by copying the spooled pages in reverse. Attachments the messages
+   reference are downloaded and written beside the text under their names.
 3. Package one file, or one ZIP for several.
 
-The export runs inside the caller (an MCP tool call, or a UI background task that reports progress and
-can be cancelled). A cancelled export leaves no partial file.
+Nothing is kept outside the temporary folder. The export runs inside the caller (an MCP tool call, or a UI
+background task that reports progress and can be cancelled). A cancelled export leaves no partial file.
 """
 
 from __future__ import annotations
@@ -38,19 +39,17 @@ from teams_connector.service.export.packaging import (
 )
 from teams_connector.service.files import Files
 from teams_connector.service.history import History, check_range
-from teams_connector.store.db import Store, iso
 
-BATCH = 500
 MAX_ASSETS_PER_CONVERSATION = 200
 MAX_ASSET_BYTES = 100 * 1024 * 1024
 MAX_TOTAL_ASSET_BYTES = 250 * 1024 * 1024
 
 Progress = Callable[[ExportProgress], None]
+Span = tuple[int, int, int]  # one spooled page: where it starts in the spool file, its length, its messages
 
 
 class Exports:
-    def __init__(self, store: Store, catalog: Catalog, history: History, files: Files) -> None:
-        self._store = store
+    def __init__(self, catalog: Catalog, history: History, files: Files) -> None:
         self._catalog = catalog
         self._history = history
         self._files = files
@@ -69,23 +68,6 @@ class Exports:
             if progress:
                 progress(state.model_copy())
 
-        complete: dict[str, bool] = {}
-        base_pages = base_messages = 0
-        for index, chat in enumerate(chats, start=1):
-            report(chat_index=index)
-
-            def on_page(
-                pages: int, selected: int, base_p: int = base_pages, base_m: int = base_messages
-            ) -> None:
-                report(pages_fetched=base_p + pages, messages_retrieved=base_m + selected)
-
-            fetch = await self._history.fetch_range(
-                chat, since=request.since, until=request.until, limit=request.message_limit, on_page=on_page
-            )
-            complete[chat.id] = fetch.complete
-            base_pages += fetch.pages
-            base_messages += fetch.selected
-
         exported_at = datetime.now(UTC)
         suffix = ".jsonl" if request.format == "jsonl" else ".txt"
         work = Path(tempfile.mkdtemp(prefix=".export-", dir=localfiles.kept_dir("exports")))
@@ -94,21 +76,17 @@ class Exports:
             summary: list[ExportedChat] = []
             used: set[str] = set()
             attachments_total = attachments_downloaded = attachments_failed = 0
-            report(phase="writing", chat_index=0)
             for index, chat in enumerate(chats, start=1):
-                report(phase="writing", chat_index=index)
+                report(phase="retrieving", chat_index=index)
                 stem = self._unique_stem(chat, used)
+                spool = work / f"{stem}.spool"
+                spans, references, written = await self._spool(chat, request, spool, report, state)
                 text_path = work / f"{stem}{suffix}"
-                written = self._write_chat(
-                    chat,
-                    text_path,
-                    request,
-                    exported_at,
-                    written_before=state.messages_written,
-                    report=report,
-                )
+                report(phase="writing", chat_index=index)
+                self._assemble(chat, text_path, spool, spans, request, exported_at, written, report, state)
+                spool.unlink(missing_ok=True)
                 per_chat, total, downloaded, failed = await self._export_chat_assets(
-                    chat,
+                    references,
                     request,
                     text_path,
                     stem,
@@ -127,7 +105,7 @@ class Exports:
                         conversation_id=chat.id,
                         name=chat.name,
                         messages=written,
-                        remote_complete=complete[chat.id],
+                        remote_complete=True,
                         attachments_downloaded=downloaded,
                         attachments_failed=failed,
                     )
@@ -156,9 +134,69 @@ class Exports:
         used.add(candidate.casefold())
         return candidate
 
-    async def _export_chat_assets(
+    async def _spool(
         self,
         chat: Chat,
+        request: ExportRequest,
+        spool: Path,
+        report: Callable[..., None],
+        state: ExportProgress,
+    ) -> tuple[list[Span], dict[str, Attachment], int]:
+        """Read the selection from Teams, newest page first, and spool each page's records. Returns the page
+        spans, the attachments the messages reference, and the message count."""
+        spans: list[Span] = []
+        references: dict[str, Attachment] = {}
+        written = 0
+        with spool.open("wb") as output:
+            async for page in self._history.selection(
+                chat, since=request.since, until=request.until, message_limit=request.message_limit
+            ):
+                start = output.tell()
+                for message in page:
+                    record = (
+                        formatter.txt_message(message)
+                        if request.format == "txt"
+                        else formatter.jsonl_record(chat, message)
+                    )
+                    output.write(record.encode("utf-8"))
+                    written += 1
+                    for attachment in message.attachments:
+                        if attachment.kind in {"file", "image"}:
+                            key = attachment.url or self._attachment_marker(attachment)
+                            references.setdefault(key, attachment)
+                spans.append((start, output.tell() - start, len(page)))
+                report(
+                    pages_fetched=state.pages_fetched + 1,
+                    messages_retrieved=state.messages_retrieved + len(page),
+                )
+        return spans, references, written
+
+    def _assemble(
+        self,
+        chat: Chat,
+        path: Path,
+        spool: Path,
+        spans: list[Span],
+        request: ExportRequest,
+        exported_at: datetime,
+        count: int,
+        report: Callable[..., None],
+        state: ExportProgress,
+    ) -> None:
+        """Write the chat's file oldest first: the spooled pages copied in reverse, after the TXT header."""
+        with path.open("w", encoding="utf-8", newline="\n") as output, spool.open("rb") as source:
+            if request.format == "txt":
+                output.write(
+                    formatter.txt_header(chat, messages=count, request=request, exported_at=exported_at)
+                )
+            for start, length, messages in reversed(spans):
+                source.seek(start)
+                output.write(source.read(length).decode("utf-8"))
+                report(messages_written=state.messages_written + messages)
+
+    async def _export_chat_assets(
+        self,
+        references: dict[str, Attachment],
         request: ExportRequest,
         text_path: Path,
         stem: str,
@@ -170,7 +208,6 @@ class Exports:
     ) -> tuple[Path, int, int, int]:
         if not request.include_attachments:
             return text_path, 0, 0, 0
-        references = self._selected_attachments(chat, request)
         if not references:
             return text_path, 0, 0, 0
 
@@ -223,37 +260,6 @@ class Exports:
         )
         return result, len(references), downloaded, failed
 
-    def _selected_attachments(self, chat: Chat, request: ExportRequest) -> dict[str, Attachment]:
-        total = self._store.count(chat.id, since=request.since, until=request.until)
-        count = min(total, request.message_limit) if request.message_limit else total
-        cutoff = (
-            self._store.latest_cutoff(chat.id, since=request.since, until=request.until, limit=count)
-            if request.message_limit and count
-            else None
-        )
-        attachments: dict[str, Attachment] = {}
-        after: tuple[str, str] | None = None
-        while True:
-            batch = self._store.chronological(
-                chat.id,
-                since=request.since,
-                until=request.until,
-                after=after,
-                from_key=cutoff,
-                limit=BATCH,
-            )
-            if not batch:
-                break
-            for message in batch:
-                for attachment in message.attachments:
-                    if attachment.kind not in {"file", "image"}:
-                        continue
-                    key = attachment.url or self._attachment_marker(attachment)
-                    attachments.setdefault(key, attachment)
-            last = batch[-1]
-            after = (iso(last.sent_at) or "", last.id)
-        return attachments
-
     @staticmethod
     def _attachment_marker(attachment: Attachment) -> str:
         label = "Image" if attachment.kind == "image" else "Attachment"
@@ -285,50 +291,3 @@ class Exports:
             reference = json.dumps(reference, ensure_ascii=False)[1:-1]
             replacement = json.dumps(replacement, ensure_ascii=False)[1:-1]
         return text.replace(reference, replacement)
-
-    def _write_chat(
-        self,
-        chat: Chat,
-        path: Path,
-        request: ExportRequest,
-        exported_at: datetime,
-        *,
-        written_before: int,
-        report: Callable[..., None],
-    ) -> int:
-        total = self._store.count(chat.id, since=request.since, until=request.until)
-        count = min(total, request.message_limit) if request.message_limit else total
-        cutoff = (
-            self._store.latest_cutoff(chat.id, since=request.since, until=request.until, limit=count)
-            if request.message_limit and count
-            else None
-        )
-        written = 0
-        with path.open("w", encoding="utf-8", newline="\n") as output:
-            if request.format == "txt":
-                output.write(
-                    formatter.txt_header(chat, messages=count, request=request, exported_at=exported_at)
-                )
-            after: tuple[str, str] | None = None
-            while True:
-                batch = self._store.chronological(
-                    chat.id,
-                    since=request.since,
-                    until=request.until,
-                    after=after,
-                    from_key=cutoff,
-                    limit=BATCH,
-                )
-                if not batch:
-                    break
-                for message in batch:
-                    message = self._history.annotate(message)
-                    if request.format == "txt":
-                        output.write(formatter.txt_message(message))
-                    else:
-                        output.write(formatter.jsonl_record(chat, message))
-                    written += 1
-                last = batch[-1]
-                after = (iso(last.sent_at) or "", last.id)
-                report(messages_written=written_before + written)
-        return written

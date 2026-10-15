@@ -1,60 +1,36 @@
-"""Conversation history: remote pages merged into the archive, read back in bounded pages.
+"""Conversation history, read from Teams on every call. Nothing is stored locally.
 
-Chats are read from Chat Service and channels from Graph (bootstrap.py wires the two readers). Every
-fetched message is retained in the archive, so a history page is the archive's view of the selection:
-the server's messages plus retained ones the server no longer returns (deleted, or past retention).
-
-Remote pages go from newer to older. A page reports a ``floor``: every message newer than it has been
-delivered. The archive is only read down to the floor until the remote traversal completes, so a page
-never skips a message that simply has not been fetched yet.
+Chats are read from Chat Service and channels from Graph (bootstrap.py wires the two readers). Remote pages
+come newest first, and messages within a page are oldest first. A response holds up to ``page_size`` whole
+messages within ``max_chars`` (at least one), newest first, and is returned oldest first. The cursor carries
+the remote link of the page being read and the oldest message the response returned, so a walk continues
+without skipping or repeating messages.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import AsyncIterator
 from datetime import datetime
 
-from teams_connector.domain.errors import InvalidRequest, Upstream
+from teams_connector.domain.errors import InvalidRequest
 from teams_connector.domain.models import Chat, HistoryCoverage, Message, MessagePage
 from teams_connector.remote.ports import HistoryReader
 from teams_connector.service import cursors
 from teams_connector.service.catalog import Catalog
-from teams_connector.store.db import Store, from_iso, iso
+from teams_connector.store.db import from_iso, iso
 
 REMOTE_PAGE_SIZE = 100
-MAX_REMOTE_PAGES_PER_CALL = 10
-MAX_STALLED_PAGES = 3  # remote pages in a row without a new message id: the service is looping
-
-
-@dataclass
-class RangeFetch:
-    pages: int
-    scanned: int
-    selected: int
-    missing_timestamps: int
-    complete: bool  # the selection (or its latest-N limit) was fully fetched
-    link: str | None  # where to continue when ``complete`` is False
-
-
-def check_range(since: datetime | None, until: datetime | None) -> None:
-    for name, value in (("since", since), ("until", until)):
-        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
-            raise InvalidRequest(f"{name} must include a timezone, for example 2026-09-28T12:00:00Z.")
-    if since and until and since > until:
-        raise InvalidRequest("since must be earlier than or equal to until.")
+MAX_REMOTE_PAGES_PER_CALL = 10  # bounds the time one call spends reading Teams
 
 
 class History:
     def __init__(
         self,
-        store: Store,
         catalog: Catalog,
         chats: HistoryReader,
         channels: HistoryReader,
         me_id: str,
     ) -> None:
-        self._store = store
         self._catalog = catalog
         self._chats = chats
         self._channels = channels
@@ -69,50 +45,43 @@ class History:
             message.is_self = message.author_id == self._me_id
         return message
 
-    # ---------------------------------------------------------------- traversal
-
-    async def fetch_range(
+    async def selection(
         self,
         chat: Chat,
         *,
         since: datetime | None,
         until: datetime | None,
-        limit: int | None = None,
-        link: str | None = None,
-        max_pages: int | None = None,
-        on_page: Callable[[int, int], None] | None = None,
-    ) -> RangeFetch:
-        """Fetch a selection newest first into the archive, until it ends, ``limit`` messages of it were
-        fetched, or ``max_pages`` pages were read (then ``link`` continues it)."""
+        message_limit: int | None = None,
+    ) -> AsyncIterator[list[Message]]:
+        """A chat's selection page by page for exports: newest page first, each page oldest first. Stops after
+        ``message_limit`` messages, the latest ones.
+
+        Assumes (not re-checked here): ``since`` and ``until`` are aware datetimes, checked by the caller.
+        """
         reader = self.reader(chat)
-        pages = scanned = selected = missing = stalled = 0
-        seen_links: set[str] = set()
-        seen_ids: set[str] = set()
+        link: str | None = None
+        taken = 0
         while True:
-            if max_pages is not None and pages >= max_pages:
-                return RangeFetch(pages, scanned, selected, missing, False, link)
             page = await reader.page(chat, since=since, until=until, page_size=REMOTE_PAGE_SIZE, link=link)
-            self._store.save_messages(chat.id, page.messages)
-            pages += 1
-            scanned += page.scanned
-            selected += len(page.messages)
-            missing += page.missing_timestamps
-            new_ids = {m.id for m in page.messages} - seen_ids
-            seen_ids |= new_ids
-            stalled = 0 if new_ids or not page.messages else stalled + 1
-            if on_page:
-                on_page(pages, selected)
-            if limit is not None and selected >= limit:
-                return RangeFetch(pages, scanned, selected, missing, True, None)
+            messages = page.messages
+            if message_limit is not None:
+                remaining = message_limit - taken
+                messages = messages[max(0, len(messages) - remaining) :]
+            taken += len(messages)
+            if messages:
+                yield [self.annotate(message) for message in messages]
+            if message_limit is not None and taken >= message_limit:
+                return
             if not page.next_link:
-                return RangeFetch(pages, scanned, selected, missing, True, None)
-            if page.next_link in seen_links or stalled >= MAX_STALLED_PAGES:
-                raise Upstream("Teams repeated a history continuation; the history read was stopped.")
-            if link:
-                seen_links.add(link)
+                return
             link = page.next_link
 
-    # ---------------------------------------------------------------- history pages
+    async def message(self, conversation_id: str, message_id: str) -> Message:
+        """Entry point: one message read from Teams by its id, for downloads."""
+        if not message_id or not message_id.strip():
+            raise InvalidRequest("message_id must be a non-empty string.")
+        chat = await self._catalog.get(conversation_id)
+        return self.annotate(await self.reader(chat).message(chat, message_id.strip()))
 
     async def get_messages(
         self,
@@ -125,112 +94,121 @@ class History:
         max_chars: int = 30_000,
         cursor: str | None = None,
     ) -> MessagePage:
+        """Entry point: one response of a conversation's history, newest first within the walk, oldest first
+        within the response. With a cursor, the selection and paging come from the cursor."""
         if cursor:
-            s = cursors.decode(cursor, "get_messages")
-            conversation_id = s["conversation_id"]
-            since, until = from_iso(s["since"]), from_iso(s["until"])
-            message_limit, page_size, max_chars = s["limit"], s["page_size"], s["max_chars"]
+            state = cursors.decode(cursor, "get_messages")
+            conversation_id = state["conversation_id"]
+            since, until = from_iso(state["since"]), from_iso(state["until"])
+            message_limit, page_size, max_chars = state["limit"], state["page_size"], state["max_chars"]
+            link, before, returned = state["link"], _marker(state["before"]), int(state["returned"])
         else:
             check_range(since, until)
-            s = {
-                "conversation_id": conversation_id,
-                "since": iso(since),
-                "until": iso(until),
-                "limit": message_limit,
-                "page_size": page_size,
-                "max_chars": max_chars,
-                "link": None,
-                "started": False,
-                "remote_complete": False,
-                "floor": None,
-                "before": None,
-                "returned": 0,
-                "remote_pages": 0,
-            }
+            link, before, returned = None, None, 0
         chat = await self._catalog.get(conversation_id)
         reader = self.reader(chat)
-        want = page_size if message_limit is None else min(page_size, message_limit - s["returned"])
-        before = tuple(s["before"]) if s["before"] else None
-        fetched: set[str] = set()
 
-        pages_this_call = 0
-        while not s["remote_complete"] and pages_this_call < MAX_REMOTE_PAGES_PER_CALL and want > 0:
-            if s["started"] and s["floor"]:
-                lower = max(d for d in (since, from_iso(s["floor"])) if d)
-                ready = self._store.newest_first(chat.id, since=lower, until=until, before=before, limit=want)
-                if len(ready) >= want:
+        items: list[Message] = []  # newest first
+        used = 0
+        pages = 0
+        missing = 0
+        remote_complete = False
+        stopped = False
+        while not stopped:
+            full = len(items) >= page_size
+            limit_reached = message_limit is not None and returned + len(items) >= message_limit
+            if full or limit_reached or pages >= MAX_REMOTE_PAGES_PER_CALL:
+                stopped = True
+                break
+            page = await reader.page(chat, since=since, until=until, page_size=REMOTE_PAGE_SIZE, link=link)
+            pages += 1
+            missing += page.missing_timestamps
+            candidates = list(reversed(page.messages))
+            if before is not None:
+                candidates = _after_marker(candidates, before)
+            for message in candidates:
+                over_count = len(items) >= page_size
+                over_limit = message_limit is not None and returned + len(items) >= message_limit
+                over_budget = bool(items) and used + len(message.text) > max_chars
+                if over_count or over_limit or over_budget:
+                    stopped = True
                     break
-            page = await reader.page(
-                chat, since=since, until=until, page_size=REMOTE_PAGE_SIZE, link=s["link"]
-            )
-            self._store.save_messages(chat.id, page.messages)
-            fetched |= {m.id for m in page.messages}
-            pages_this_call += 1
-            s["started"] = True
-            s["remote_pages"] += 1
-            if page.floor and (s["floor"] is None or iso(page.floor) < s["floor"]):  # type: ignore[operator]
-                s["floor"] = iso(page.floor)
-            if page.next_link and page.next_link == s["link"]:
-                raise Upstream("Teams repeated a history continuation; the history read was stopped.")
-            s["link"] = page.next_link
-            s["remote_complete"] = page.next_link is None
+                items.append(message)
+                used += len(message.text)
+                before = _marker_of(message)
+            else:
+                if not page.next_link:
+                    remote_complete = True
+                    break
+                link, before = page.next_link, None
+                continue
+            break
 
-        if want <= 0:
-            items: list[Message] = []
-        elif s["remote_complete"]:
-            items = self._store.newest_first(chat.id, since=since, until=until, before=before, limit=want)
-        elif s["floor"]:
-            lower = max(d for d in (since, from_iso(s["floor"])) if d)
-            items = self._store.newest_first(chat.id, since=lower, until=until, before=before, limit=want)
-        else:
-            items = []
-
-        whole = _whole_messages(items, max_chars)
-        trimmed = len(whole) < len(items)
-        items = whole
-        if items:
-            last = items[-1]
-            s["before"] = [iso(last.sent_at), last.id]
-        s["returned"] += len(items)
-        limit_reached = message_limit is not None and s["returned"] >= message_limit
-        more_local = bool(
-            items
-            and s["remote_complete"]
-            and self._store.newest_first(
-                chat.id, since=since, until=until, before=tuple(s["before"]), limit=1
-            )
-        )
-        has_more = not limit_reached and (trimmed or not s["remote_complete"] or more_local)
-
-        ordered = [self.annotate(m) for m in reversed(items)]
-        notes = []
+        limit_reached = message_limit is not None and returned + len(items) >= message_limit
+        has_more = not remote_complete and not limit_reached
+        notes: list[str] = []
         if has_more and not items:
-            notes.append("The remote history is still being fetched for this selection; follow the cursor.")
-        if trimmed:
-            notes.append("The page ends before the next message, which would exceed max_chars.")
+            notes.append("The remote history is still being read for this selection; follow the cursor.")
+        if has_more and stopped and not limit_reached:
+            notes.append("The page ends before the next message, which would exceed max_chars or page_size.")
+        if missing:
+            notes.append(f"{missing} message(s) without a usable time were left out by since and until.")
+        next_cursor = None
+        if has_more:
+            next_cursor = cursors.encode(
+                "get_messages",
+                conversation_id=conversation_id,
+                since=iso(since),
+                until=iso(until),
+                limit=message_limit,
+                page_size=page_size,
+                max_chars=max_chars,
+                link=link,
+                before=before,
+                returned=returned + len(items),
+            )
         return MessagePage(
             chat=chat,
-            items=ordered,
-            cursor=cursors.encode("get_messages", **s) if has_more else None,
+            items=[self.annotate(message) for message in reversed(items)],
+            cursor=next_cursor,
             coverage=HistoryCoverage(
-                complete=not has_more,
-                remote_complete=bool(s["remote_complete"]),
-                remote_pages=int(s["remote_pages"]),
-                archive_only=sum(1 for m in items if m.id not in fetched),
+                complete=next_cursor is None,
+                remote_complete=remote_complete,
+                remote_pages=pages,
                 message_limit_reached=limit_reached,
                 notes=notes,
             ),
         )
 
 
-def _whole_messages(items: list[Message], max_chars: int) -> list[Message]:
-    """The leading messages (newest first) whose texts fit ``max_chars`` together. The first message is
-    always kept whole, so a page always moves on, even when that message alone exceeds the budget."""
-    kept: list[Message] = []
-    used = 0
-    for message in items:
-        if kept and used + len(message.text) > max_chars:
-            break
-        kept.append(message)
-        used += len(message.text)
-    return kept
+def check_range(since: datetime | None, until: datetime | None) -> None:
+    for name, value in (("since", since), ("until", until)):
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise InvalidRequest(f"{name} must include a timezone, for example 2026-09-28T12:00:00Z.")
+    if since and until and since > until:
+        raise InvalidRequest("since must be earlier than or equal to until.")
+
+
+def _marker_of(message: Message) -> list[str | None]:
+    return [iso(message.sent_at), message.id]
+
+
+def _marker(value: object) -> list[str | None] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list) or len(value) != 2 or not isinstance(value[1], str):
+        raise InvalidRequest("The history cursor has an invalid position.")
+    return value
+
+
+def _after_marker(candidates: list[Message], marker: list[str | None]) -> list[Message]:
+    """The messages (newest first) that come after the marked message: those past it in this page, or, when
+    the marked message left the page, those sent before its time."""
+    stamp, marked_id = marker
+    ids = [message.id for message in candidates]
+    if marked_id in ids:
+        return candidates[ids.index(marked_id) + 1 :]
+    marked_at = from_iso(stamp)
+    if marked_at is None:
+        return []
+    return [m for m in candidates if m.sent_at is not None and m.sent_at < marked_at]

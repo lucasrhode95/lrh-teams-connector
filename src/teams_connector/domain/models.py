@@ -128,7 +128,6 @@ class HistoryCoverage(Compact):
     complete: bool  # nothing more matches the selection (otherwise follow the cursor)
     remote_complete: bool  # the remote traversal reached the end of the selection
     remote_pages: int  # remote pages fetched so far for this selection
-    archive_only: int = 0  # messages in this page known only from local retention
     message_limit_reached: bool = False
     notes: list[str] = Field(default_factory=list)
 
@@ -167,9 +166,6 @@ class MessageSearchResult(Compact):
     items: list[MessageHit]
     cursor: str | None = None
     coverage: MessageSearchCoverage
-
-
-# ---------------------------------------------------------------------------------------------- archive
 
 
 # ---------------------------------------------------------------------------------------------- writes

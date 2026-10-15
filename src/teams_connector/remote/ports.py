@@ -117,6 +117,10 @@ class HistoryReader(Protocol):
         """One page of history, newest first across pages. ``link`` continues a previous page."""
         ...
 
+    async def message(self, chat: Chat, message_id: str) -> Message:
+        """One message of the chat, read from Teams by its id."""
+        ...
+
 
 class MemberReader(Protocol):
     async def members(self, chat: Chat) -> list[Participant]: ...

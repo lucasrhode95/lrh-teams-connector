@@ -64,12 +64,11 @@ async def test_since_until_and_message_limit_select_the_latest_n(services: Servi
     assert rest.cursor is None and rest.coverage.message_limit_reached
 
 
-async def test_retained_messages_survive_remote_deletion(services: Services, fake: FakeTeams) -> None:
+async def test_history_is_read_from_teams_on_every_call(services: Services, fake: FakeTeams) -> None:
     await services.history.get_messages(ONE)
-    removed = fake.chats[ONE].messages.pop(0)  # gone from the server (e.g. past retention)
+    removed = fake.chats[ONE].messages.pop(0)  # gone from Teams: nothing keeps a copy
     page = await services.history.get_messages(ONE)
-    assert removed["id"] in [m.id for m in page.items]
-    assert page.coverage.archive_only == 1
+    assert removed["id"] not in [m.id for m in page.items]
 
 
 async def test_is_self_and_attachments(services: Services) -> None:
@@ -127,14 +126,13 @@ async def test_channel_replies_inside_the_range_are_kept_and_old_threads_stop_pa
     assert sum("channels/19:general@thread.tacv2/messages" in c for c in fake.calls) == 2
 
 
-async def test_deleted_channel_post_keeps_its_known_text(services: Services, fake: FakeTeams) -> None:
-    await services.history.get_messages(CHANNEL)
+async def test_deleted_channel_post_shows_no_text(services: Services, fake: FakeTeams) -> None:
     fake.channels[CHANNEL].threads[1] = graph_message(
         "5003", "2026-08-01T12:00:00Z", deleted="2026-09-10T00:00:00Z"
     )
     page = await services.history.get_messages(CHANNEL)
     post = next(m for m in page.items if m.id == "5003")
-    assert post.is_deleted and post.text == "Old post" and post.author == "Pat Peer"
+    assert post.is_deleted and "Old post" not in post.text
 
 
 async def test_invalid_requests(services: Services) -> None:

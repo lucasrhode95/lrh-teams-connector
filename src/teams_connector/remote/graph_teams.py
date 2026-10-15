@@ -100,6 +100,16 @@ class GraphChannels:
                 return None
         return graph_mapping.channel(team, row) if row.get("id") else None
 
+    async def message(self, chat: Chat, message_id: str) -> Message:
+        """One channel message by id, read in its team."""
+        if not chat.team_id:
+            raise InvalidRequest(f"Channel {chat.id} has no team; refresh the chat list.")
+        with operation("reading one channel message"):
+            data = await self._graph.get(
+                f"/teams/{segment(chat.team_id)}/channels/{segment(chat.id)}/messages/{segment(message_id)}"
+            )
+        return graph_mapping.to_message(data, chat.id)
+
     async def page(
         self,
         chat: Chat,

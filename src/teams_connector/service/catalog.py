@@ -180,7 +180,6 @@ class Catalog:
                 )
             ]  # fmt: skip
         )
-        self._store.save_messages(chat.id, page.messages)
 
     # ---------------------------------------------------------------- reads
 

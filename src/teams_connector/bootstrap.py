@@ -105,13 +105,13 @@ class AppContext:
             anchor_mailbox=f"Oid:{account.object_id}@{account.tenant_id}",
         )
         catalog = Catalog(store, catalog_source, channels, chat_service, members=member_search)
-        history = History(store, catalog, chat_service, channels, account.object_id)
+        history = History(catalog, chat_service, channels, account.object_id)
         search_source = SubstrateSearch(
             transport,
             Bearer(account_tokens, "m365.search"),
             anchor_mailbox=f"Oid:{account.object_id}@{account.tenant_id}",
         )
-        files = Files(store, GraphFiles(graph))
+        files = Files(history, GraphFiles(graph))
         person = Participant(id=account.object_id, name=name)
         return Services(
             account=account,
@@ -120,7 +120,7 @@ class AppContext:
             catalog=catalog,
             history=history,
             search=Search(store, search_source),
-            exports=Exports(store, catalog, history, files),
+            exports=Exports(catalog, history, files),
             sender=Sender(catalog, GraphWriter(graph)),
             files=files,
             photos=Photos(people),
