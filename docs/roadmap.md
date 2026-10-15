@@ -36,15 +36,23 @@ groups the existing sections by service without moving them. Still to decide: mo
 their owners (their anchors change, and links from other documents and the Outlook repository must follow),
 or keep the index and close D3.
 
-### S4 — Check the recipient against the stored catalog
+### S4 — Check the recipient against the stored catalog (decision pending)
 
 `send_message` refreshes the recipient from Teams before comparing `expected_chat_name` (S2). The
-message is addressed by id; the name only catches an agent that copied the wrong id, and the stored
-name catches that as well. A renamed chat keeps its id, and Teams refuses a send to a chat that is
-gone or that the user left. Compare against the stored catalog instead, and answer an id that is not
-stored with "run `list_chats` first". This drops the recipient refresh (`Catalog.recipient`'s refresh
-paths, `_refresh_channel` and the single-channel read). Lost: an untitled group whose members changed
-since the listing, whose generated name would no longer match.
+message is addressed by id; the name catches an agent that copied the wrong id, and the stored name
+catches that as well. Proposed: compare against the stored catalog, and answer an id that is not stored
+with "run `list_chats` first". This drops the recipient refresh (`Catalog.recipient`'s refresh paths,
+`_refresh_channel` and the single-channel read).
+
+What the refresh catches today and the stored name would not, both since the agent's last listing:
+
+- a renamed chat or channel: the send is refused until the agent lists again; the id, and so the
+  audience, is unchanged;
+- an untitled group whose members changed: its generated name changes, so the send is refused. A named
+  group whose members changed is not caught today either, since its name stays.
+
+Not affected: Teams refuses a send to a chat that is gone or that the user left. Decide whether the
+untitled-group case is worth the refresh.
 
 ### N8 — AMS images on the newer media host
 
