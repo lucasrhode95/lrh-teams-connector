@@ -11,9 +11,9 @@ import pytest
 
 from teams_connector.bootstrap import Services
 from teams_connector.domain.errors import InvalidRequest, NotFound, WriteOutcomeUnknown
-from teams_connector.domain.models import Attachment, ExportProgress, ExportRequest
+from teams_connector.domain.models import ExportProgress, ExportRequest
 from teams_connector.service import localfiles
-from teams_connector.service.export import packaging
+from teams_connector.service.export import orchestrator, packaging
 from tests.fakes.teams_fake import FakeTeams, cs_message
 
 ONE = "19:one@unq.gbl.spaces"
@@ -114,28 +114,19 @@ async def test_unavailable_attachment_keeps_export_and_reports_failure(
     assert "[Attachment unavailable: notes.txt]" in text
 
 
-async def test_jsonl_attachment_rewriting_preserves_valid_json_for_special_names(
-    services: Services, tmp_path: Path
-) -> None:
-    url_attachment = Attachment(name='quote"\nline.txt', url="https://files.example.invalid/synthetic")
-    marker_attachment = Attachment(name='image"\nline.png', kind="image")
-    url_replacement = f"[Attachment unavailable: {url_attachment.name}]"
-    marker_key = services.exports._attachment_marker(marker_attachment)
-    marker_replacement = f"[Attachment unavailable: {marker_attachment.name}]"
+async def test_marker_rewriting_keeps_jsonl_valid_for_special_names(tmp_path: Path) -> None:
+    name = 'quote"\nline.png'
+    marker = f"[Image: {name}]"
     path = tmp_path / "synthetic.jsonl"
     path.write_text(
-        json.dumps({"text": f"{url_attachment.url} {marker_key}"}, ensure_ascii=False) + "\n",
-        encoding="utf-8",
+        json.dumps({"text": f"{marker} [File: {name}]"}, ensure_ascii=False) + "\n", encoding="utf-8"
     )
 
-    services.exports._rewrite_asset_references(
-        path,
-        {url_attachment.url: url_attachment, marker_key: marker_attachment},
-        {url_attachment.url: url_replacement, marker_key: marker_replacement},
-    )
+    orchestrator._mark_unavailable(path, [name])
 
     records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-    assert records == [{"text": f"{url_replacement} {marker_replacement}"}]
+    replacement = f"[Attachment unavailable: {name}]"
+    assert records == [{"text": f"{replacement} {replacement}"}]
 
 
 async def test_attachment_name_cannot_overwrite_the_conversation_export(
@@ -144,6 +135,10 @@ async def test_attachment_name_cannot_overwrite_the_conversation_export(
     chat = await services.catalog.get(ONE)
     transcript_name = f"{packaging.filename_stem(chat)}.txt"
     fake.files["https://tenant.sharepoint.com/s/notes"] = (transcript_name, b"attachment")
+    message = next(m for m in fake.chats[ONE].messages if m["id"] == "1003")
+    files = json.loads(message["properties"]["files"])
+    files[0]["fileName"] = transcript_name
+    message["properties"]["files"] = json.dumps(files)
 
     artifact = await services.exports.export(ExportRequest(conversation_ids=[ONE]))
 
@@ -197,10 +192,11 @@ async def test_several_chats_always_return_outer_zip_and_jsonl(services: Service
 
 
 async def test_download_attachment_reads_its_message_from_teams(services: Services) -> None:
-    saved = await services.files.download_attachment(ONE, "1003")
+    downloaded = await services.files.download_attachments(ONE, message_id="1003", sent_at=None, names=None)
+    (saved,) = downloaded.files
     assert Path(saved.path).read_bytes() == b"shared notes" and saved.name == "notes.txt"
     with pytest.raises(NotFound):
-        await services.files.download_attachment(ONE, "1001")
+        await services.files.download_attachments(ONE, message_id="1001", sent_at=None, names=None)
 
 
 async def test_cancelled_export_during_fetch_publishes_no_file(

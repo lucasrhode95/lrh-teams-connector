@@ -98,11 +98,17 @@ class ChatSearchResult(Compact):
 
 
 class Attachment(Compact):
+    """A file or image a message carries. ``name`` is the marker the text shows. ``source`` says how its bytes
+    are fetched; ``None`` means the marker is all there is to show."""
+
     name: str
     kind: Literal["file", "image", "link"] = "file"
-    url: str | None = None  # sharing or web URL; files can be downloaded with download_attachment
+    source: Literal["sharepoint", "ams", "graph", "data"] | None = None
+    url: str | None = None  # sharing URL (sharepoint), full-size AMS or Graph hosted-content URL (ams, graph)
+    source_id: str | None = None  # AMS object id (ams, graph) or SHA-256 of the decoded bytes (data)
     content_type: str | None = None
     size: int | None = None
+    payload: bytes | None = Field(default=None, exclude=True)  # decoded data: image bytes, never serialized
 
 
 class Message(Compact):
@@ -188,6 +194,12 @@ class SavedFile(Compact):
     name: str
     content_type: str | None = None
     size: int
+
+
+class DownloadedFiles(Compact):
+    """The files one download call saved, in the order of the message's attachments."""
+
+    files: list[SavedFile]
 
 
 class ExportRequest(BaseModel):

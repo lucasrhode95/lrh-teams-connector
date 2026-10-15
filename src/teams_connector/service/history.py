@@ -12,9 +12,9 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from datetime import datetime
 
-from teams_connector.domain.errors import InvalidRequest
+from teams_connector.domain.errors import InvalidRequest, NotFound
 from teams_connector.domain.models import Chat, HistoryCoverage, Message, MessagePage
-from teams_connector.remote.ports import HistoryReader
+from teams_connector.remote.ports import ChatHistoryReader, HistoryReader
 from teams_connector.service import cursors
 from teams_connector.service.catalog import Catalog
 from teams_connector.store.db import from_iso, iso
@@ -27,7 +27,7 @@ class History:
     def __init__(
         self,
         catalog: Catalog,
-        chats: HistoryReader,
+        chats: ChatHistoryReader,
         channels: HistoryReader,
         me_id: str,
     ) -> None:
@@ -82,6 +82,29 @@ class History:
             raise InvalidRequest("message_id must be a non-empty string.")
         chat = await self._catalog.get(conversation_id)
         return self.annotate(await self.reader(chat).message(chat, message_id.strip()))
+
+    async def resolve(
+        self, conversation_id: str, *, message_id: str | None, sent_at: datetime | None
+    ) -> Message:
+        """Entry point: the one message a download names, by its id or by its arrival time. A channel message
+        is read through Graph, as get_messages reads it, so its names do not depend on the route. A time that
+        several messages share is refused with their ids."""
+        if message_id is not None and sent_at is None:
+            return await self.message(conversation_id, message_id)
+        if message_id is None and sent_at is not None:
+            chat = await self._catalog.get(conversation_id)
+            found = await self._chats.messages_at(chat, sent_at)
+            if not found:
+                raise NotFound("No message arrived at that time.")
+            if len(found) > 1:
+                ids = ", ".join(repr(message.id) for message in found)
+                raise InvalidRequest(
+                    f"Several messages arrived at that time; pass message_id (one of {ids})."
+                )
+            if chat.kind == "channel":
+                return self.annotate(await self._channels.message(chat, found[0].id))
+            return self.annotate(found[0])
+        raise InvalidRequest("Pass exactly one of message_id or sent_at.")
 
     async def get_messages(
         self,

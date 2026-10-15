@@ -122,6 +122,12 @@ class HistoryReader(Protocol):
         ...
 
 
+class ChatHistoryReader(HistoryReader, Protocol):
+    async def messages_at(self, chat: Chat, sent_at: datetime) -> list[Message]:
+        """The messages that arrived at exactly ``sent_at``: one lookup by time, in chats and channels."""
+        ...
+
+
 class MemberReader(Protocol):
     async def members(self, chat: Chat) -> list[Participant]: ...
 
@@ -142,9 +148,29 @@ class ChatWriter(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class SharedFile:
+    """A SharePoint or OneDrive file as Graph describes it. ``item_id`` and ``version`` key its cache."""
+
+    item_id: str
+    name: str | None
+    version: str
+    size: int | None
+
+
 class FileReader(Protocol):
-    async def download(self, url: str, dest: Path, *, max_bytes: int | None = None) -> RemoteFile:
-        """Download a shared file (SharePoint/OneDrive sharing or web URL) into ``dest``."""
+    async def describe(self, url: str) -> SharedFile:
+        """The drive item behind a sharing URL, without its content."""
+        ...
+
+    async def download(self, url: str, dest: Path, *, max_bytes: int) -> RemoteFile:
+        """Download a shared file's content (a SharePoint/OneDrive sharing URL) into ``dest``."""
+        ...
+
+
+class ImageReader(Protocol):
+    async def download(self, url: str, dest: Path, *, max_bytes: int) -> RemoteFile:
+        """Download a pasted image's full-size content (an AMS view or a Graph hosted copy) into ``dest``."""
         ...
 
 

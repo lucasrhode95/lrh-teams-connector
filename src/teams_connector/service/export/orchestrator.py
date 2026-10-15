@@ -1,13 +1,16 @@
 """ExportRequest → ExportArtifact: the only export path (MCP and UI).
 
 1. Read each chat's selection from Teams page by page, newest first, and spool each page's records to the
-   export's own temporary file (bounded by the latest-N limit).
-2. Write each chat's file oldest first by copying the spooled pages in reverse. Attachments the messages
-   reference are downloaded and written beside the text under their names.
+   export's own temporary file (bounded by the latest-N limit). Each downloadable attachment gets its final
+   name here, so the text already names the file written beside it.
+2. Write each chat's file oldest first by copying the spooled pages in reverse. The attachments are fetched
+   through the download cache and written beside the text under those names; one that cannot be fetched is
+   marked in the text instead.
 3. Package one file, or one ZIP for several.
 
-Nothing is kept outside the temporary folder. The export runs inside the caller (an MCP tool call, or a UI
-background task that reports progress and can be cancelled). A cancelled export leaves no partial file.
+Nothing is kept outside the temporary folder and the download cache. The export runs inside the caller (an MCP
+tool call, or a UI background task that reports progress and can be cancelled). A cancelled export leaves no
+partial file.
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ from teams_connector.domain.models import (
     ExportedChat,
     ExportProgress,
     ExportRequest,
+    Message,
 )
 from teams_connector.service import localfiles
 from teams_connector.service.catalog import Catalog
@@ -80,7 +84,8 @@ class Exports:
                 report(phase="retrieving", chat_index=index)
                 stem = self._unique_stem(chat, used)
                 spool = work / f"{stem}.spool"
-                spans, references, written = await self._spool(chat, request, spool, report, state)
+                text_name = f"{stem}{suffix}"
+                spans, references, written = await self._spool(chat, request, spool, report, state, text_name)
                 text_path = work / f"{stem}{suffix}"
                 report(phase="writing", chat_index=index)
                 self._assemble(chat, text_path, spool, spans, request, exported_at, written, report, state)
@@ -90,7 +95,6 @@ class Exports:
                     request,
                     text_path,
                     stem,
-                    work,
                     report,
                     attachments_total,
                     attachments_downloaded,
@@ -141,11 +145,15 @@ class Exports:
         spool: Path,
         report: Callable[..., None],
         state: ExportProgress,
+        text_name: str,
     ) -> tuple[list[Span], dict[str, Attachment], int]:
         """Read the selection from Teams, newest page first, and spool each page's records. Returns the page
-        spans, the attachments the messages reference, and the message count."""
+        spans, the attachments the messages reference by their final names, and the message count. The chat's
+        own file name is taken first, so no attachment can replace it in the ZIP."""
         spans: list[Span] = []
         references: dict[str, Attachment] = {}
+        names: dict[tuple[str, str], str] = {}
+        used: set[str] = {text_name.casefold()}
         written = 0
         with spool.open("wb") as output:
             async for page in self._history.selection(
@@ -153,6 +161,7 @@ class Exports:
             ):
                 start = output.tell()
                 for message in page:
+                    _name_attachments(message, names, used, references)
                     record = (
                         formatter.txt_message(message)
                         if request.format == "txt"
@@ -160,10 +169,6 @@ class Exports:
                     )
                     output.write(record.encode("utf-8"))
                     written += 1
-                    for attachment in message.attachments:
-                        if attachment.kind in {"file", "image"}:
-                            key = attachment.url or self._attachment_marker(attachment)
-                            references.setdefault(key, attachment)
                 spans.append((start, output.tell() - start, len(page)))
                 report(
                     pages_fetched=state.pages_fetched + 1,
@@ -200,58 +205,47 @@ class Exports:
         request: ExportRequest,
         text_path: Path,
         stem: str,
-        work: Path,
         report: Callable[..., None],
         total_before: int,
         downloaded_before: int,
         failed_before: int,
     ) -> tuple[Path, int, int, int]:
-        if not request.include_attachments:
-            return text_path, 0, 0, 0
-        if not references:
+        """Fetch the chat's attachments through the download cache and package them with its text.
+
+        An attachment that cannot be fetched, or lies beyond the export's limits, is marked in the text.
+        """
+        if not request.include_attachments or not references:
             return text_path, 0, 0, 0
 
         report(phase="attachments", attachments_total=total_before + len(references))
-        replacements: dict[str, str] = {}
         files: list[tuple[Path, str]] = []
-        names = {text_path.name.casefold()}
+        unavailable: list[str] = []
         downloaded = failed = total_bytes = 0
-        for index, (reference, attachment) in enumerate(references.items(), start=1):
-            marker = f"[Attachment unavailable: {attachment.name}]"
+        for index, (name, attachment) in enumerate(references.items(), start=1):
             remaining = MAX_TOTAL_ASSET_BYTES - total_bytes
             if index > MAX_ASSETS_PER_CONVERSATION or remaining <= 0:
-                replacements[reference] = marker
+                unavailable.append(name)
                 failed += 1
-                report(
-                    attachments_downloaded=downloaded_before + downloaded,
-                    attachments_failed=failed_before + failed,
-                )
-                continue
-            partial = work / f"asset-{index}.part"
-            try:
-                remote = await self._files.download_selected_attachment(
-                    attachment,
-                    partial,
-                    max_bytes=min(MAX_ASSET_BYTES, remaining),
-                )
-                name = unique_asset_name(remote.name or attachment.name, names)
-                final_path = work / f"asset-{index}.bin"
-                partial.replace(final_path)
-                files.append((final_path, name))
-                replacements[reference] = name
-                downloaded += 1
-                total_bytes += remote.size
-            except ConnectorError:
-                replacements[reference] = marker
-                failed += 1
-            finally:
-                partial.unlink(missing_ok=True)
+            else:
+                try:
+                    saved = await self._files.save(attachment, max_bytes=min(MAX_ASSET_BYTES, remaining))
+                except ConnectorError:
+                    unavailable.append(name)
+                    failed += 1
+                else:
+                    if saved.size > remaining:
+                        unavailable.append(name)
+                        failed += 1
+                    else:
+                        files.append((Path(saved.path), name))
+                        downloaded += 1
+                        total_bytes += saved.size
             report(
                 attachments_downloaded=downloaded_before + downloaded,
                 attachments_failed=failed_before + failed,
             )
 
-        self._rewrite_asset_references(text_path, references, replacements)
+        _mark_unavailable(text_path, unavailable)
         result = package_conversation(
             text_path,
             files,
@@ -260,34 +254,48 @@ class Exports:
         )
         return result, len(references), downloaded, failed
 
-    @staticmethod
-    def _attachment_marker(attachment: Attachment) -> str:
-        label = "Image" if attachment.kind == "image" else "Attachment"
-        return f"[{label}: {attachment.name}]"
 
-    @classmethod
-    def _rewrite_asset_references(
-        cls,
-        path: Path,
-        references: dict[str, Attachment],
-        replacements: dict[str, str],
-    ) -> None:
-        text = path.read_text(encoding="utf-8")
-        jsonl = path.suffix.casefold() == ".jsonl"
-        for reference, attachment in sorted(references.items(), key=lambda item: len(item[0]), reverse=True):
-            text = cls._replace_asset_reference(text, reference, replacements[reference], jsonl=jsonl)
-            if not attachment.url:
-                text = cls._replace_asset_reference(
-                    text,
-                    cls._attachment_marker(attachment),
-                    replacements[reference],
-                    jsonl=jsonl,
-                )
-        path.write_text(text, encoding="utf-8", newline="\n")
+def _name_attachments(
+    message: Message,
+    names: dict[tuple[str, str], str],
+    used: set[str],
+    references: dict[str, Attachment],
+) -> None:
+    """Give each downloadable attachment one name for this export. A source keeps its name wherever it
+    appears; a different source whose name is taken gets a number. The marker is renamed to match."""
+    for index, attachment in enumerate(message.attachments):
+        if attachment.source is None:
+            continue
+        key = (attachment.source, attachment.source_id or attachment.url or attachment.name)
+        final = names.get(key)
+        if final is None:
+            final = unique_asset_name(attachment.name, used)
+            names[key] = final
+            references[final] = attachment.model_copy(update={"name": final})
+        if final != attachment.name:
+            label = _label(attachment)
+            message.text = message.text.replace(f"[{label}: {attachment.name}]", f"[{label}: {final}]")
+            message.attachments[index] = attachment.model_copy(update={"name": final})
 
-    @staticmethod
-    def _replace_asset_reference(text: str, reference: str, replacement: str, *, jsonl: bool) -> str:
-        if jsonl:
-            reference = json.dumps(reference, ensure_ascii=False)[1:-1]
-            replacement = json.dumps(replacement, ensure_ascii=False)[1:-1]
-        return text.replace(reference, replacement)
+
+def _label(attachment: Attachment) -> str:
+    return "Image" if attachment.kind == "image" else "File"
+
+
+def _mark_unavailable(path: Path, names: list[str]) -> None:
+    """Replace the markers of attachments that could not be included with an unavailable note."""
+    if not names:
+        return
+    text = path.read_text(encoding="utf-8")
+    jsonl = path.suffix.casefold() == ".jsonl"
+    for name in names:
+        for label in ("Image", "File"):
+            text = _replace_text(text, f"[{label}: {name}]", f"[Attachment unavailable: {name}]", jsonl=jsonl)
+    path.write_text(text, encoding="utf-8", newline="\n")
+
+
+def _replace_text(text: str, old: str, new: str, *, jsonl: bool) -> str:
+    if jsonl:
+        old = json.dumps(old, ensure_ascii=False)[1:-1]
+        new = json.dumps(new, ensure_ascii=False)[1:-1]
+    return text.replace(old, new)

@@ -76,7 +76,7 @@ async def test_is_self_and_attachments(services: Services) -> None:
     by_id = {m.id: m for m in page.items}
     assert by_id["1002"].is_self is True and by_id["1001"].is_self is False
     attachment = by_id["1003"].attachments[0]
-    assert attachment.name == "notes.txt" and "[Attachment: notes.txt]" in by_id["1003"].text
+    assert attachment.name == "notes.txt" and "[File: notes.txt]" in by_id["1003"].text
 
 
 async def test_a_page_holds_whole_messages_and_the_cursor_continues_with_older_ones(
