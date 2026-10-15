@@ -106,6 +106,24 @@ def test_graph_hosted_copy_takes_the_ams_name_and_is_fetched_from_graph() -> Non
     assert (image.source, image.url, image.source_id) == ("graph", src, OBJECT)
 
 
+def test_a_reply_hosted_copy_is_fetched_from_graph_too() -> None:
+    src = "https://graph.microsoft.com/v1.0/teams/t1/channels/c1/messages/g1/replies/r1/hostedContents/h1/$value"
+    image = inline_images.inline_image({"src": src, "itemid": OBJECT}).attachment
+    assert image is not None and (image.source, image.url) == ("graph", src)
+
+
+def test_other_graph_urls_naming_hosted_contents_are_never_fetched() -> None:
+    for src in [
+        "https://graph.microsoft.com/v1.0/me/messages?x=hostedContents/h1/$value",
+        "https://graph.microsoft.com/v1.0/me/drive/root/children/hostedContents/h1/$value",
+        "https://graph.microsoft.com/v1.0/teams/t1/channels/c1/messages/../../../../me/hostedContents/h1/$value",
+        "https://graph.microsoft.com/v1.0/teams/t1/channels/c1/messages/g1/hostedContents/h1/$value?x=1",
+    ]:
+        image = inline_images.inline_image({"src": src, "itemid": OBJECT})
+        assert image.attachment is not None and image.attachment.source is None, src
+        assert image.attachment.url is None
+
+
 def test_unique_name_numbers_only_taken_names() -> None:
     used = {"photo.png"}
     assert inline_images.unique_name("photo.png", used) == "photo (2).png"

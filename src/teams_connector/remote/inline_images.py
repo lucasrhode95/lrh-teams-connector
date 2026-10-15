@@ -23,7 +23,11 @@ from teams_connector.domain.models import Attachment
 
 AMS_OBJECT_ID = re.compile(r"0-[a-z0-9]+-d[0-9]+-[0-9a-f]{32}")
 AMS_OBJECT_PATH = re.compile(r"/v1/objects/([^/?#]+)")
-HOSTED_CONTENT_PATH = re.compile(r"hostedContents/([^/?#]+)")
+# Graph's copy of a pasted image: a channel post's or reply's hosted content, and nothing else on Graph.
+HOSTED_CONTENT_URL = re.compile(
+    r"https://graph\.microsoft\.com/(?:v1\.0|beta)/teams/[^/?#]+/channels/[^/?#]+/messages/[^/?#]+"
+    r"(?:/replies/[^/?#]+)?/hostedContents/([^/?#]+)/\$value"
+)
 FILE_TYPE = re.compile(r"[a-z0-9]{1,8}")
 DATA_URI = re.compile(r"data:(image/[a-z0-9.+-]+);base64,(.*)", re.DOTALL | re.IGNORECASE)
 EXTENSIONS = {
@@ -35,7 +39,6 @@ EXTENSIONS = {
 }
 PASTED_IMAGE_TYPE = "png"
 AMS_HOST = "asm.skype.com"
-GRAPH_ROOT = "https://graph.microsoft.com/"
 INLINE_IMAGE_TEXT = "[Image: inline image]"
 
 
@@ -62,7 +65,7 @@ def inline_image(attributes: Mapping[str, str]) -> InlineImage:
     if src.casefold().startswith("data:"):
         return _data_image(src)
     if "hostedcontents" in src.casefold():
-        return _hosted_image(attributes, src)
+        return _hosted_image(attributes, src)  # downloadable only on the hosted-content route
     object_id = _ams_object_id(attributes, src)
     if object_id is not None:
         return _ams_image(object_id, attributes, src)
@@ -105,15 +108,22 @@ def _hosted_image(attributes: Mapping[str, str], src: str) -> InlineImage:
         source_id = item_id
         stem = item_id
     else:
-        hosted = HOSTED_CONTENT_PATH.search(src)
+        hosted = _hosted_content(src)
         source_id = hashlib.sha256((hosted.group(1) if hosted else src).encode()).hexdigest()
         stem = f"hosted-{source_id[:8]}"
     name = f"{stem}.{PASTED_IMAGE_TYPE}"
-    url = src if src.startswith(GRAPH_ROOT) else None
+    url = src if _hosted_content(src) else None
     attachment = Attachment(
         name=name, kind="image", source="graph" if url else None, url=url, source_id=source_id
     )
     return InlineImage("", name, attachment, own_line=True)
+
+
+def _hosted_content(src: str) -> re.Match[str] | None:
+    """The hosted-content route match, or None for any other URL (dot segments included)."""
+    if "/." in src or "%2e" in src.casefold():
+        return None
+    return HOSTED_CONTENT_URL.fullmatch(src)
 
 
 def _ams_object_id(attributes: Mapping[str, str], src: str) -> str | None:
