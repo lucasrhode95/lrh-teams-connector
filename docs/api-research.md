@@ -868,7 +868,9 @@ ignored by the tested route.
 
 `endTime` was also tested, but ordinary-message boundary behavior was too coarse
 or inconsistent to use as a reliable inclusive upper bound. The current client
-therefore applies `until` locally. These observations are empirical and may vary
+therefore applies `until` locally. An equal `startTime` and `endTime` does select
+one message exactly (2026-10-15, see
+[Reading one message by its time](#reading-one-message-by-its-time)). These observations are empirical and may vary
 by message type or service version.
 
 Historical clients have also used richer `view` combinations such as:
@@ -1659,9 +1661,12 @@ Message HTML can contain:
 Useful views include:
 
 ```text
-imgo
-imgpsh_fullsize_anim
+imgo                  compressed JPEG preview (the view the message references)
+imgpsh_fullsize       the full image
 ```
+
+Measured live on 2026-10-15; see
+[Inline images, single-message reads and meeting events](#inline-images-single-message-reads-and-meeting-events-2026-10-15).
 
 Request:
 
@@ -2032,6 +2037,9 @@ Inline images can use:
 ```html
 itemtype="http://schema.skype.com/AMSImage"
 ```
+
+`itemid` carries the AMS object id and `itemscope` the file type; inline images are not in
+`properties.files` ([2026-10-15](#inline-images-ams)).
 
 ### File attachments
 
@@ -3244,3 +3252,83 @@ bundle did not contain.
 `supportsAdditionalSystemGeneratedFolders=true` also `QuickViews`, `MeetingChats`, `MutedChats` and
 `EngageCommunities`. Each folder lists its items in `conversationFolderItems`; the Favorites folder
 held four. The catalog route (`…/users/me/updates`) carries no folders.
+
+# Inline images, single-message reads and meeting events (2026-10-15)
+
+**Evidence:** read-only calls through the connector's own Teams session (Skype token from AuthZ) on
+the self chat, two meeting chats, one group chat and two channels, plus the Teams Web bundle for
+build `26091712222`. Only statuses, types, sizes, counts and markup shapes were kept; no image bytes,
+message text or real ids. Example ids below are synthetic.
+
+## Inline images (AMS)
+
+A pasted image is an `<img>` in the message HTML; its bytes live in AMS:
+
+```html
+<img src="https://eu-api.asm.skype.com/v1/objects/0-neu-d1-0123456789abcdef0123456789abcdef/views/imgo"
+     itemtype="http://schema.skype.com/AMSImage" itemscope="png"
+     width="465.1" height="250" alt="image" id="…" itemid="0-neu-d1-0123456789abcdef0123456789abcdef">
+```
+
+- `itemid` is the AMS object id (`0-<geo>-d<n>-<32 hex>`); `itemscope` is the file type. The image is
+  not listed in `properties.files`, which holds only SharePoint and OneDrive files.
+- Teams Web authenticates image loads with a cookie: its `AsyncMediaAuthService` posts the Skype token
+  to `<AMS host>/v1/skypetokenauth` (header `Authorization: skype_token <token>`, form body
+  `skypetoken=<token>`); a `v1/aadtokenauth` variant and a Middle Tier `beta/imageauth/cookie` route
+  also exist. The service worker passes requests for `*.asm.skype.com` and
+  `*.asyncgw.teams.microsoft.com` through unchanged and only logs failures.
+- The header alone is enough; no cookie is needed. Measured on one self-chat image and one image
+  another person posted in a meeting chat:
+
+| Request (`Authorization: skype_token <token>`) | Result |
+|---|---|
+| `GET /v1/objects/{id}` | 200 JSON: `id`, `type` (`pish/image`), `filename` (generated: a 20-character stem and `.png`), `creation_date`, `expiry_date`, `geo`, `tenant_id`, and `contents`, one entry per available view with its `length` |
+| `GET …/views/imgo`, no `Authorization` | 401 |
+| `GET …/views/imgo` | 200 `image/jpeg`, about 25 KB: a compressed preview |
+| `GET …/views/imgpsh_fullsize` | 200 `image/png`, 44 KB and 159 KB: the full image, the same length as `contents.imgpsh` |
+| `GET …/content/original` | 404 for pasted images |
+
+- Every image checked listed `imgo`, `imgpsh_fullsize` and `imgpsh_fullsize_anim`; some also listed
+  `img_small`, `imgpsh` and `imgpsh_thumbnail_sx`.
+- Teams emoji can arrive as `<img itemtype="http://schema.skype.com/Emoji" src="data:image/png;base64,…">`
+  with the emoji in `alt` and its name in `title`.
+- The bundle also names AMS views `imgt1`, `imgpsh_mobile_save`, `imgpsh_thumbnail_wp` and others;
+  they were not requested.
+
+## Reading one message by its time
+
+`GET {chatService}/v1/users/ME/conversations/{id}/messages?view=msnp24Equivalent&pageSize=10` with
+`startTime` set to a message's arrival time in epoch milliseconds:
+
+| Parameters | Self chat | Meeting chat | Group chat | Two channels |
+|---|---|---|---|---|
+| `startTime` only | newest 10 messages; target absent (17, 38 and 80 newer messages) | same | same | target present (5 newer messages each) |
+| `startTime` = `endTime` = arrival time | exactly the target | exactly the target | exactly the target | exactly the target |
+
+- Without `endTime` the first page is the newest one; reaching an older message means following
+  `backwardLink`. An equal `startTime` and `endTime` selects the single message, in chats and in
+  channels. This narrows the earlier note that `endTime` is too coarse to use as a range's upper bound.
+- In every message checked, the id equalled the arrival time in epoch milliseconds. The connector does
+  not rely on that: a read by time keeps the messages whose time matches exactly.
+
+## Reading one message by its id
+
+`GET {chatService}/v1/users/ME/conversations/{id}/messages/{messageId}`, with or without
+`view=msnp24Equivalent`, returned the same row history returns (identical `content`) in the self
+chat, a group chat and a channel. An unknown message id returned HTTP 403, not 404.
+
+Rows that reference AMS objects carry `amsreferences`, a list of object ids. In the two image
+messages checked it equalled the `itemid`s of the message's `AMSImage` elements.
+
+## Meeting and membership events
+
+Meeting chats hold service-generated records that history returns as messages:
+
+| `messagetype` | `content` |
+|---|---|
+| `Event/Call`, meeting started | `<partlist alt=""></partlist><meetingDetails>…` with `organizerUpn`, `meetingType`, `iCalUid`, `hasEphemeralTranscript`, `isRecapEnabled` and `instanceDetails` (`startTime`, `endTime`, `subject`, `type`) |
+| `Event/Call`, meeting ended | `<ended/><partlist count="3">`, one `<part identity="8:orgid:…">` per participant with `name`, `displayName` and `duration` in seconds, then the same `meetingDetails` |
+| `ThreadActivity/MemberJoined`, `ThreadActivity/MemberLeft` | JSON: `eventtime`, `initiator`, `members[]` with `id`, `friendlyname`, `meetingMemberType` |
+
+In one meeting chat, 8 of 15 consecutive messages were such records; the connector returned them as
+raw markup of 1,200 to 2,000 characters each.
