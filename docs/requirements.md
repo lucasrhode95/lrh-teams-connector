@@ -24,7 +24,7 @@ The connector must:
 - treat Teams as the record: keep no local copy of message content (§6);
 - send a text message the user explicitly authorized.
 
-Presence and Favorites are optional extras, tracked in the roadmap. Outlook, Teams and
+Presence (one-on-one, read only) and Favorites (behind a setting) are part of the reads. Outlook, Teams and
 SharePoint are separately installed connectors that share one sign-in (`lrh-m365-auth`); each keeps
 its own product logic.
 
@@ -75,6 +75,7 @@ The current split ([research](api-research.md#microsoft-graph-with-the-teams-cli
 | Downloading files linked from messages | Graph shares | |
 | Downloading pasted images | AMS, private (full-size views); Graph hosted copies for channel images | AMS holds them and the Skype token reads them ([research](api-research.md#inline-images-ams)); a channel's Graph copy is read with the Graph token |
 | Online message discovery | Search v2 (`m365.search`) | Graph `chatMessage` search is denied to the tested client |
+| Presence of one-on-one peers | Teams Unified Presence, regional, private | Graph presence needs `Presence.Read`, which the client lacks; the regional host answers the `teams.spaces` bearer ([research](api-research.md#presence-through-the-regional-host-2026-10-15)) |
 
 Teams-native services stay where they are richer than Graph: presence, Favorites and read state,
 broad heterogeneous search, and AMS media.

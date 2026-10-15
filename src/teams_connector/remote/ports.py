@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
-from teams_connector.domain.models import Chat, Message, MessageHit, Participant
+from teams_connector.domain.models import Chat, Message, MessageHit, Participant, Presence
 
 
 @dataclass
@@ -145,6 +145,12 @@ class People(Protocol):
 
     async def photo(self, user_id: str) -> tuple[bytes, str] | None:
         """A small profile photo and its content type; None when the person has none."""
+        ...
+
+
+class PresenceReader(Protocol):
+    async def presence(self, user_id: str) -> Presence | None:
+        """One person's presence by Entra object id, or None when Teams reports none. A read only."""
         ...
 
 

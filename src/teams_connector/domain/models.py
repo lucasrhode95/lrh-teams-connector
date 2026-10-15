@@ -58,6 +58,23 @@ class Participant(Compact):
     name: str | None = None
 
 
+class Presence(Compact):
+    """One person's Teams presence: availability and activity, when they were last active, and their device.
+    No status note and no calendar text."""
+
+    availability: str | None = None
+    activity: str | None = None
+    last_active_at: datetime | None = None
+    device_type: str | None = None
+
+
+class PresenceResult(Compact):
+    """The presence of the other person in a one-on-one chat. ``reason`` says why there is none."""
+
+    presence: Presence | None = None
+    reason: str | None = None
+
+
 class CatalogCoverage(Compact):
     """What a chat listing covers. ``complete`` is limited to ``scope``."""
 

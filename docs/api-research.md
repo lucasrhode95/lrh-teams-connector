@@ -3504,3 +3504,22 @@ Each item had `conversationId`, `threadType`, `createdTime` and `lastUpdatedTime
 - All four Favorites items were known to the local catalog.
 - With `TEAMS_CONNECTOR_FAVORITES` set, a catalog refresh and a listing of 500 chats reported four favorites and
   496 non-favorites. With the setting off, no flag was reported.
+
+## Presence through the regional host (2026-10-15)
+
+Read-only, through the connector's own session. The Teams Web source names Unified Presence
+`v1/presence/getpresence`; the earlier capture recorded the regional `/ups/{region}/` path (200) and a global alias
+(404). For this account:
+
+- `POST https://presence.teams.microsoft.com/v1/presence/getpresence` with the Skype token: HTTP 401.
+- The same route with the `teams.spaces` bearer: HTTP 301 to the regional host `emea.presence.teams.microsoft.com`.
+  The connector does not follow redirects.
+- The regional host with the `teams.spaces` bearer: HTTP 200, a list with one row per requested MRI. The Skype
+  token there: HTTP 401.
+- The Chat Service host with a `/ups/{region}/v1/presence/getpresence` path and the Skype token: HTTP 404.
+- A row has `mri`, `etag`, `etagMatch`, `status` and `presence`. `presence` has `availability`, `activity`,
+  `deviceType`, `lastActiveTime`, and also `calendarData`, `workLocation`, `forcedAvailability`, `capabilities`
+  and `sourceNetwork`. The connector keeps only availability, activity, device type and last-active time.
+- Through the service on one one-on-one chat: the four fields were present, and no calendar, work-location or
+  capability data reached the result.
+- The region is taken from the Chat Service host. Only the `emea` region was checked.
