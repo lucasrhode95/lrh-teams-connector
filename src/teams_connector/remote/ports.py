@@ -8,7 +8,7 @@ Adapters (wired in bootstrap.py):
   (ChannelHistoryReader).
 - MemberReader: remote/chat_service.py for chats, remote/graph_teams.py for channels.
 - People, ChatWriter, FileReader: remote/graph_teams.py. ImageReader: remote/image_readers.py.
-- PresenceReader: remote/presence.py. FavoriteFolders: remote/csa.py (the sidebar folders).
+- PresenceReader: remote/presence.py.
 
 Swapping an adapter (another tenant, a policy change) must not change anything above this file.
 """
@@ -38,14 +38,13 @@ class CatalogUpdate:
 
 @dataclass
 class HistoryPage:
-    """One remote history page. Pages go from newer to older; ``messages`` are oldest first."""
+    """One remote history page. Pages go from newer to older; ``messages`` are oldest first (a channel
+    page: its threads by latest activity, each in time order)."""
 
     messages: list[Message]  # only those inside the requested since/until
     next_link: str | None  # opaque continuation to older history; None when the selection is exhausted
     scanned: int  # raw records read
     missing_timestamps: int = 0  # excluded because a time filter could not be checked
-    # Every message newer than this has been delivered by this page or an earlier one (or filtered out).
-    floor: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -74,12 +73,6 @@ class MessageSearchPage:
 class ChatCatalog(Protocol):
     async def updates(self, sync_token: str | None) -> CatalogUpdate:
         """A delta since ``sync_token``, or a full snapshot when it is None or no longer accepted."""
-        ...
-
-
-class FavoriteFolders(Protocol):
-    async def favorite_ids(self) -> set[str]:
-        """The ids of the chats in the Favorites sidebar folder. A read only."""
         ...
 
 

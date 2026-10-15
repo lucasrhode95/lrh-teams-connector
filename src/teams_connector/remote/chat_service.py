@@ -99,14 +99,7 @@ class ChatService:
             raise Upstream("Unexpected Teams message continuation link.")
         if next_link:
             await self._check_link(next_link, chat.id)
-        stamps = [t for t in (mapping.message_datetime(row) for row in rows) if t]
-        return HistoryPage(
-            selected,
-            next_link or None,
-            scanned=len(rows),
-            missing_timestamps=missing,
-            floor=min(stamps) if stamps else None,
-        )
+        return HistoryPage(selected, next_link or None, scanned=len(rows), missing_timestamps=missing)
 
     async def message(self, chat: Chat, message_id: str) -> Message:
         """One message by id. Teams answers an id it does not hold with 403, reported as an upstream error."""

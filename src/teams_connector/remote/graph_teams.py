@@ -130,11 +130,14 @@ class GraphChannels:
         page_size: int,
         link: str | None,
     ) -> HistoryPage:
-        """One page of threads (root posts with their replies), newest activity first.
+        """One page of threads (root posts with their replies). Graph orders threads by their latest
+        activity (root or reply); the page keeps that order, oldest activity first like every page, and
+        each thread in time order. Pages are therefore not in time order across threads: a thread with
+        a recent reply comes with its old root.
 
-        Graph orders threads by their latest activity (root or reply) and cannot filter by date, so
-        dates are checked here: replies inside the range are kept even when their root is older, and
-        the traversal stops after a page whose every thread is older than ``since``.
+        Graph cannot filter by date, so dates are checked here: replies inside the range are kept even
+        when their root is older, and the traversal stops after a page whose every thread is older
+        than ``since``.
         """
         if not chat.team_id:
             raise InvalidRequest(f"Channel {chat.id} has no team; refresh the chat list.")
@@ -147,10 +150,9 @@ class GraphChannels:
                     {"$top": min(max(page_size, 1), CHANNEL_PAGE), "$expand": "replies"},
                 )
             roots = [r for r in data.get("value", []) if isinstance(r, dict)]
-            messages: list[Message] = []
+            threads: list[list[Message]] = []  # latest activity first, as Graph returns them
             scanned = missing = 0
             every_thread_older = bool(roots)
-            activities: list[datetime] = []
             for root in roots:
                 replies = [r for r in root.get("replies") or [] if isinstance(r, dict)]
                 more = root.get("replies@odata.nextLink")
@@ -160,10 +162,9 @@ class GraphChannels:
                     replies += [r for r in rest if r.get("id") not in known]
                 thread = [root, *replies]
                 stamps = [t for t in (graph_mapping.created(m) for m in thread) if t]
-                if stamps:
-                    activities.append(max(stamps))
                 if since is None or (stamps and max(stamps) >= since):
                     every_thread_older = False
+                kept: list[Message] = []
                 for raw in thread:
                     scanned += 1
                     message = graph_mapping.to_message(raw, chat.id)
@@ -173,17 +174,17 @@ class GraphChannels:
                             continue
                     elif (since and message.sent_at < since) or (until and message.sent_at > until):
                         continue
-                    messages.append(message)
+                    kept.append(message)
+                kept.sort(key=lambda m: (m.sent_at is None, m.sent_at or datetime.min, m.id))
+                threads.append(kept)
             next_link = data.get("@odata.nextLink")
             if since is not None and every_thread_older:
                 next_link = None  # every later thread is older still
-        messages.sort(key=lambda m: (m.sent_at is None, m.sent_at or datetime.min, m.id))
         return HistoryPage(
-            messages=messages,
+            messages=[message for thread in reversed(threads) for message in thread],
             next_link=next_link if isinstance(next_link, str) else None,
             scanned=scanned,
             missing_timestamps=missing,
-            floor=min(activities) if activities else None,  # later threads have older activity
         )
 
     async def members(self, chat: Chat) -> list[Participant]:

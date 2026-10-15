@@ -37,7 +37,6 @@ The sections below are grouped by the service that owns their evidence. Headings
 - [Presence through AuthZ presenceUPS (2026-10-15)](#presence-through-authz-presenceups-2026-10-15)
 - [Meeting recording cards (2026-10-15)](#meeting-recording-cards-2026-10-15)
 - [Line breaks in message HTML (2026-10-15)](#line-breaks-in-message-html-2026-10-15)
-- [Favorites folder through the catalog (2026-10-15)](#favorites-folder-through-the-catalog-2026-10-15)
 - [HTML sends, live check (2026-10-15)](#html-sends-live-check-2026-10-15)
 - [Unread state after reads (2026-10-15)](#unread-state-after-reads-2026-10-15)
 - [Meeting transcripts](#meeting-transcripts)
@@ -3575,18 +3574,6 @@ underline, inline and block code, unordered and ordered lists, a block quote, a 
 - The stored markup shows what Teams keeps, not how a Teams client draws it. Visual rendering of headings and
   tables was not inspected. Images were not sent in this check; the passive rules do not refuse `img`, as the
   Outlook rules do not.
-
-## Favorites folder through the catalog (2026-10-15)
-
-Read-only, through the connector's own session (`teams.csa` credential). The sidebar folders endpoint returned
-the top-level keys `conversationFolders`, `folderHierarchyVersion`, `isPartialResponse`,
-`migratedPinnedToFavorites` and others. It listed three folders, of types `Favorites`, `RecentChats` and
-`TeamsAndChannels`, each with `folderType`, `id`, `name`, `createdTime`, `version` and `conversationFolderItems`.
-Each item had `conversationId`, `threadType`, `createdTime` and `lastUpdatedTime`; the Favorites folder held four.
-
-- All four Favorites items were known to the local catalog.
-- With `TEAMS_CONNECTOR_FAVORITES` set, a catalog refresh and a listing of 500 chats reported four favorites and
-  496 non-favorites. With the setting off, no flag was reported.
 
 ## Presence through the regional host (2026-10-15)
 

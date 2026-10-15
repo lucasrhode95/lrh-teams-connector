@@ -218,3 +218,28 @@ async def test_a_file_that_cannot_be_fetched_does_not_stop_the_others(
     assert [missing.name for missing in result.unavailable] == ["gone.txt"]
     with pytest.raises(NotFound):
         await services.files.download_attachments(ONE, message_id="2102", sent_at=None, names=["gone.txt"])
+
+
+async def test_an_export_that_renames_a_cached_file_reuses_it(services: Services, fake: FakeTeams) -> None:
+    await services.files.download_attachments(ONE, message_id="1003", sent_at=None, names=None)
+    # An older message shares a different file with the same name, so the export numbers the second one.
+    fake.files["https://tenant.sharepoint.com/s/other"] = ("other.txt", b"other notes")
+    fake.chats[ONE].messages.insert(
+        0,
+        cs_message(
+            "0999",
+            "2026-08-01T10:00:00.000Z",
+            "Older",
+            files=[
+                {"fileName": "notes.txt", "fileInfo": {"shareUrl": "https://tenant.sharepoint.com/s/other"}}
+            ],
+        ),
+    )
+    fetched = calls_to(fake, "sharepoint.com")
+
+    artifact = await services.exports.export(ExportRequest(conversation_ids=[ONE], include_attachments=True))
+
+    with zipfile.ZipFile(artifact.path) as archive:
+        contents = {Path(name).name: archive.read(name) for name in archive.namelist()}
+    assert contents["notes.txt"] == b"other notes" and contents["notes-2.txt"] == b"shared notes"
+    assert calls_to(fake, "sharepoint.com") == fetched + 1  # only the other file is fetched

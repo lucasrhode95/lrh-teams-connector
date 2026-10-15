@@ -54,7 +54,7 @@ and the adapters behind them. The split of backends (which private or public ser
 | Surface | Tool or route | Service | Ports | Adapters |
 |---|---|---|---|---|
 | MCP | `auth_status` | `TokenProvider` (shared auth package) | none | `TokenProvider` |
-| MCP | `list_chats` | `Catalog.list` (a refresh reads the self chat's newest message too) | `ChatCatalog`, `ChannelDirectory`, `FavoriteFolders`, `HistoryReader` | `CsaCatalog`, `GraphChannels`, `ChatService` |
+| MCP | `list_chats` | `Catalog.list` (a refresh reads the self chat's newest message too) | `ChatCatalog`, `ChannelDirectory`, `HistoryReader` | `CsaCatalog`, `GraphChannels`, `ChatService` |
 | MCP | `search_chats` | `Catalog.search` (with `refresh`, after a catalog refresh as `list_chats`) | `ChatMemberSearch` (named chats and people), and the refresh's ports | `SubstrateChatSearch`, and the refresh's adapters |
 | MCP | `get_messages` | `History.get_messages` | `HistoryReader` (chats and channels) | `ChatService`, `GraphChannels` |
 | MCP | `search_messages` | `Search.search_messages` | `MessageSearchReader` | `SubstrateSearch` |
@@ -170,9 +170,7 @@ diagnostics.
 1. Call `list_chats` to browse current chats and channels. It returns up to 50 items by default,
    supports `limit` up to 200 and opaque continuation `cursor`, and can filter by `kind`. A cached
    catalog up to ten minutes old may answer unless `refresh=true`. `coverage.source` identifies
-   whether the response used the local catalog or a refresh. With `TEAMS_CONNECTOR_FAVORITES` set to `1`,
-   `favorite` marks the chats in the Teams Favorites folder, read with each refresh; the setting is off by
-   default.
+   whether the response used the local catalog or a refresh.
 2. Use `search_chats` to match a conversation name. With `refresh=true` (the default) it also
    asks Teams, for a plain name or email, for the named group and meeting chats with a matching member
    (up to 100, read page by page) and for the people Teams suggests (Teams Web's search-box
@@ -186,7 +184,9 @@ diagnostics.
    each page are oldest first. `since` and `until` are inclusive. `message_limit` caps the latest
    matching messages, while `page_size` is the most messages a page holds. A page also holds whole
    messages up to `max_chars` (at least one), so no message text is cut; follow `cursor` to get the
-   older messages.
+   older messages. A channel's history comes as threads (a post with its replies) by latest activity,
+   each thread in time order, as Graph pages them: a thread with a new reply comes before newer posts
+   of quieter threads, and `message_limit` keeps the messages of the most recently active threads.
 
 Example arguments for a bounded history read:
 

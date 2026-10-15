@@ -241,7 +241,6 @@
 <g><title>One page of a conversation's history (chats from Chat Service, channels from Graph); ChatHistoryReader adds the lookup by time, ChannelHistoryReader a reply read through its thread.</title><text class="detail" x="678" y="2457"><tspan class="code">HistoryReader</tspan> · <tspan class="code">page</tspan></text></g>
 <g><title>A conversation's participants (chats from Chat Service, channels from Graph).</title><text class="detail" x="678" y="2484"><tspan class="code">MemberReader</tspan> · <tspan class="code">members</tspan></text></g>
 <g><title>One person's presence by object id.</title><text class="detail" x="678" y="2511"><tspan class="code">PresenceReader</tspan> · <tspan class="code">presence</tspan></text></g>
-<g><title>The chats in the Favorites sidebar folder.</title><text class="detail" x="678" y="2538"><tspan class="code">FavoriteFolders</tspan> · <tspan class="code">favorite_ids</tspan></text></g>
 <text class="muted" x="678" y="2564">chats use Teams' private services</text>
 
 <rect x="1240" y="2358" width="560" height="230" fill="#f2f7fc" stroke="#c7d5e2" stroke-width="1.5"/>

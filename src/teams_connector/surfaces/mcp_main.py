@@ -43,10 +43,11 @@ authorized message-send tool.
 
 - Finding conversations: list_chats lists chats and channels by recent activity (kind: one_on_one, \
 group, meeting, channel, or self for the user's own notes chat). search_chats finds conversations by \
-name, and with refresh by the members Teams matches for a plain name or email; read its coverage. \
-When the operator enables Favorites, favorite is true for the chats in the Teams Favorites folder.
+name, and with refresh by the members Teams matches for a plain name or email; read its coverage.
 - Reading: get_messages returns a conversation's history newest pages first, oldest first within a \
 page, with optional since/until and a total message_limit. Follow `cursor` for older messages. A \
+channel's history comes as threads (a post with its replies) by latest activity, each in time order; \
+for a channel, message_limit keeps the messages of the most recently active threads. A \
 page holds whole messages up to max_chars (at least one), so no message text is cut. \
 is_self marks the user's own messages: use it rather than matching names.
 - Searching message content: search_messages takes terms (1 to 25 phrases; a message matches when any \
@@ -189,7 +190,12 @@ def build_server(context: AppContext) -> FastMCP:
         since: Since = None,
         until: Until = None,
         message_limit: Annotated[
-            int | None, Field(ge=1, description="Total latest messages to return across all pages.")
+            int | None,
+            Field(
+                ge=1,
+                description="Total latest messages to return across all pages "
+                "(channels: of the most recently active threads).",
+            ),
         ] = None,
         page_size: Annotated[int, Field(ge=1, le=50)] = 25,
         max_chars: Annotated[
@@ -205,8 +211,8 @@ def build_server(context: AppContext) -> FastMCP:
             Field(description="Continuation; it restores the original options, which are then ignored."),
         ] = None,
     ) -> MessagePage:
-        """One page of a conversation's history ), oldest first within
-        the page; the cursor continues with older messages."""
+        """One page of a conversation's history, oldest first within the page (a channel: threads by
+        latest activity); the cursor continues with older messages."""
         return await (await services()).history.get_messages(
             conversation_id,
             since=_utc(since),

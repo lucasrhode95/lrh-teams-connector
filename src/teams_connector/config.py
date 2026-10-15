@@ -15,7 +15,6 @@ SEARCH_URL = "https://outlook.office.com/searchservice/api/v2/query"
 PEOPLE_SUGGESTIONS_URL = "https://substrate.office.com/search/api/v1/suggestions?scenario=powerbar"
 AUTHZ_URL = "https://authsvc.teams.microsoft.com/v1.0/authz"
 CSA_UPDATES_URL = "https://teams.microsoft.com/api/csa/api/v1/teams/users/me/updates"
-CSA_FOLDERS_URL = "https://teams.microsoft.com/api/csa/api/v1/teams/users/me/conversationFolders"
 
 
 def data_dir() -> Path:
@@ -30,9 +29,3 @@ def data_dir() -> Path:
         root = os.environ.get("XDG_DATA_HOME")
         base = Path(root) if root else Path.home() / ".local" / "share"
     return base / APP_NAME
-
-
-def favorites_enabled() -> bool:
-    """Whether chats are marked by the Teams Favorites folder. Off unless ``TEAMS_CONNECTOR_FAVORITES`` is 1,
-    true, yes or on: the folder is checked on a few accounts only."""
-    return os.environ.get("TEAMS_CONNECTOR_FAVORITES", "").strip().lower() in {"1", "true", "yes", "on"}

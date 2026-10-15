@@ -1,10 +1,11 @@
 """Conversation history, read from Teams on every call. Nothing is stored locally.
 
 Chats are read from Chat Service and channels from Graph (bootstrap.py wires the two readers). Remote pages
-come newest first, and messages within a page are oldest first. A response holds up to ``page_size`` whole
-messages within ``max_chars`` (at least one), newest first, and is returned oldest first. The cursor carries
-the remote link of the page being read and the oldest message the response returned, so a walk continues
-without skipping or repeating messages.
+come newest first, and messages within a page are oldest first. A channel page holds threads by latest
+activity, each in time order, so an old post comes with its recent reply. A response holds up to
+``page_size`` whole messages within ``max_chars`` (at least one), newest first, and is returned oldest
+first. The cursor carries the remote link of the page being read and the oldest message the response
+returned, so a walk continues without skipping or repeating messages.
 """
 
 from __future__ import annotations

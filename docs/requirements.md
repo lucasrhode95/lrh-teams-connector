@@ -24,7 +24,7 @@ The connector must:
 - treat Teams as the record: keep no local copy of message content (§6);
 - send a text message the user explicitly authorized.
 
-Presence (one-on-one, read only) and Favorites (behind a setting) are part of the reads. Outlook, Teams and
+Presence (one-on-one, read only) is part of the reads. Outlook, Teams and
 SharePoint are separately installed connectors that share one sign-in (`lrh-m365-auth`); each keeps
 its own product logic.
 
@@ -77,7 +77,7 @@ The current split ([research](api-research.md#microsoft-graph-with-the-teams-cli
 | Online message discovery | Search v2 (`m365.search`) | Graph `chatMessage` search is denied to the tested client |
 | Presence of one-on-one peers | Teams Unified Presence, private, at the route AuthZ names (`presenceUPS`) | Graph presence needs `Presence.Read`, which the client lacks; the AuthZ route answers the `teams.spaces` bearer ([research](api-research.md#presence-through-authz-presenceups-2026-10-15)) |
 
-Teams-native services stay where they are richer than Graph: presence, Favorites and read state,
+Teams-native services stay where they are richer than Graph: presence and read state,
 broad heterogeneous search, and AMS media.
 
 ## 5. Catalog
@@ -92,8 +92,6 @@ broad heterogeneous search, and AMS media.
   [implementation decisions](api-research.md#implementation-decisions).
 - The catalog answers from the local store for up to ten minutes; an explicit refresh waits for
   Teams.
-- Favorites: with `TEAMS_CONNECTOR_FAVORITES` set to `1`, the chats in the Teams Favorites folder are marked;
-  the setting is off by default until the folder is checked on more accounts.
 
 ## 6. Local data (decided 2026-10-14)
 
@@ -125,7 +123,9 @@ counts as broad Microsoft 365 search.
 
 - **History selection** is one rule for `get_messages`, MCP exports and UI exports: `since` and
   `until` are inclusive, dates filter first, then `message_limit` keeps the latest N matching
-  messages. A page holds whole messages: `page_size` and `max_chars` decide how many, and no message
+  messages. A channel's history is threads (a post with its replies) by latest activity, each thread
+  in time order, so for a channel the latest N are those of the most recently active threads
+  (decided 2026-10-15). A page holds whole messages: `page_size` and `max_chars` decide how many, and no message
   text is cut to fit a response (decided 2026-10-15).
 - **Exports** produce one artifact per conversation: the plain TXT/JSONL file, or a ZIP with a folder
   holding the text and its attachments. Several conversations are wrapped in one outer ZIP.
