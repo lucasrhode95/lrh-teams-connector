@@ -89,11 +89,20 @@ def _message_rows(data: Any) -> tuple[list[dict[str, Any]], bool | None, bool]:
             if isinstance(results, list):
                 found = True
                 rows.extend(item for item in results if isinstance(item, dict))
+            elif _reports_empty(result_set):
+                found = True
             more = result_set.get("MoreResultsAvailable", entity_set.get("MoreResultsAvailable"))
             if isinstance(more, bool):
                 flags.append(more)
     more_results = any(flags) if flags else None
     return rows, more_results, found
+
+
+def _reports_empty(result_set: dict[str, Any]) -> bool:
+    """An answer with no hits: ``Total`` is the integer 0 and there is no next page. Search v2 sends
+    no ``Results`` key then, which is a confirmed empty page, not a missing one."""
+    total = result_set.get("Total")
+    return type(total) is int and total == 0 and result_set.get("MoreResultsAvailable") is False
 
 
 def _map_hit(row: dict[str, Any]) -> RemoteMessageHit:

@@ -12,21 +12,6 @@ Snapshot **2026-10-15**.
 Write each bug as **Seen** (a synthetic example: the call and what came back), **Expected**,
 **Cause** and **Fix**.
 
-### B2 — Online search cannot confirm zero hits
-
-**Seen:** `search_remote_messages` for `zzqxv7npl` returns no items, `coverage.complete: false` and
-"Search returned no interpretable Message result set; zero hits are not confirmed."
-
-**Expected:** `coverage.complete: true` with zero items.
-
-**Cause:** Search v2 answers an empty search with a result set holding `Total: 0`,
-`MoreResultsAvailable: false` and no `Results` key
-([research](api-research.md#search-v2-message-search)). The adapter counts a result set as found
-only when `Results` is a list (`_message_rows` in
-[`substrate_search.py`](../src/teams_connector/remote/substrate_search.py)).
-
-**Fix:** treat a result set that reports `Total: 0` as a confirmed empty page.
-
 ### B3 — Meeting and membership events come back as raw markup
 
 **Seen:** `get_messages` on a meeting chat returns, for the meeting that ended,
@@ -120,7 +105,7 @@ message search, on Search v2, and `search_remote_messages` goes. It:
 - takes optional `conversation_ids`, `since` and `until`, sent as `clientthreadid:` and `sent` terms;
 - adds `NOT (isClientSoftDeleted:TRUE)`;
 - returns `message_id` (the hit's `InternetMessageId`) with each hit;
-- reports `Total` and `MoreResultsAvailable`, and a confirmed zero (B2).
+- reports `Total` and `MoreResultsAvailable`, and a confirmed zero.
 
 **Example:** `{"terms": ["budget review", "forecast"], "conversation_ids": ["19:sample@thread.v2"],
 "since": "2026-08-01T00:00:00Z"}` sends `clientthreadid:19:sample@thread.v2 AND sent >=
