@@ -266,11 +266,14 @@ class Catalog:
     async def search(
         self, query: str, *, refresh: bool = True, limit: int = 25, cursor: str | None = None
     ) -> ChatSearchResult:
-        """Chats whose name contains the query, and, with refresh, the named group and meeting chats Teams
-        matches by a plain name or email, with the members that matched."""
+        """Chats whose name contains the query, and, with refresh, the chats Teams matches for a plain name
+        or email: named group and meeting chats by member, and one-on-ones with the people Teams suggests.
+        Teams is asked once per search: the cursor carries its matches, so pages never shift."""
         if cursor:
             state = cursors.decode(cursor, "search_chats")
             query, offset = str(state["query"]), int(state["offset"])
+            remote = _remote_matches(state.get("remote"))
+            complete, notes = bool(state.get("complete")), [str(note) for note in state.get("notes") or []]
         else:
             if not query or not query.strip():
                 raise InvalidRequest("query must be a non-empty string.")
@@ -281,35 +284,43 @@ class Catalog:
                 raise InvalidRequest(
                     "No cached chat catalog is available; repeat with refresh=true to search Teams."
                 )
+            remote, complete, notes = await self._member_matches(query, asked=refresh)
         folded = fold(query)
-        by_member, complete, notes = await self._member_matches(query, asked=refresh)
         matches: list[ChatMatch] = []
         for chat in self._store.chats():
-            if folded not in fold(chat.name) and chat.id not in by_member:
+            if folded not in fold(chat.name) and chat.id not in remote:
                 continue
             matches.append(
                 ChatMatch(
                     chat=chat,
                     name_matched=folded in fold(chat.name),
-                    matched_participants=by_member.get(chat.id, []),
+                    matched_participants=remote.get(chat.id, []),
                 )
             )
         page = matches[offset : offset + limit]
         next_offset = offset + len(page)
+        next_cursor = None
+        if next_offset < len(matches):
+            next_cursor = cursors.encode(
+                "search_chats",
+                query=query,
+                offset=next_offset,
+                remote=[[chat_id, [[p.id, p.name] for p in people]] for chat_id, people in remote.items()],
+                complete=complete,
+                notes=notes,
+            )
         return ChatSearchResult(
             query=query,
             items=page,
-            cursor=cursors.encode("search_chats", query=query, offset=next_offset)
-            if next_offset < len(matches)
-            else None,
+            cursor=next_cursor,
             coverage=ChatSearchCoverage(complete=complete, chats=len(self._store.chats()), notes=notes),
         )
 
     async def _member_matches(
         self, query: str, *, asked: bool
     ) -> tuple[dict[str, list[Participant]], bool, list[str]]:
-        """Chats Teams matches by a plain name or email, with the members that matched, and whether Teams
-        answered. Fails open: when Teams does not answer, the local catalog still answers."""
+        """Chats Teams matches for a plain name or email, with the people that matched, and whether Teams
+        answered in full. Fails open: when Teams does not answer, the local catalog still answers."""
         if not asked:
             return {}, False, ["Teams' chat search was not asked: refresh=false searches the cache only."]
         if self._members is None:
@@ -320,25 +331,52 @@ class Catalog:
                 False,
                 ["Teams' chat search takes a plain name or email; this query was not sent to it."],
             )
-        try:
-            hits = await self._members.named_chats(query)
-        except ConnectorError as exc:
-            reason = type(exc).__name__
-            return (
-                {},
-                False,
-                [f"Teams' chat search did not answer ({reason}); chats matched by member may be missing."],
-            )
+        matches: dict[str, list[Participant]] = {}
+        complete = True
         notes = [
-            "Teams' chat search covers named group and meeting chats with recent activity; "
-            "one-on-one chats are matched by name."
+            "Teams' chat search covers named group and meeting chats with recent activity, and one-on-one "
+            "chats with the people Teams suggests for the query."
         ]
-        unknown = sum(1 for hit in hits if self._store.chat(hit.chat_id) is None)
+        try:
+            named = await self._members.named_chats(query)
+        except AuthenticationRequired:
+            raise
+        except ConnectorError as exc:
+            complete = False
+            notes.append(
+                f"Teams' chat search did not answer ({type(exc).__name__}); chats matched by member may be "
+                "missing."
+            )
+        else:
+            for hit in named.hits:
+                matches[hit.chat_id] = hit.matching_members
+            if named.truncated:
+                complete = False
+                notes.append(
+                    "Teams matched more named chats than are read; use a more specific name or email."
+                )
+        try:
+            people = await self._members.people(query)
+        except AuthenticationRequired:
+            raise
+        except ConnectorError as exc:
+            complete = False
+            notes.append(
+                f"Teams' people search did not answer ({type(exc).__name__}); one-on-one chats are "
+                "matched by name only."
+            )
+        else:
+            for chat in self._store.chats(kind="one_on_one"):
+                halves = _one_on_one_people(chat.id)
+                found = [person for person in people if (person.id or "").casefold() in halves]
+                if found:
+                    matches.setdefault(chat.id, []).extend(found)
+        unknown = sum(1 for chat_id in matches if self._store.chat(chat_id) is None)
         if unknown:
             notes.append(
                 f"{unknown} chats matched by Teams are not in the local catalog; refresh it to list them."
             )
-        return {hit.chat_id: hit.matching_members for hit in hits}, True, notes
+        return matches, complete, notes
 
 
 def _conversation_id(value: str) -> str:
@@ -349,6 +387,33 @@ def _conversation_id(value: str) -> str:
 
 _PLAIN_TEXT = re.compile(r"[^\"()*:]{1,200}")
 _QUERY_OPERATOR = re.compile(r"\b(?:and|or|not)\b", re.IGNORECASE)
+
+
+def _one_on_one_people(chat_id: str) -> set[str]:
+    """The two object ids a one-on-one chat id names (``19:{a}_{b}@unq.gbl.spaces``), case-folded."""
+    if not chat_id.startswith("19:") or not chat_id.endswith("@unq.gbl.spaces"):
+        return set()
+    return {part.casefold() for part in chat_id[3:].split("@", 1)[0].split("_")}
+
+
+def _remote_matches(value: object) -> dict[str, list[Participant]]:
+    """Teams' matches as a cursor carries them. Cursors are not signed: a chat id only selects a stored
+    chat, so a malformed entry is refused and an unknown one matches nothing."""
+    if not isinstance(value, list):
+        raise InvalidRequest("The chat search cursor is invalid.")
+    matches: dict[str, list[Participant]] = {}
+    for entry in value:
+        if not (isinstance(entry, list) and len(entry) == 2 and isinstance(entry[0], str)):
+            raise InvalidRequest("The chat search cursor is invalid.")
+        people = entry[1] if isinstance(entry[1], list) else None
+        if people is None or not all(
+            isinstance(p, list) and len(p) == 2 and isinstance(p[0], str) for p in people
+        ):
+            raise InvalidRequest("The chat search cursor is invalid.")
+        matches[entry[0]] = [
+            Participant(id=p[0], name=p[1] if isinstance(p[1], str) else None) for p in people
+        ]
+    return matches
 
 
 def _plain_text(query: str) -> bool:

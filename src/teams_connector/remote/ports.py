@@ -105,10 +105,23 @@ class ChatMemberHit:
     matching_members: list[Participant]
 
 
+@dataclass(frozen=True)
+class ChatMemberResult:
+    """Teams' named-chat matches for one query. ``truncated``: Teams matched more than were read."""
+
+    hits: list[ChatMemberHit]
+    truncated: bool
+
+
 class ChatMemberSearch(Protocol):
-    async def named_chats(self, text: str) -> list[ChatMemberHit]:
+    async def named_chats(self, text: str) -> ChatMemberResult:
         """Named group and meeting chats matched by a plain name or email, with their matching members.
-        One-on-one chats are not included: they are found by name in the catalog."""
+        One-on-one chats are not included: ``people`` finds them."""
+        ...
+
+    async def people(self, text: str) -> list[Participant]:
+        """The people Teams suggests for a plain name or email, by Entra object id; never the signed-in
+        user. A one-on-one chat's id names both of its people."""
         ...
 
 

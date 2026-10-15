@@ -16,6 +16,7 @@ from teams_connector.domain.models import MessageHit, Participant
 from teams_connector.remote.chat_service_mapping import user_id
 from teams_connector.remote.ports import (
     ChatMemberHit,
+    ChatMemberResult,
     ChatMemberSearch,
     MessageSearchPage,
     MessageSearchReader,
@@ -75,19 +76,86 @@ class SubstrateSearch(MessageSearchReader):
         )
 
 
+CHAT_PAGE = 25  # Teams Web's page size for group chats
+MAX_CHAT_HITS = 100
+PEOPLE_FIELDS = ["Id", "MRI", "DisplayName", "EmailAddresses", "PeopleType", "PeopleSubtype",
+                 "UserPrincipalName", "ExternalDirectoryObjectId"]  # fmt: skip
+# The filter Teams Web sends with its search-box people suggestions (captured 2026-10-14).
+PEOPLE_FILTER = {
+    "And": [
+        {"Or": [{"Term": {"PeopleType": "Person"}}, {"Term": {"PeopleType": "Other"}}]},
+        {"Or": [{"Term": {"PeopleSubtype": subtype}}
+                for subtype in ("OrganizationUser", "MTOUser", "PersonalContact", "Guest")]},
+        {"Or": [{"Term": {"Flags": "NonHidden"}}]},
+    ]
+}  # fmt: skip
+PEOPLE_SIZE = 5  # as Teams Web asks
+
+
 class SubstrateChatSearch(ChatMemberSearch):
-    """Named chats Teams matches by name or member, through the same Search v2 endpoint and profile.
+    """Named chats Teams matches by name or member (the Search v2 endpoint), and the people Teams suggests
+    for a name (Teams Web's search-box suggestions), with the same ``m365.search`` profile.
 
     The text is sent unquoted: a quoted query returned no chats. The service only passes plain names and
     emails, so the text cannot change the query's meaning.
     """
 
-    def __init__(self, transport: Transport, credential: Credential, *, anchor_mailbox: str) -> None:
+    def __init__(
+        self, transport: Transport, credential: Credential, *, anchor_mailbox: str, me_id: str
+    ) -> None:
         self._transport = transport
         self._credential = credential
         self._anchor_mailbox = anchor_mailbox
+        self._me_id = me_id.casefold()
 
-    async def named_chats(self, text: str) -> list[ChatMemberHit]:
+    async def named_chats(self, text: str) -> ChatMemberResult:
+        """Up to ``MAX_CHAT_HITS`` chats, page by page while Teams reports more."""
+        hits: list[ChatMemberHit] = []
+        offset = 0
+        while True:
+            rows, more = await self._chat_page(text, offset)
+            hits.extend(_chat_hit(source) for source in rows if _string(source.get("ThreadId")))
+            offset += len(rows)
+            if not more or not rows:
+                return ChatMemberResult(hits=hits, truncated=False)
+            if offset >= MAX_CHAT_HITS:
+                return ChatMemberResult(hits=hits, truncated=True)
+
+    async def people(self, text: str) -> list[Participant]:
+        body = {
+            "EntityRequests": [
+                {
+                    "Query": {"QueryString": text, "DisplayQueryString": text, "NormalizedQueryString": text},
+                    "EntityType": "People",
+                    "Size": PEOPLE_SIZE,
+                    "Fields": PEOPLE_FIELDS,
+                    "Filter": PEOPLE_FILTER,
+                    "Provenances": ["Mailbox", "Directory"],
+                    "From": 0,
+                }
+            ],
+            "Scenario": {
+                "Name": "powerbar",
+                "Dimensions": [{"DimensionName": "QueryType", "DimensionValue": "PeopleCentricSearch"}],
+            },
+            "Cvid": str(uuid4()),
+            "AppName": "Microsoft Teams",
+            "LogicalId": str(uuid4()),
+            "dataSource": "personScoped",
+        }
+        with operation("searching Teams people"):
+            data = await self._transport.json(
+                "POST",
+                config.PEOPLE_SUGGESTIONS_URL,
+                credential=self._credential,
+                headers={"X-AnchorMailbox": self._anchor_mailbox},
+                json_body=body,
+                retry=True,
+            )
+        people = {(person.id or "").casefold(): person for person in _suggested_people(data)}
+        return [person for key, person in people.items() if key != self._me_id]
+
+    async def _chat_page(self, text: str, offset: int) -> tuple[list[dict[str, Any]], bool]:
         body = {
             "Cvid": str(uuid4()),
             "LogicalId": str(uuid4()),
@@ -99,8 +167,8 @@ class SubstrateChatSearch(ChatMemberSearch):
                     "EntityType": "Chat",
                     "ContentSources": ["Teams"],
                     "Query": {"QueryString": text, "DisplayQueryString": text},
-                    "From": 0,
-                    "Size": 25,
+                    "From": offset,
+                    "Size": CHAT_PAGE,
                     "Sort": [],
                     "PropertySet": "Optimized",
                 }
@@ -115,7 +183,23 @@ class SubstrateChatSearch(ChatMemberSearch):
                 json_body=body,
                 retry=True,
             )
-        return [_chat_hit(source) for source in _result_sources(data) if _string(source.get("ThreadId"))]
+        _, more, _, _ = _message_rows(data)
+        return _result_sources(data), more is True
+
+
+def _suggested_people(data: Any) -> list[Participant]:
+    groups = data.get("Groups") if isinstance(data, dict) else None
+    people: list[Participant] = []
+    for group in groups if isinstance(groups, list) else []:
+        if not isinstance(group, dict) or group.get("Type") != "People":
+            continue
+        for suggestion in group.get("Suggestions") or []:
+            if not isinstance(suggestion, dict):
+                continue
+            object_id = _string(suggestion.get("ExternalDirectoryObjectId"))
+            if object_id:
+                people.append(Participant(id=object_id, name=_string(suggestion.get("DisplayName"))))
+    return people
 
 
 def _result_sources(data: Any) -> list[dict[str, Any]]:
