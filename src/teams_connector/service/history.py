@@ -12,9 +12,9 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from datetime import datetime
 
-from teams_connector.domain.errors import InvalidRequest, NotFound
+from teams_connector.domain.errors import InvalidRequest, NotFound, Upstream
 from teams_connector.domain.models import Chat, HistoryCoverage, Message, MessagePage
-from teams_connector.remote.ports import ChatHistoryReader, HistoryReader
+from teams_connector.remote.ports import ChannelHistoryReader, ChatHistoryReader, HistoryReader
 from teams_connector.service import cursors
 from teams_connector.service.catalog import Catalog
 from teams_connector.store.db import from_iso, iso
@@ -28,7 +28,7 @@ class History:
         self,
         catalog: Catalog,
         chats: ChatHistoryReader,
-        channels: HistoryReader,
+        channels: ChannelHistoryReader,
         me_id: str,
     ) -> None:
         self._catalog = catalog
@@ -60,6 +60,7 @@ class History:
         """
         reader = self.reader(chat)
         link: str | None = None
+        seen: set[str] = set()
         taken = 0
         while True:
             page = await reader.page(chat, since=since, until=until, page_size=REMOTE_PAGE_SIZE, link=link)
@@ -74,21 +75,26 @@ class History:
                 return
             if not page.next_link:
                 return
-            link = page.next_link
+            link = _next_link(page.next_link, seen)
 
     async def message(self, conversation_id: str, message_id: str) -> Message:
         """Entry point: one message read from Teams by its id, for downloads."""
         if not message_id or not message_id.strip():
             raise InvalidRequest("message_id must be a non-empty string.")
+        message_id = message_id.strip()
         chat = await self._catalog.get(conversation_id)
-        return self.annotate(await self.reader(chat).message(chat, message_id.strip()))
+        located = await self._chats.message(chat, message_id)
+        if chat.kind == "channel":
+            return self.annotate(await self._channel_message(chat, located))
+        return self.annotate(located)
 
     async def resolve(
         self, conversation_id: str, *, message_id: str | None, sent_at: datetime | None
     ) -> Message:
         """Entry point: the one message a download names, by its id or by its arrival time. A channel message
-        is read through Graph, as get_messages reads it, so its names do not depend on the route. A time that
-        several messages share is refused with their ids."""
+        is found through Chat Service, which names a reply's thread, and read through Graph, as get_messages
+        reads it, so its names do not depend on the route. A time that several messages share is refused
+        with their ids."""
         if message_id is not None and sent_at is None:
             return await self.message(conversation_id, message_id)
         if message_id is None and sent_at is not None:
@@ -102,9 +108,16 @@ class History:
                     f"Several messages arrived at that time; pass message_id (one of {ids})."
                 )
             if chat.kind == "channel":
-                return self.annotate(await self._channels.message(chat, found[0].id))
+                return self.annotate(await self._channel_message(chat, found[0]))
             return self.annotate(found[0])
         raise InvalidRequest("Pass exactly one of message_id or sent_at.")
+
+    async def _channel_message(self, chat: Chat, located: Message) -> Message:
+        """The Graph copy of a channel message Chat Service located: a post by its id, a reply through
+        its thread's root."""
+        if located.reply_to_id:
+            return await self._channels.reply(chat, located.reply_to_id, located.id)
+        return await self._channels.message(chat, located.id)
 
     async def get_messages(
         self,
@@ -130,6 +143,10 @@ class History:
             link, before, returned = None, None, 0
         chat = await self._catalog.get(conversation_id)
         reader = self.reader(chat)
+        # The cursor's marker, until a page shows it or older messages: new messages can push it past the
+        # first page between calls.
+        pending = before
+        seen: set[str] = set()
 
         items: list[Message] = []  # newest first
         used = 0
@@ -147,8 +164,10 @@ class History:
             pages += 1
             missing += page.missing_timestamps
             candidates = list(reversed(page.messages))
-            if before is not None:
-                candidates = _after_marker(candidates, before)
+            if pending is not None:
+                candidates, passed = _after_marker(candidates, pending)
+                if passed:
+                    pending = None
             for message in candidates:
                 over_count = len(items) >= page_size
                 over_limit = message_limit is not None and returned + len(items) >= message_limit
@@ -163,7 +182,9 @@ class History:
                 if not page.next_link:
                     remote_complete = True
                     break
-                link, before = page.next_link, None
+                link = _next_link(page.next_link, seen)
+                if pending is None:
+                    before = None  # the next page continues this read: nothing in it was returned
                 continue
             break
 
@@ -224,14 +245,24 @@ def _marker(value: object) -> list[str | None] | None:
     return value
 
 
-def _after_marker(candidates: list[Message], marker: list[str | None]) -> list[Message]:
-    """The messages (newest first) that come after the marked message: those past it in this page, or, when
-    the marked message left the page, those sent before its time."""
+def _after_marker(candidates: list[Message], marker: list[str | None]) -> tuple[list[Message], bool]:
+    """The messages (newest first) that come after the marked message, and whether this page reached it.
+    The page reaches it when it holds the marked message or older ones; a page of newer messages only
+    (new arrivals pushed the marker further) gives nothing and leaves the marker pending."""
     stamp, marked_id = marker
     ids = [message.id for message in candidates]
     if marked_id in ids:
-        return candidates[ids.index(marked_id) + 1 :]
+        return candidates[ids.index(marked_id) + 1 :], True
     marked_at = from_iso(stamp)
     if marked_at is None:
-        return []
-    return [m for m in candidates if m.sent_at is not None and m.sent_at < marked_at]
+        return [], True
+    older = [m for m in candidates if m.sent_at is not None and m.sent_at < marked_at]
+    return older, bool(older)
+
+
+def _next_link(link: str, seen: set[str]) -> str:
+    """The continuation to follow, refused when Teams repeats one: following it would never end."""
+    if link in seen:
+        raise Upstream("Teams repeated a history continuation; the read stopped there.")
+    seen.add(link)
+    return link

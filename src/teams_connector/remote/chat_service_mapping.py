@@ -170,6 +170,7 @@ def to_message(raw: dict[str, Any], conversation_id: str) -> Message:
         fingerprint = json.dumps([conversation_id, raw.get("sequenceId"), str(sent_at), author, text])
         message_id = "generated:" + hashlib.sha256(fingerprint.encode()).hexdigest()
     subject = props.get("subject")
+    root = raw.get("rootMessageId")  # set in channels: a reply names its thread's root post
     return Message(
         id=str(message_id),
         conversation_id=conversation_id,
@@ -183,6 +184,7 @@ def to_message(raw: dict[str, Any], conversation_id: str) -> Message:
         is_deleted=is_deleted,
         deleted_at=deleted_at,
         attachments=[*inline, *files],
+        reply_to_id=str(root) if root and str(root) != str(message_id) else None,
     )
 
 

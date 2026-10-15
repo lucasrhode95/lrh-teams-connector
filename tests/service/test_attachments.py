@@ -129,6 +129,30 @@ async def test_channel_hosted_copy_is_named_by_its_object_and_read_through_graph
     assert saved.name == f"{OBJECT}.png" and Path(saved.path).read_bytes() == PICTURE
 
 
+async def test_a_channel_reply_is_read_through_its_thread_by_id_or_time(
+    services: Services, fake: FakeTeams
+) -> None:
+    fake.hosted["h2"] = PICTURE
+    hosted = (
+        f'<img src="https://graph.microsoft.com/v1.0/teams/team-1/channels/{CHANNEL}/messages/5020/replies/5021/'
+        f'hostedContents/h2/$value" itemid="{OBJECT}" alt="image">'
+    )
+    reply = graph_message("5021", "2026-09-05T12:01:00.000Z", f"Shot {hosted}", reply_to="5020")
+    fake.channels[CHANNEL].threads.append(graph_message("5020", "2026-09-05T12:00:00.000Z", replies=[reply]))
+
+    (by_id,) = (
+        await services.files.download_attachments(CHANNEL, message_id="5021", sent_at=None, names=None)
+    ).files
+    (by_time,) = (
+        await services.files.download_attachments(
+            CHANNEL, message_id=None, sent_at=at("2026-09-05T12:01:00"), names=None
+        )
+    ).files
+    assert by_id.name == by_time.name == f"{OBJECT}.png"
+    assert Path(by_id.path).read_bytes() == PICTURE
+    assert any("/messages/5020/replies/5021" in call for call in fake.calls)
+
+
 async def test_export_names_pasted_images_and_writes_them_beside_the_text(
     services: Services, fake: FakeTeams
 ) -> None:
