@@ -3334,3 +3334,16 @@ Meeting chats hold service-generated records that history returns as messages:
 
 In one meeting chat, 8 of 15 consecutive messages were such records; the connector returned them as
 raw markup of 1,200 to 2,000 characters each.
+
+**Record shapes, checked 2026-10-15** (read-only, twelve meeting chats, 123 event records; names, ids and
+text were not kept, and rendered lines were checked for their shape only):
+
+| `messagetype` | Count | Shape |
+|---|---|---|
+| `Event/Call` | 103 | XML under one wrapper: `<ended/>` with `partlist/part` (`displayName`, `duration` in seconds) for an ended meeting; otherwise `meetingDetails/…/instanceDetails/subject` for a started one; some have no subject |
+| `ThreadActivity/MemberJoined` and `MemberLeft` | 7 joined | JSON: `eventtime`, `initiator`, `members[]` with `id` and `friendlyname`; some members have no `friendlyname` |
+| `ThreadActivity/AddMember` | 4 | XML: `eventtime`, `initiator`, `target`, `rosterVersion`, `id`, `detailedtargetinfo` (only an `id` child); no readable name, so the connector renders `[Member added]` |
+| `ThreadActivity/TopicUpdate` | 4 | XML: `eventtime`, `initiator`, `topicupdate/value` |
+| `ThreadActivity/MeetingPolicyUpdated`, `AddCustomApp`, `DeleteMember` | 2, 2, 1 | no rendering; shown as `[<type>]` |
+
+No rendered line contained markup, an `8:orgid` identity or an `@` sign.

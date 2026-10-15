@@ -12,36 +12,6 @@ Snapshot **2026-10-15**.
 Write each bug as **Seen** (a synthetic example: the call and what came back), **Expected**,
 **Cause** and **Fix**.
 
-### B3 — Meeting and membership events come back as raw markup
-
-**Seen:** `get_messages` on a meeting chat returns, for the meeting that ended,
-`text: "<ended/><partlist alt=\"\" count=\"3\"><part identity=\"8:orgid:…\"><name>…</name><displayName>Alex Kim</displayName><duration>2502</duration></part>…<meetingDetails>…"`
-(about 1,800 characters, cut and `text_truncated`), `system_event: "Event/Call"`. A member joining
-returns its JSON: `{"eventtime":…,"initiator":"8:orgid:…","members":[{"id":"8:orgid:…","friendlyname":"Sam Lee",…}]}`.
-In one meeting chat, 8 of 15 consecutive messages were such records.
-
-**Expected:** each event shown as one short line with only what Teams shows, in `get_messages` and in
-exports alike:
-
-```text
-[Meeting started: Weekly sync]
-[Meeting ended · 41m 42s · Alex Kim, Sam Lee, Jo Park]
-[Sam Lee joined]
-[Sam Lee left]
-```
-
-Organizer addresses, iCal ids, transcript and recap flags and identity strings are left out. An event
-type without a known rendering becomes `[<type>]`, never its raw content.
-
-**Cause:** `to_message` in
-[`chat_service_mapping.py`](../src/teams_connector/remote/chat_service_mapping.py) renders every
-record's `content` through the HTML renderer; event records carry XML or JSON, not message HTML
-([research](api-research.md#meeting-and-membership-events)).
-
-**Fix:** render `Event/Call` (started; ended with duration and participants) and
-`ThreadActivity/MemberJoined`, `MemberLeft`, `AddMember` and `TopicUpdate` from their fields; keep
-`system_event` as the type.
-
 ## Improvements
 
 Working behavior that could be cheaper, simpler or better informed.

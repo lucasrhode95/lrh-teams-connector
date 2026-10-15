@@ -152,10 +152,7 @@ def test_chat_service_record_fields() -> None:
     deleted = chat_service_mapping.to_message({"id": "1", "messagetype": "MessageDelete"}, "c")
     assert deleted.is_deleted and deleted.system_event is None and deleted.text == ""
     event = chat_service_mapping.to_message({"id": "2", "messagetype": "ThreadActivity/AddMember"}, "c")
-    assert (
-        event.system_event == "ThreadActivity/AddMember"
-        and event.text == "[System message: ThreadActivity/AddMember]"
-    )
+    assert event.system_event == "ThreadActivity/AddMember" and event.text == "[Member added]"
 
 
 def test_graph_message_mapping() -> None:

@@ -137,8 +137,9 @@ counts as broad Microsoft 365 search.
   names derived from the message; `download_attachment` fetches the named files of one message, at
   full resolution, to local paths, and fetches each source once. Base64 image data never reaches a
   response, and nothing is downloaded while reading.
-- **Meeting and membership events** read as one short line each, never as their raw markup
-  (roadmap B3).
+- **Meeting and membership events** read as one short line each, never as their raw markup. The
+  line keeps what Teams shows (a meeting's subject, duration and participants, members who joined or
+  left, a new topic) and drops identifiers and flags.
 - **Reading never changes a message or chat** (decided 2026-10-15). Reading history, searching,
   exporting and downloading use only reads; nothing marks a message or chat as read or seen, so the
   user's unread state in Teams stays as it was.
