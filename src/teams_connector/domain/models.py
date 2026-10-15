@@ -13,7 +13,6 @@ from pydantic import BaseModel, Field, SerializerFunctionWrapHandler, model_seri
 
 # one_on_one: two people (or a person and an app); self: the user's own notes chat.
 ChatKind = Literal["one_on_one", "group", "meeting", "channel", "self"]
-MatchMode = Literal["exact", "substring", "all_terms"]
 ExportFormat = Literal["txt", "jsonl"]
 
 
@@ -144,65 +143,33 @@ class MessagePage(Compact):
     coverage: HistoryCoverage
 
 
-class SearchHit(Compact):
-    chat_name: str
-    message: Message  # text is an excerpt around the match
+class MessageHit(Compact):
+    """One Teams message found by Search v2. ``message_id`` is the id get_messages returns for it."""
 
-
-class ChatPreparation(Compact):
-    conversation_id: str
-    pages_fetched: int
-    complete: bool
-    error: str | None = None
-
-
-class SearchCoverage(Compact):
-    complete: bool  # every chat of the scope was fetched for the range and all matches were returned
-    preparation_complete: bool
-    chats_in_scope: int
-    chats_prepared: int
-    pages_fetched_this_call: int
-    since: datetime
-    until: datetime
-    prepared_this_call: list[ChatPreparation] = Field(default_factory=list)
-    results_truncated: bool = False
-    notes: list[str] = Field(default_factory=list)
-
-
-class SearchResult(Compact):
-    query: str
-    items: list[SearchHit]
-    cursor: str | None = None
-    coverage: SearchCoverage
-
-
-class RemoteMessageHit(Compact):
-    """A Teams Search v2 pointer, with a local conversation only when ids match exactly."""
-
-    search_message_id: str | None = None
-    message_id_kind: str | None = None
+    message_id: str | None = None  # the hit's InternetMessageId; None when Search v2 sent none
     conversation_id: str | None = None  # set only for an exact local catalog-id match
     conversation_name: str | None = None
-    conversation_id_candidates: list[str] = Field(default_factory=list)
+    conversation_id_candidates: list[str] = Field(default_factory=list, exclude=True)
     sent_at: datetime | None = None
     sender: str | None = None
     subject: str | None = None
     preview: str | None = None
 
 
-class RemoteSearchCoverage(Compact):
+class MessageSearchCoverage(Compact):
     complete: bool
     offset: int
     page_size: int
     more_results_available: bool | None = None
+    total: int | None = None  # Search v2's count for the query; approximate, it can move between pages
     notes: list[str] = Field(default_factory=list)
 
 
-class RemoteMessageSearchResult(Compact):
-    query: str
-    items: list[RemoteMessageHit]
+class MessageSearchResult(Compact):
+    query: str  # the query sent to Search v2: quoted terms, with the scope and dates as clauses
+    items: list[MessageHit]
     cursor: str | None = None
-    coverage: RemoteSearchCoverage
+    coverage: MessageSearchCoverage
 
 
 # ---------------------------------------------------------------------------------------------- archive

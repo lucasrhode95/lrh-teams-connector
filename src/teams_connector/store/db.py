@@ -21,7 +21,6 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
-import re
 import shutil
 import sqlite3
 import time
@@ -34,7 +33,7 @@ from pathlib import Path
 
 from teams_connector import config
 from teams_connector.domain.errors import AccountMismatch, ConnectorError, InvalidRequest
-from teams_connector.domain.models import ArchiveTotals, Chat, MatchMode, Message, Participant
+from teams_connector.domain.models import ArchiveTotals, Chat, Message, Participant
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -112,10 +111,6 @@ def fold(text: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
 
 
-def _like_literal(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
 @dataclass
 class ChatState:
     conversation_id: str
@@ -130,12 +125,6 @@ class ChatState:
     roster_synced_at: float | None = None
     unresolved_participants: int = 0
     sync_attempted_at: float | None = None
-
-
-@dataclass
-class ArchivedMessage:
-    message: Message
-    chat_name: str
 
 
 class Store:
@@ -390,62 +379,6 @@ class Store:
             where += " AND sent_at <= ?"
             args.append(iso(until))
         return where, args
-
-    def search(
-        self,
-        query: str,
-        *,
-        mode: MatchMode,
-        conversation_ids: list[str],
-        since: datetime,
-        until: datetime,
-        after: tuple[str, str, str] | None,
-        limit: int,
-    ) -> tuple[list[ArchivedMessage], bool]:
-        """Literal matching over folded text, newest first, one stable keyset page."""
-        normalized = fold(query)
-        predicates = ["m.sent_at IS NOT NULL", "m.sent_at >= ?", "m.sent_at <= ?"]
-        args: list = [iso(since), iso(until)]
-        if mode == "exact":
-            predicates.append("m.text_folded = ?")
-            args.append(normalized)
-        elif mode == "substring":
-            predicates.append("m.text_folded LIKE ? ESCAPE '\\'")
-            args.append(f"%{_like_literal(normalized)}%")
-        else:
-            terms = re.findall(r"\w+", normalized, flags=re.UNICODE)
-            if not terms:
-                raise InvalidRequest("query must contain at least one searchable word.")
-            for term in terms:
-                predicates.append("m.text_folded LIKE ? ESCAPE '\\'")
-                args.append(f"%{_like_literal(term)}%")
-        if after is not None:
-            predicates.append("(m.sent_at, m.conversation_id, m.id) < (?, ?, ?)")
-            args += list(after)
-        results: list[tuple[str, str, str, str]] = []
-        with self._tx() as db:
-            db.execute("CREATE TEMP TABLE IF NOT EXISTS scope (id TEXT PRIMARY KEY)")
-            db.execute("DELETE FROM scope")
-            db.executemany("INSERT OR IGNORE INTO scope (id) VALUES (?)", [(i,) for i in conversation_ids])
-            rows = db.execute(
-                f"""SELECT m.data, c.data, m.sent_at, m.conversation_id, m.id
-                    FROM messages m JOIN scope s ON s.id = m.conversation_id
-                    LEFT JOIN chats c ON c.id = m.conversation_id
-                    WHERE {" AND ".join(predicates)}
-                    ORDER BY m.sent_at DESC, m.conversation_id DESC, m.id DESC LIMIT ?""",
-                [*args, limit + 1],
-            ).fetchall()
-            results = [(r[0], r[1], r[2], r[3]) for r in rows]
-        hits = [
-            ArchivedMessage(
-                Message.model_validate_json(data),
-                Chat.model_validate_json(chat).name if chat else conversation_id,
-            )
-            for data, chat, _, conversation_id in results[:limit]
-        ]
-        return hits, len(results) > limit
-
-    # ---------------------------------------------------------------- participants
 
     def save_roster(
         self, conversation_id: str, participants: list[Participant] | None, *, error: str | None = None

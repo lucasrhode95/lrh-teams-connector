@@ -24,7 +24,6 @@ archive:
 
 | Today | Replacement |
 |---|---|
-| `search_messages`: fetch a scope, match locally with `match_mode` (`exact`, `substring`, `all_terms`) | One Search v2 tool replacing both `search_messages` and `search_remote_messages` (P2.2d). `match_mode` goes: Search v2 matches words, word prefixes and phrases, so local string modes have no meaning there. |
 | `search_chats` participant matches from indexed rosters | P2.2b |
 | `get_messages` merges remote pages with retained ones | Read Teams only; drop the archive merge and its paging floor |
 | `download_attachment` reads the archived message | Re-read the one message from Chat Service, by id or by time (N1) |
@@ -59,27 +58,6 @@ Follow the Outlook connector's layout
 Example: a reader looking up how a pasted image is downloaded goes to the AMS section of the
 research, and the architecture table shows `download_attachment` → `FileReader` → AMS and Graph
 `/shares`.
-
-### P2.2d — One Search v2 message search
-
-The hit id is the history message id, and Teams Web shows how to scope, filter and page
-([research](api-research.md#search-v2-message-search)). With D2, `search_messages` becomes the one
-message search, on Search v2, and `search_remote_messages` goes. It:
-
-- takes `terms`, a list of 1 or more phrases (decided 2026-10-15). A message matches when any term
-  matches (OR). Each term is sent as one quoted phrase and never split on its spaces, so agent text
-  is never read as KQL (`NOT IN THE CHAT` acted as an operator in Teams Web). Search v2 matches whole
-  words and word prefixes: `["budget"]` also finds "budgets", `["udget"]` finds nothing, and
-  `["budget review"]` needs those words in that order. The tool description says so;
-- takes optional `conversation_ids`, `since` and `until`, sent as `clientthreadid:` and `sent` terms;
-- adds `NOT (isClientSoftDeleted:TRUE)`;
-- returns `message_id` (the hit's `InternetMessageId`) with each hit;
-- reports `Total` and `MoreResultsAvailable`, and a confirmed zero.
-
-**Example:** `{"terms": ["budget review", "forecast"], "conversation_ids": ["19:sample@thread.v2"],
-"since": "2026-08-01T00:00:00Z"}` sends `clientthreadid:19:sample@thread.v2 AND sent >=
-2026-08-01T00:00:00Z AND NOT (isClientSoftDeleted:TRUE) AND ("budget review" OR "forecast")` and
-returns hits with `message_id`.
 
 ### P2.2b — Find chats by participant without indexed rosters
 

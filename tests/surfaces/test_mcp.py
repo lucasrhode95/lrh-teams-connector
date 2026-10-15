@@ -26,7 +26,6 @@ async def test_mcp_exposes_current_contract_and_reads_synthetic_chats(context: A
             "auth_status",
             "list_chats",
             "search_chats",
-            "search_remote_messages",
             "get_messages",
             "search_messages",
             "export_chats",
@@ -40,7 +39,7 @@ async def test_mcp_exposes_current_contract_and_reads_synthetic_chats(context: A
         assert all(tool.outputSchema is not None for tool in tools.values())
         assert tools["send_message"].annotations.readOnlyHint is False
         assert tools["send_message"].annotations.destructiveHint is True
-        assert tools["search_remote_messages"].annotations.readOnlyHint is True
+        assert tools["search_messages"].annotations.readOnlyHint is True
 
         auth_status = await client.call_tool("auth_status", {})
         assert not auth_status.isError and auth_status.structuredContent is not None
@@ -56,9 +55,11 @@ async def test_mcp_exposes_current_contract_and_reads_synthetic_chats(context: A
         assert "19:one@unq.gbl.spaces" in {row["id"] for row in result.structuredContent["items"]}
 
 
-async def test_mcp_rejects_unscoped_search_and_unconfirmed_send(context: AppContext, fake: FakeTeams) -> None:
+async def test_mcp_rejects_an_empty_search_and_an_unconfirmed_send(
+    context: AppContext, fake: FakeTeams
+) -> None:
     async with create_connected_server_and_client_session(build_server(context)) as client:
-        search = await client.call_tool("search_messages", {"query": "synthetic marker"})
+        search = await client.call_tool("search_messages", {"terms": []})
         assert search.isError
 
         send = await client.call_tool(

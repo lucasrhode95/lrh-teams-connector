@@ -11,8 +11,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from teams_connector import config
-from teams_connector.domain.models import RemoteMessageHit
-from teams_connector.remote.ports import MessageSearchReader, RemoteMessageSearchPage
+from teams_connector.domain.models import MessageHit
+from teams_connector.remote.ports import MessageSearchPage, MessageSearchReader
 from teams_connector.remote.transport import Credential, Transport, operation
 
 
@@ -30,7 +30,7 @@ class SubstrateSearch(MessageSearchReader):
         page_size: int,
         cvid: str,
         logical_id: str,
-    ) -> RemoteMessageSearchPage:
+    ) -> MessageSearchPage:
         """Serialize service-validated inputs to one app-owned Search v2 request."""
         body = {
             "Cvid": cvid,
@@ -59,22 +59,24 @@ class SubstrateSearch(MessageSearchReader):
                 json_body=body,
                 retry=True,
             )
-        rows, more, found = _message_rows(data)
-        return RemoteMessageSearchPage(
+        rows, more, found, total = _message_rows(data)
+        return MessageSearchPage(
             items=[_map_hit(row) for row in rows],
             more_results_available=more,
             result_set_found=found,
+            total=total,
         )
 
 
-def _message_rows(data: Any) -> tuple[list[dict[str, Any]], bool | None, bool]:
+def _message_rows(data: Any) -> tuple[list[dict[str, Any]], bool | None, bool, int | None]:
     if not isinstance(data, dict):
-        return [], None, False
+        return [], None, False, None
     entity_sets = data.get("EntitySets")
     if not isinstance(entity_sets, list):
-        return [], None, False
+        return [], None, False, None
     rows: list[dict[str, Any]] = []
     flags: list[bool] = []
+    totals: list[int] = []
     found = False
     for entity_set in entity_sets:
         if not isinstance(entity_set, dict):
@@ -94,8 +96,11 @@ def _message_rows(data: Any) -> tuple[list[dict[str, Any]], bool | None, bool]:
             more = result_set.get("MoreResultsAvailable", entity_set.get("MoreResultsAvailable"))
             if isinstance(more, bool):
                 flags.append(more)
+            total = result_set.get("Total")
+            if type(total) is int:
+                totals.append(total)
     more_results = any(flags) if flags else None
-    return rows, more_results, found
+    return rows, more_results, found, sum(totals) if totals else None
 
 
 def _reports_empty(result_set: dict[str, Any]) -> bool:
@@ -105,27 +110,12 @@ def _reports_empty(result_set: dict[str, Any]) -> bool:
     return type(total) is int and total == 0 and result_set.get("MoreResultsAvailable") is False
 
 
-def _map_hit(row: dict[str, Any]) -> RemoteMessageHit:
+def _map_hit(row: dict[str, Any]) -> MessageHit:
     source = row.get("Source")
     source = source if isinstance(source, dict) else {}
-    internet_id = _string(source.get("InternetMessageId"))
-    source_id = _string(source.get("Id"))
-    result_id = _string(row.get("Id"))
-    message_ref = internet_id or source_id or result_id
-    message_ref_kind = (
-        "InternetMessageId"
-        if internet_id
-        else "Source.Id"
-        if source_id
-        else "Result.Id"
-        if result_id
-        else None
-    )
-    conversation_ids = _conversation_ids(source)
-    return RemoteMessageHit(
-        search_message_id=message_ref,
-        message_id_kind=message_ref_kind,
-        conversation_id_candidates=conversation_ids,
+    return MessageHit(
+        message_id=_string(source.get("InternetMessageId")),
+        conversation_id_candidates=_conversation_ids(source),
         sent_at=_datetime(source.get("DateTimeSent")),
         sender=_sender(source.get("Sender")),
         subject=_string(source.get("Subject")),

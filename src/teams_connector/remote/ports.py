@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
-from teams_connector.domain.models import Chat, Message, Participant, RemoteMessageHit
+from teams_connector.domain.models import Chat, Message, MessageHit, Participant
 
 
 @dataclass
@@ -60,12 +60,13 @@ class RemoteFile:
 
 
 @dataclass
-class RemoteMessageSearchPage:
+class MessageSearchPage:
     """Normalized result of one Search v2 page."""
 
-    items: list[RemoteMessageHit]
+    items: list[MessageHit]
     more_results_available: bool | None
     result_set_found: bool
+    total: int | None  # Search v2's count for the query, when it sent one
 
 
 class ChatCatalog(Protocol):
@@ -137,6 +138,6 @@ class MessageSearchReader(Protocol):
         page_size: int,
         cvid: str,
         logical_id: str,
-    ) -> RemoteMessageSearchPage:
+    ) -> MessageSearchPage:
         """Search Teams message content via the standalone Microsoft Search v2 route."""
         ...

@@ -17,7 +17,7 @@ overview; this document records the rules and contracts they cannot show.
 | `src/teams_connector/__main__.py` | Canonical CLI (`teams-connector`) for shared sign-in, profile status, MCP, UI, and account-bound archive backup. Loads MCP and web dependencies only for those commands. |
 | `surfaces/mcp_main.py` | Typed MCP tools over the service layer. Keeps stdio free of logs; `send_message` is the only Teams write tool. |
 | `surfaces/web/` | Starlette app, static local export page, and loopback UI launcher. Uses a per-run session token, Host validation, and an idle timeout. |
-| `service/` | Domain behavior for the catalog, message history, local matching, archive sync, exports, attachment downloads, profile photos, and sending. MCP and UI share these operations. |
+| `service/` | Domain behavior for the catalog, message history, archive sync, exports, attachment downloads, profile photos, and sending. MCP and UI share these operations. |
 | `remote/ports.py` | Interfaces used by services; service code does not depend on concrete HTTP adapters. |
 | `remote/transport.py` | The only general HTTP client. Applies the allowlist, authentication, one-time 401 renewal, bounded idempotent retries, response limits, error mapping, and credential-free download redirects. |
 | `remote/chat_service.py`, `remote/csa.py` | Private Teams service adapters for chat catalog/history/rosters and CSA updates. Their endpoints are undocumented and described as private in the research record. |
@@ -116,23 +116,11 @@ does not receive a Microsoft token.
 
 ## Search behavior and boundaries
 
-`search_remote_messages` uses the shared Microsoft Search profile and the standalone Search v2
-endpoint for online Teams message discovery. It returns bounded message pointers, previews, timestamps,
-and conversation candidates; a conversation ID is attached only on an exact local-catalog match. The
-pointer (`search_message_id`) equals the history API's message ID (verified 2026-10-14), but the tool
-does not yet return it as `message_id` (roadmap P2.2d). Search v2 matches words, word prefixes and
-quoted phrases, not the middle of words. Agents decide whether to fetch surrounding history with
-`get_messages` or request another search page.
-
-`search_messages` remains a separate local archive workflow. The caller chooses the conversation
-scope, inclusive date range, and matching mode. The connector retrieves that range in bounded page
-requests, stores it, matches messages locally, and returns explicit preparation and per-conversation
-coverage. Neither message search discovers transcript or recap text, and there is no stable history
-page number for a search hit.
-
-Reverse-engineered endpoint shapes, source audits, and dated confidence notes are maintained in
-[Teams API research](api-research.md). Treat successful browser behavior as evidence, not a
-guarantee that the connector's app-owned token has the same access.
+`search_messages` is the one Teams message search. It sends one Microsoft Search v2 query on the shared
+Microsoft Search profile for each page. Search reads no history and writes nothing: each hit is a
+pointer, and `get_messages` reads the history around it. Search v2 matches whole words and word prefixes,
+and a quoted phrase matches its words in order; it does not match the middle of a word. Agents decide
+whether to fetch surrounding history or request another page.
 
 ## Logging
 
@@ -170,49 +158,54 @@ Example arguments for a bounded history read:
 }
 ```
 
-### Online Teams message discovery
+### Message search
 
-`search_remote_messages` calls Microsoft Search v2 for Teams messages and returns one bounded page
-(up to 25 hits; query text is limited to 512 characters).
-It does not fill or scan the local archive. Each hit preserves the Search v2 message reference,
-preview, sender, subject, timestamp, and conversation identity candidates supplied by the service.
-The connector sets `conversation_id` only when a candidate exactly equals a known local catalog ID.
-The hit's `search_message_id` is the same id `get_messages` returns as `message_id` (verified
-2026-10-14). An empty search is currently reported as unconfirmed (roadmap B2).
+`search_messages` takes `terms`: one to 25 phrases, each at most 200 characters, with no double quotes and no
+control characters. A message matches when any term matches. Each term is sent as one quoted phrase, so it
+is never split on its spaces and never read as query syntax. Search v2 matches the words of a phrase in
+order, so `budget review` needs both words in that order, and `budget` also finds `budgets`.
 
-When a hit has a `conversation_id` and `sent_at`, use `get_messages` with a bounded `since`/`until`
-window around that timestamp to inspect surrounding context. History paging has no stable page number
-for a search result. The agent decides whether to expand context or follow the search `cursor`; each
-cursor requests only the next bounded Search v2 page. This operation does not discover recap or
-transcript text. Those capabilities remain separate and unresolved.
+The connector builds one Search v2 query from the terms and the optional scope and dates:
 
-### Search message text in a chosen scope
+- `conversation_ids` (up to 100, from `list_chats` or `search_chats`) become `clientthreadid:` clauses,
+  joined with OR;
+- `since` and `until` become `sent >=` and `sent <=` clauses, written to the millisecond in UTC; both
+  bounds are inclusive;
+- soft-deleted messages are always left out (`NOT (isClientSoftDeleted:TRUE)`);
+- the terms form one OR group of quoted phrases.
 
-`search_messages` performs local matching. Choose exactly one scope: a list of
-`conversation_ids` or `all_chats=true`, and provide both `since` and `until`. Each call fetches a
-bounded number of remote pages into the archive before matching. If `coverage.preparation_complete`
-is false, repeat with the returned `cursor`. The response distinguishes incomplete retrieval from
-an empty match set and reports date coverage per conversation.
+The whole query is limited to 1,000 characters; a longer one is refused with a request to use fewer terms or
+conversations. Without a scope, the search covers every chat and channel the signed-in user can read.
 
-The modes are `exact`, `substring` (the default), and `all_terms`. `exact` compares the whole
-message text, not a phrase within it (roadmap B1). Matching is case-insensitive,
-accents remain significant, and SQL wildcard characters in a query are literal. Local archive
-messages remain searchable after the remote service no longer returns them. This tool is not the
-Teams Web global-search endpoint and does not return a page number or a jump-to-message handle.
+Each call returns one page of up to 25 hits (`limit`). A hit carries `message_id`, the history id that
+`get_messages` reads (the hit's `InternetMessageId`, verified 2026-10-14); `conversation_id` and
+`conversation_name` only when the hit's conversation matches a known chat exactly; `sent_at`, `sender`,
+`subject` and a `preview`. A hit without a `message_id` is reported in the coverage notes.
 
-Example search across one explicitly selected conversation and month:
+`coverage` reports `complete` (the result set was interpreted and no further page exists), `offset`,
+`page_size`, `more_results_available`, and `total`, Search v2's count for the query. `total` is approximate and
+can move between pages. A search with no hits is a confirmed empty page when Search v2 reports `Total: 0`;
+a missing result set is never reported as zero (live check 2026-10-15). Follow `cursor` only while more
+matches are useful. A cursor carries the query and paging, so its terms, scope and dates are not repeated.
+Search v2 refuses pages that start beyond its offset limit; the connector stops with a note at that
+point.
+
+To read around a hit, call `get_messages` with its `conversation_id` (when present) and a bounded
+`since`/`until` window around `sent_at`.
+
+Example request for one conversation and a month:
 
 ```json
 {
-  "query": "budget review",
+  "terms": ["budget review", "forecast"],
+  "conversation_ids": ["19:sample@thread.v2"],
   "since": "2026-08-01T00:00:00Z",
   "until": "2026-08-31T23:59:59Z",
-  "conversation_ids": ["19:sample@thread.v2"],
-  "match_mode": "substring",
-  "limit": 20,
-  "max_pages": 10
+  "limit": 25
 }
 ```
+
+This operation does not discover recap or transcript text; those capabilities remain separate.
 
 ### Sync, archive status, and exports
 

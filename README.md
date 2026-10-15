@@ -90,9 +90,8 @@ The MCP server exposes the tools below. Each one's inputs, results and caveats a
 | `auth_status` | shared auth provider | Read cached account/client credentials and resource-token expiry |
 | `list_chats` | [`service/catalog.py`](src/teams_connector/service/catalog.py) | List chats and channels by recent activity, with kind filters and paging |
 | `search_chats` | [`service/catalog.py`](src/teams_connector/service/catalog.py) | Match conversation names, and participant names indexed by `sync_archive` |
-| `search_remote_messages` | [`service/search.py`](src/teams_connector/service/search.py) | Discover messages online through Microsoft Search v2, one bounded page at a time |
 | `get_messages` | [`service/history.py`](src/teams_connector/service/history.py) | Read a conversation's history, newest pages first, with inclusive date bounds |
-| `search_messages` | [`service/search.py`](src/teams_connector/service/search.py) | Match message text locally in chosen chats and dates, preparing history first |
+| `search_messages` | [`service/search.py`](src/teams_connector/service/search.py) | Search Teams messages online through Microsoft Search v2: any of up to 25 terms, optionally within chosen chats and dates; one page of hits with message ids |
 | `sync_archive`, `archive_status` | [`service/archive.py`](src/teams_connector/service/archive.py) | Fetch history and rosters in resumable batches, and report what is covered |
 | `export_chats` | [`service/export/`](src/teams_connector/service/export/) | Export conversations to `.txt`, `.jsonl` or `.zip`, with their attachments |
 | `download_attachment` | [`service/files.py`](src/teams_connector/service/files.py) | Save a file linked from an archived message |

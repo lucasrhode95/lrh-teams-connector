@@ -77,8 +77,7 @@ async def test_substrate_message_search_builds_known_request_and_maps_hit() -> N
     assert body["Cvid"] == "synthetic-cvid" and body["LogicalId"] == "synthetic-logical-id"
     assert result.more_results_available is True and result.result_set_found
     hit = result.items[0]
-    assert hit.search_message_id == "synthetic-message-id"
-    assert hit.message_id_kind == "InternetMessageId"
+    assert hit.message_id == "synthetic-message-id"
     assert hit.conversation_id_candidates == ["synthetic-chat-id"]
     assert hit.sent_at and hit.sent_at.isoformat() == "2026-10-10T12:34:56+00:00"
     assert hit.sender == "Synthetic Sender" and hit.subject == "Synthetic subject"

@@ -116,7 +116,7 @@ class AppContext:
             store=store,
             catalog=catalog,
             history=history,
-            search=Search(store, catalog, history, search_source),
+            search=Search(store, search_source),
             archive=Archive(store, catalog, history, chat_service, channels, person),
             exports=Exports(store, catalog, history, files),
             sender=Sender(catalog, GraphWriter(graph)),

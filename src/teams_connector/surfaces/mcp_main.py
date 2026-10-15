@@ -28,11 +28,9 @@ from teams_connector.domain.models import (
     ExportFormat,
     ExportProgress,
     ExportRequest,
-    MatchMode,
     MessagePage,
-    RemoteMessageSearchResult,
+    MessageSearchResult,
     SavedFile,
-    SearchResult,
     SendResult,
     SyncResult,
 )
@@ -50,19 +48,11 @@ name or by an indexed participant's name (rosters are indexed by sync_archive; r
 page, with optional since/until and a total message_limit. Follow `cursor` for older messages. Long \
 a page holds whole messages up to max_chars (at least one), so no message text is cut. \
 is_self marks the user's own messages: use it rather than matching names.
-- Searching message content: search_messages needs an explicit date range and a scope \
-(conversation_ids, or all_chats=true). It first fetches that scope from Teams into the local archive \
-(bounded per call: follow the cursor while preparation_complete is false), then matches literally \
-(exact, substring or all_terms; case-insensitive, accents significant). Read coverage before treating \
-results as complete.
-- Online message discovery: search_remote_messages queries Teams message content through Microsoft \
-Search v2 (at most 25 hits, query length up to 512 characters) and returns one bounded page of \
-message pointers, previews, timestamps, and conversation identity candidates. It sets \
-conversation_id only when a candidate exactly matches the local catalog. The \
-catalog. The Search v2 message id is not yet proven interchangeable with get_messages message_id. \
-For a matched conversation, use sent_at with get_messages since/until to inspect surrounding history; \
-follow the returned search cursor only when more hits are useful. This tool does not discover \
-transcripts or meeting recaps.
+- Searching message content: search_messages takes terms (1 to 25 phrases; a message matches when any \
+term matches), optionally scoped by conversation_ids and since/until. Each term is one phrase, matched on \
+whole words and word prefixes; it is never split on its spaces or read as query syntax. Hits are pointers: \
+message_id is the id get_messages reads, and conversation_id is set when it matches a known chat. total is \
+approximate. Read coverage before treating results as complete.
 - Exporting: export_chats returns a local artifact path. One conversation without selected \
 attachments returns a plain .txt/.jsonl file; with attachments it returns a .zip containing one \
 conversation-named folder with the text export and retrieved files. Several conversations return one \
@@ -178,20 +168,6 @@ def build_server(context: AppContext) -> FastMCP:
 
     @mcp.tool(annotations=READ_ONLY)
     @_logged
-    async def search_remote_messages(
-        query: Annotated[
-            str,
-            Field(max_length=512, description="Text to search online in Teams messages."),
-        ],
-        limit: Annotated[int, Field(ge=1, le=25, description="Hits returned in this online page.")] = 20,
-        cursor: str | None = None,
-    ) -> RemoteMessageSearchResult:
-        """Search Teams messages online through Microsoft Search v2. Returns pointers and one page;
-        it does not download or search the local archive. Follow the cursor only when more hits help."""
-        return await (await services()).search.search_remote_messages(query, limit=limit, cursor=cursor)
-
-    @mcp.tool(annotations=READ_ONLY)
-    @_logged
     async def get_messages(
         conversation_id: ConversationId,
         since: Since = None,
@@ -228,31 +204,35 @@ def build_server(context: AppContext) -> FastMCP:
     @mcp.tool(annotations=READ_ONLY)
     @_logged
     async def search_messages(
-        query: Annotated[str, Field(description="Text to find in message text.")],
+        terms: Annotated[
+            list[str] | None,
+            Field(
+                description="1 to 25 phrases; a message matches when ANY term matches (OR). Each term is "
+                "one phrase: never split on its spaces, never read as query syntax, and no double quotes. "
+                "Search v2 matches whole words and word prefixes: 'budget' also finds 'budgets', 'udget' "
+                "finds nothing, and 'budget review' needs those words in that order. Omit only when "
+                "continuing with a cursor."
+            ),
+        ] = None,
+        conversation_ids: Annotated[
+            list[str] | None,
+            Field(description="Scope: up to 100 conversation ids from list_chats or search_chats."),
+        ] = None,
         since: Since = None,
         until: Until = None,
-        conversation_ids: Annotated[
-            list[str] | None, Field(description="Scope: up to 100 conversations (or set all_chats).")
-        ] = None,
-        all_chats: Annotated[bool, Field(description="Scope: every conversation in the catalog.")] = False,
-        match_mode: MatchMode = "substring",
-        limit: Annotated[int, Field(ge=1, le=50, description="Matches returned per call.")] = 20,
-        max_matches: Annotated[int, Field(ge=1, description="Total matches across calls.")] = 1000,
-        max_pages: Annotated[int, Field(ge=1, le=100, description="Remote pages fetched per call.")] = 10,
+        limit: Annotated[int, Field(ge=1, le=25, description="Hits per page, 1 to 25.")] = 25,
         cursor: str | None = None,
-    ) -> SearchResult:
-        """Fetch a date range of the scoped conversations into the archive, then match it literally.
-        since and until are required. Repeat with the cursor while preparation is incomplete."""
+    ) -> MessageSearchResult:
+        """Search Teams messages online through Microsoft Search v2, across all chats or within the chosen
+        conversations and dates. Hits are pointers: message_id is the id get_messages reads, and
+        conversation_id is set when it matches a known chat. total is approximate. Follow cursor only when
+        more hits help; with a cursor, terms, scope and dates come from it."""
         return await (await services()).search.search_messages(
-            query,
+            terms,
+            conversation_ids=conversation_ids,
             since=_utc(since),
             until=_utc(until),
-            conversation_ids=conversation_ids,
-            all_chats=all_chats,
-            mode=match_mode,
             limit=limit,
-            max_matches=max_matches,
-            max_pages=max_pages,
             cursor=cursor,
         )
 

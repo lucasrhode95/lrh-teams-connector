@@ -3379,3 +3379,19 @@ and with a 100,000-character budget (no message text kept). Both walks returned 
 full texts (28 and 58 messages). The small budget used more pages (4 and 3, against 2 and 3). The longest
 message text was 3,640 characters, so no single message exceeded the budget.
 
+## One message search over Search v2 (2026-10-15)
+
+**Evidence:** read-only calls through the connector's service layer on the signed-in account, against the self chat
+and the account's wider Teams history. Counts and booleans only; no message text, names or ids kept.
+Earlier entries name the two former operations `search_remote_messages` and `search_messages`; they are now one
+`search_messages` over Search v2 (roadmap P2.2d, done).
+
+- Time bounds are written to the millisecond in UTC. `sent >=` and `sent <=` both include a message sent at exactly
+  that time; `sent <` excludes it. A bound one millisecond away excludes the message.
+- `sent <= <whole second>` excluded a message sent a fraction of a second after it, so sub-second bounds matter.
+- A scope written as `(clientthreadid:<id> OR clientthreadid:<id>)` combined with the terms returned the scoped hit.
+- A hit's `InternetMessageId` equalled the id the history read returned for the same message.
+- An unscoped search returned hits with ids; a term matching nothing returned `Total: 0` and `complete: true`.
+- A continuation cursor kept the query and advanced the offset by the page size.
+- A query of about 880 characters was accepted.
+
