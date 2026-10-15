@@ -138,8 +138,10 @@ diagnostics.
    supports `limit` up to 200 and opaque continuation `cursor`, and can filter by `kind`. A cached
    catalog up to ten minutes old may answer unless `refresh=true`. `coverage.source` identifies
    whether the response used the local catalog or a refresh.
-2. Use `search_chats` to match a conversation name or participant name. Participant names are
-   available only after rosters have been indexed by `sync_archive`; read roster coverage.
+2. Use `search_chats` to match a conversation name or participant name. With `refresh=true` it also
+   asks Teams for named group and meeting chats that match a plain name or email, and lists the members
+   that matched; participants from indexed rosters (`sync_archive`) still count. Read roster coverage and
+   the notes: one-on-one chats are matched by name, and a query with query syntax is not sent to Teams.
 3. Call `get_messages` with the selected `conversation_id`. Pages are newest first; records within
    each page are oldest first. `since` and `until` are inclusive. `message_limit` caps the latest
    matching messages, while `page_size` is the most messages a page holds. A page also holds whole

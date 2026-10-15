@@ -59,21 +59,22 @@ Example: a reader looking up how a pasted image is downloaded goes to the AMS se
 research, and the architecture table shows `download_attachment` → `FileReader` → AMS and Graph
 `/shares`.
 
-### P2.2b — Find chats by participant without indexed rosters
+### P2.2b — Find chats by participant without indexed rosters (partial)
 
-Three server routes together cover most of it ([research](api-research.md#finding-chats-by-person)):
+Done 2026-10-15: route 2 (below) is in `search_chats` with `refresh=true`, and route 3 (names) already
+worked. Live check on 2026-10-15: a person's name matched 18 chats, 14 of them only through Teams'
+member match, which the rosters could not supply ([research](api-research.md#chat-search-by-member-2026-10-15)).
 
-1. **One-on-ones:** People suggestions return the person's object id, which forms the chat id
-   `19:{a}_{b}@unq.gbl.spaces`. Works with the current `m365.search` profile.
-2. **Named group and meeting chats:** the Search v2 `Chat` entity, queried with the person's email.
-   Works with `m365.search`; returns only named chats, about the last five months.
-3. **Unnamed groups:** the catalog's generated names contain members' names, so name search finds
-   them unless the person was cut off by the 87-character limit.
+Still open, and the only remaining part:
 
-Not covered: an older named chat where the person is a member but not in the title. Decide whether
-the chat-list cache keeps member lists for that case. Chat *suggestions* need a Teams-client
-Substrate token, a new `lrh-m365-auth` profile, and return fewer chats than route 2, so they are not
-needed.
+1. **One-on-ones by person:** People suggestions would return the person's object id, which forms the
+   chat id `19:{a}_{b}@unq.gbl.spaces`. Blocked: on 2026-10-15 every People suggestion request tried
+   returned 400 (or 404 on another path), with the `m365.search` token and the captured request shapes.
+   Decide whether to find the working route and token, or to accept name matching for one-on-ones.
+2. **The uncovered case:** an older named chat where the person is a member but not in the title, and
+   whose roster is not indexed. Teams' chat search covers only named group and meeting chats with
+   recent activity. Decide whether the chat-list cache keeps member lists for that case; until then the
+   coverage notes say that participant matches may be missing.
 
 ## Enhancements
 
