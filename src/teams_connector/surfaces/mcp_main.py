@@ -42,7 +42,8 @@ authorized message-send tool.
 
 - Finding conversations: list_chats lists chats and channels by recent activity (kind: one_on_one, \
 group, meeting, channel, or self for the user's own notes chat). search_chats finds conversations by \
-name, and with refresh by the members Teams matches for a plain name or email; read its coverage.
+name, and with refresh by the members Teams matches for a plain name or email; read its coverage. \
+When the operator enables Favorites, favorite is true for the chats in the Teams Favorites folder.
 - Reading: get_messages returns a conversation's history newest pages first, oldest first within a \
 page, with optional since/until and a total message_limit. Follow `cursor` for older messages. A \
 page holds whole messages up to max_chars (at least one), so no message text is cut. \

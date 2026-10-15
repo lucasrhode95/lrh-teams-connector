@@ -13,11 +13,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
 from datetime import UTC, datetime
 
+from teams_connector import config
 from teams_connector.domain.errors import AuthenticationRequired, ConnectorError, InvalidRequest, NotFound
 from teams_connector.domain.models import (
     CatalogCoverage,
@@ -29,7 +31,13 @@ from teams_connector.domain.models import (
     ChatSearchResult,
     Participant,
 )
-from teams_connector.remote.ports import ChannelDirectory, ChatCatalog, ChatMemberSearch, HistoryReader
+from teams_connector.remote.ports import (
+    ChannelDirectory,
+    ChatCatalog,
+    ChatMemberSearch,
+    FavoriteFolders,
+    HistoryReader,
+)
 from teams_connector.service import cursors
 from teams_connector.store.db import Store, fold
 
@@ -50,12 +58,14 @@ class Catalog:
         channels: ChannelDirectory,
         chat_history: HistoryReader,
         members: ChatMemberSearch | None = None,
+        favorites: FavoriteFolders | None = None,
     ) -> None:
         self._store = store
         self._source = source
         self._channels = channels
         self._chat_history = chat_history
         self._members = members
+        self._favorites = favorites
         self._lock = asyncio.Lock()
         self._notes: list[str] = []
 
@@ -105,6 +115,8 @@ class Catalog:
         if update.full:
             meta["catalog_bootstrapped"] = "1"
             meta["catalog_complete"] = "1" if update.complete is not False else "0"
+        if self._favorites is not None and config.favorites_enabled():
+            await _read_favorites(self._favorites, notes, meta)
         self._store.save_catalog(
             [*update.chats, *channels], deleted_ids=[*update.deleted_ids, *vanished], meta=meta
         )
@@ -222,6 +234,8 @@ class Catalog:
         if kind:
             chats = [c for c in chats if c.kind == kind]
         page = chats[offset : offset + limit]
+        favorites = self._favorite_ids()
+        page = [_with_favorite(chat, favorites) for chat in page]
         next_offset = offset + len(page)
         next_cursor = (
             cursors.encode("list_chats", offset=next_offset, include_empty=include_empty, chat_kind=kind)
@@ -231,6 +245,11 @@ class Catalog:
         return ChatPage(
             items=page, cursor=next_cursor, coverage=self.coverage(source, len(chats), empty_excluded)
         )
+
+    def _favorite_ids(self) -> set[str] | None:
+        """The Favorites set stored by the last refresh with the setting on; None when there is none."""
+        stored = self._store.meta("favorite_ids")
+        return None if stored is None else set(json.loads(stored))
 
     def coverage(self, source: str, total: int, empty_excluded: int = 0) -> CatalogCoverage:
         stamp = self._store.meta("catalog_at")
@@ -335,6 +354,26 @@ _QUERY_OPERATOR = re.compile(r"\b(?:and|or|not)\b", re.IGNORECASE)
 def _plain_text(query: str) -> bool:
     """A plain name or email: no quotes, parentheses, wildcards, property syntax or query operators."""
     return bool(_PLAIN_TEXT.fullmatch(query)) and not _QUERY_OPERATOR.search(query)
+
+
+async def _read_favorites(source: FavoriteFolders, notes: list[str], meta: dict[str, str]) -> None:
+    """Store the chats in the Favorites folder with the catalog. When the folder cannot be read, the stored
+    set stays and the coverage notes say so."""
+    try:
+        favorites = await source.favorite_ids()
+    except AuthenticationRequired:
+        raise
+    except ConnectorError as exc:
+        notes.append(f"Favorites were not refreshed: {exc}")
+        return
+    meta["favorite_ids"] = json.dumps(sorted(favorites))
+
+
+def _with_favorite(chat: Chat, favorites: set[str] | None) -> Chat:
+    """The chat with its Favorites flag: set when the setting is on and the folder was read, else unset."""
+    if not config.favorites_enabled() or favorites is None:
+        return chat.model_copy(update={"favorite": None})
+    return chat.model_copy(update={"favorite": chat.id in favorites})
 
 
 def _with_activity(channel: Chat, activity: Chat | None) -> Chat:

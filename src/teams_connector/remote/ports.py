@@ -75,6 +75,12 @@ class ChatCatalog(Protocol):
         ...
 
 
+class FavoriteFolders(Protocol):
+    async def favorite_ids(self) -> set[str]:
+        """The ids of the chats in the Favorites sidebar folder. A read only."""
+        ...
+
+
 class ChannelDirectory(Protocol):
     async def channels(self) -> list[Chat]:
         """Every channel of every joined team."""

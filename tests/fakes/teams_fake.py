@@ -161,6 +161,7 @@ class FakeTeams:
     files: dict[str, tuple[str, bytes]] = field(default_factory=dict)  # sharing URL -> (name, bytes)
     images: dict[str, bytes] = field(default_factory=dict)  # AMS object id -> full-size image bytes
     hosted: dict[str, bytes] = field(default_factory=dict)  # Graph hosted-content id -> image bytes
+    favorite_ids: set[str] = field(default_factory=set)  # chats in the Favorites sidebar folder
     delta_rows: list[dict[str, Any]] = field(default_factory=list)  # rows returned for the next delta
     deleted_chat_ids: list[str] = field(default_factory=list)
     csa_partial: bool = False
@@ -175,6 +176,19 @@ class FakeTeams:
     def transport(self) -> httpx.MockTransport:
         return httpx.MockTransport(self.handle)
 
+    def _folders(self) -> httpx.Response:
+        """The sidebar folders: Favorites lists ``favorite_ids``; the other folder is empty."""
+        favorites = [{"conversationId": chat_id} for chat_id in sorted(self.favorite_ids)]
+        return httpx.Response(
+            200,
+            json={
+                "conversationFolders": [
+                    {"folderType": "Favorites", "conversationFolderItems": favorites},
+                    {"folderType": "RecentChats", "conversationFolderItems": []},
+                ]
+            },
+        )
+
     def handle(self, request: httpx.Request) -> httpx.Response:
         url = urlsplit(str(request.url))
         path = request.url.path
@@ -187,6 +201,8 @@ class FakeTeams:
                     "regionGtms": {"chatService": CHAT_SERVICE},
                 },  # fmt: skip
             )
+        if url.hostname == "teams.microsoft.com" and path.endswith("/users/me/conversationFolders"):
+            return self._folders()
         if url.hostname == "teams.microsoft.com" and path.endswith("/users/me/updates"):
             return self._csa(request)
         if url.hostname == "emea.ng.msg.teams.microsoft.com":

@@ -105,7 +105,14 @@ class AppContext:
             Bearer(account_tokens, "m365.search"),
             anchor_mailbox=f"Oid:{account.object_id}@{account.tenant_id}",
         )
-        catalog = Catalog(store, catalog_source, channels, chat_service, members=member_search)
+        catalog = Catalog(
+            store,
+            catalog_source,
+            channels,
+            chat_service,
+            members=member_search,
+            favorites=catalog_source,
+        )
         history = History(catalog, chat_service, channels, account.object_id)
         search_source = SubstrateSearch(
             transport,
