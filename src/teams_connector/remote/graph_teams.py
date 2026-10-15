@@ -17,8 +17,8 @@ from typing import Any
 from teams_connector.domain.errors import InvalidRequest, NotFound
 from teams_connector.domain.models import Chat, Message, Participant
 from teams_connector.remote import graph_mapping
-from teams_connector.remote.graph import MAX_DOWNLOAD_BYTES, Graph, relative, segment, sub_failure
-from teams_connector.remote.ports import HistoryPage, RemoteFile, SendReceipt
+from teams_connector.remote.graph import Graph, relative, segment, sub_failure
+from teams_connector.remote.ports import HistoryPage, RemoteFile, SendReceipt, SharedFile
 from teams_connector.remote.transport import operation
 
 CHANNEL_PAGE = 50  # threads per page (Graph maximum for channel messages)
@@ -254,23 +254,36 @@ class GraphFiles:
     def __init__(self, graph: Graph) -> None:
         self._graph = graph
 
-    async def download(self, url: str, dest: Path, *, max_bytes: int | None = None) -> RemoteFile:
-        if not url.lower().startswith("https://"):
-            raise InvalidRequest("Only https sharing URLs can be downloaded.")
-        share = "u!" + base64.urlsafe_b64encode(url.encode()).decode().rstrip("=")
-        with operation("downloading a shared file"):
-            item = await self._graph.get(f"/shares/{share}/driveItem", {"$select": "name,size,file,folder"})
-            if item.get("folder") is not None:
-                raise InvalidRequest("The link points to a folder, not a file.")
-            content_type, size = await self._graph.download(
-                f"/shares/{share}/driveItem/content",
-                dest,
-                max_bytes=MAX_DOWNLOAD_BYTES if max_bytes is None else max_bytes,
+    async def describe(self, url: str) -> SharedFile:
+        share = _share_id(url)
+        with operation("describing a shared file"):
+            item = await self._graph.get(
+                f"/shares/{share}/driveItem", {"$select": "id,name,size,folder,eTag"}
             )
-        mime = (item.get("file") or {}).get("mimeType") if isinstance(item.get("file"), dict) else None
-        name = item.get("name")
-        return RemoteFile(
+        if item.get("folder") is not None:
+            raise InvalidRequest("The link points to a folder, not a file.")
+        item_id = item.get("id")
+        if not isinstance(item_id, str) or not item_id:
+            raise NotFound("Graph returned no file for the link.")
+        name, etag, size = item.get("name"), item.get("eTag"), item.get("size")
+        return SharedFile(
+            item_id=item_id,
             name=name if isinstance(name, str) else None,
-            content_type=mime or content_type,
-            size=size,
+            version=etag if isinstance(etag, str) else "",
+            size=size if isinstance(size, int) else None,
         )
+
+    async def download(self, url: str, dest: Path, *, max_bytes: int) -> RemoteFile:
+        share = _share_id(url)
+        with operation("downloading a shared file"):
+            content_type, size = await self._graph.download(
+                f"/shares/{share}/driveItem/content", dest, max_bytes=max_bytes
+            )
+        return RemoteFile(name=None, content_type=content_type, size=size)
+
+
+def _share_id(url: str) -> str:
+    """Graph's share identifier for a sharing URL: ``u!`` and the URL-safe base64 of the URL, unpadded."""
+    if not url.lower().startswith("https://"):
+        raise InvalidRequest("Only https sharing URLs can be downloaded.")
+    return "u!" + base64.urlsafe_b64encode(url.encode()).decode().rstrip("=")

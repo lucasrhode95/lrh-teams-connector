@@ -117,6 +117,24 @@ class ChatService:
             raise NotFound("Teams returned no message for that id.")
         return mapping.to_message(data, chat.id)
 
+    async def messages_at(self, chat: Chat, sent_at: datetime) -> list[Message]:
+        """The messages that arrived at exactly ``sent_at``. Equal start and end times select that instant."""
+        moment = str(_epoch_ms(sent_at))
+        url = _with_query(
+            await self._messages_url(chat.id),
+            startTime=moment,
+            endTime=moment,
+            pageSize="10",
+            view="msnp24Equivalent",
+        )
+        with operation("reading messages by time"):
+            data = await self._get(url)
+        rows = data.get("messages")
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise Upstream("Unexpected Teams messages response.")
+        messages = [mapping.to_message(row, chat.id) for row in rows]
+        return [message for message in messages if message.sent_at == sent_at]
+
     async def members(self, chat: Chat) -> list[Participant]:
         """The members of a chat, with names from the member list or the directory."""
         url = f"{await self._base()}/v1/threads/{quote(chat.id, safe='')}/members"

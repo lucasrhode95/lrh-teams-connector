@@ -68,7 +68,7 @@
 <g><title>Chats and channels by recent activity, with kind filters and paging. → Catalog.list</title><text class="detail small" x="118" y="656">• <tspan class="code">list_chats</tspan></text></g>
 <g><title>Conversation names, and, with a refresh, members that Teams matches. → Catalog.search</title><text class="detail small" x="118" y="683">• <tspan class="code">search_chats</tspan></text></g>
 <g><title>One bounded page of a conversation, newest pages first. → History.get_messages</title><text class="detail small" x="118" y="710">• <tspan class="code">get_messages</tspan></text></g>
-<g><title>Save one file linked from a message, read again from Teams. → Files.download_attachment</title><text class="detail small" x="118" y="737">• <tspan class="code">download_attachment</tspan></text></g>
+<g><title>Save the files a message names, by message id or arrival time; each is cached per source. → Files.download_attachments</title><text class="detail small" x="118" y="737">• <tspan class="code">download_attachments</tspan></text></g>
 <text class="group-title" x="118" y="776">Account</text>
 <g><title>The active account and each profile's cached credential and token expiry. → TokenProvider.status</title><text class="detail small" x="118" y="806">• <tspan class="code">auth_status</tspan></text></g>
 <text class="group-title" x="360" y="626">Search</text>
@@ -166,8 +166,8 @@
 <rect x="100" y="1634" width="553" height="260" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
 <text class="section-title" x="118" y="1669"><tspan class="code">Files</tspan> · <tspan class="code">Photos</tspan><tspan class="detail" dx="12">files.py</tspan></text>
 <text class="group-title" x="118" y="1706">Methods</text>
-<g><title>Save one file linked from a message, read again from Teams; streamed with a size bound.</title><text class="detail" x="118" y="1736">• <tspan class="code">download_attachment(...)</tspan></text></g>
-<g><title>The same, for a file the export already selected.</title><text class="detail" x="118" y="1763">• <tspan class="code">download_selected_attachment</tspan></text></g>
+<g><title>Save the files a message names, by message id or arrival time; each is cached per source.</title><text class="detail" x="118" y="1736">• <tspan class="code">download_attachments(...)</tspan></text></g>
+<g><title>Fetch one attachment into the download cache, or return its cached file; exports use it too. → Files.save</title><text class="detail" x="118" y="1763">• <tspan class="code">save(...)</tspan></text></g>
 <g><title>A participant's directory photo, for the UI.</title><text class="detail" x="118" y="1790">• <tspan class="code">Photos.photo(user_id)</tspan></text></g>
 <text class="muted" x="118" y="1878">uses <tspan class="code">History</tspan> · <tspan class="code">FileReader</tspan> · <tspan class="code">People</tspan></text>
 
@@ -326,7 +326,7 @@
 <text class="detail small" x="1938" y="501">• <tspan class="code">CsaCatalog(transport, session, ...)</tspan></text>
 <g><title>SQLite file per account fingerprint.</title><text class="detail small" x="1938" y="528">• <tspan class="code">Store(account)</tspan> · <tspan class="code">Catalog</tspan> · <tspan class="code">History</tspan></text></g>
 <text class="detail small" x="1938" y="555">• <tspan class="code">SubstrateSearch(transport, m365.search)</tspan></text>
-<text class="detail small" x="1938" y="582">• <tspan class="code">Files(history, GraphFiles)</tspan> · <tspan class="code">Photos</tspan></text>
+<text class="detail small" x="1938" y="582">• <tspan class="code">Files(history, GraphFiles, images)</tspan> · <tspan class="code">Photos</tspan></text>
 <text class="detail small" x="1938" y="609">• <tspan class="code">Search</tspan> · <tspan class="code">Exports</tspan></text>
 <text class="detail small" x="1938" y="636">• <tspan class="code">Sender(catalog, GraphWriter)</tspan></text>
 

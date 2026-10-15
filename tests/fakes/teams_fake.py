@@ -67,6 +67,17 @@ def cs_message(
     }
 
 
+def _channel_message(channel: FakeChannel, message_id: str) -> dict[str, Any] | None:
+    """A channel post or reply by id, as Graph returns one channel message."""
+    for root in channel.threads:
+        if root["id"] == message_id:
+            return root
+        for reply in root.get("replies", []):
+            if reply["id"] == message_id:
+                return reply
+    return None
+
+
 def graph_message(
     message_id: str,
     when: str,
@@ -148,6 +159,8 @@ class FakeTeams:
     users: dict[str, str] = field(default_factory=dict)  # object id -> display name (Graph directory)
     photos: dict[str, bytes] = field(default_factory=dict)
     files: dict[str, tuple[str, bytes]] = field(default_factory=dict)  # sharing URL -> (name, bytes)
+    images: dict[str, bytes] = field(default_factory=dict)  # AMS object id -> full-size image bytes
+    hosted: dict[str, bytes] = field(default_factory=dict)  # Graph hosted-content id -> image bytes
     delta_rows: list[dict[str, Any]] = field(default_factory=list)  # rows returned for the next delta
     deleted_chat_ids: list[str] = field(default_factory=list)
     csa_partial: bool = False
@@ -178,6 +191,8 @@ class FakeTeams:
             return self._csa(request)
         if url.hostname == "emea.ng.msg.teams.microsoft.com":
             return self._chat_service(request, path, parse_qs(url.query))
+        if url.hostname == "eu-api.asm.skype.com":
+            return self._ams(request, path)
         if url.hostname == "graph.microsoft.com":
             return self._graph(request, path.removeprefix("/v1.0"), parse_qs(url.query))
         if url.hostname and url.hostname.endswith(".sharepoint.com"):
@@ -233,10 +248,11 @@ class FakeTeams:
             if chat is None:
                 return httpx.Response(404, json={"errorCode": "NotFound"})
             start = int(query.get("startTime", ["0"])[0])
+            end = int(query.get("endTime", [str(2**62)])[0])
             size = int(query.get("pageSize", ["100"])[0])
             offset = int(query.get("syncState", ["0"])[0])
             ordered = sorted(
-                (m for m in chat.messages if ms(m["originalarrivaltime"]) >= start),
+                (m for m in chat.messages if start <= ms(m["originalarrivaltime"]) <= end),
                 key=lambda m: m["originalarrivaltime"],
                 reverse=True,
             )
@@ -268,8 +284,24 @@ class FakeTeams:
 
     # ------------------------------------------------------------------ Graph
 
+    def _ams(self, request: httpx.Request, path: str) -> httpx.Response:
+        """AMS full-size views of pasted images. The connector sends the Skype token as ``skype_token``."""
+        if not request.headers.get("authorization", "").startswith("skype_token "):
+            return httpx.Response(401, json={"error": "unauthorized"})
+        parts = path.strip("/").split("/")
+        if len(parts) == 5 and parts[:2] == ["v1", "objects"] and parts[3:] == ["views", "imgpsh_fullsize"]:
+            data = self.images.get(parts[2])
+            if data is not None:
+                return httpx.Response(200, content=data, headers={"content-type": "image/png"})
+        return _not_found()
+
     def _graph(self, request: httpx.Request, path: str, query: dict[str, list[str]]) -> httpx.Response:
         parts = path.strip("/").split("/")
+        if len(parts) == 9 and parts[6] == "hostedContents" and parts[8] == "$value":
+            data = self.hosted.get(parts[7])
+            if data is None:
+                return _not_found()
+            return httpx.Response(200, content=data, headers={"content-type": "image/png"})
         if request.method == "POST" and path == "/$batch":
             body = json.loads(request.content)
             responses = []
@@ -309,6 +341,9 @@ class FakeTeams:
                 return _page([{"userId": oid, "displayName": name} for oid, name in channel.members])
             if parts[4] == "messages" and len(parts) == 5:
                 return self._threads(channel, query)
+            if parts[4] == "messages" and len(parts) == 6:
+                found = _channel_message(channel, parts[5])
+                return httpx.Response(200, json=found) if found is not None else _not_found()
         if parts[0] == "users" and len(parts) == 2:
             name = self.users.get(parts[1])
             return httpx.Response(200, json={"id": parts[1], "displayName": name}) if name else _not_found()
@@ -328,8 +363,16 @@ class FakeTeams:
                 return httpx.Response(
                     302, headers={"location": f"https://tenant.sharepoint.com/dl/{_share_key(name)}"}
                 )
+            key = _share_key(name)
             return httpx.Response(
-                200, json={"name": name, "size": len(data), "file": {"mimeType": "text/plain"}}
+                200,
+                json={
+                    "id": f"drive-item-{key}",
+                    "name": name,
+                    "size": len(data),
+                    "eTag": f'"{{{key}}},1"',
+                    "file": {"mimeType": "text/plain"},
+                },
             )
         return _not_found()
 

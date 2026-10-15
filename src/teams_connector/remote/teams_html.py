@@ -12,8 +12,12 @@ import binascii
 import html
 import json
 import re
+from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any
+
+from teams_connector.domain.models import Attachment
+from teams_connector.remote import inline_images
 
 _URI_OBJECT_RE = re.compile(
     r"<URIObject\b(?P<attributes>[^>]*)>(?P<content>.*?)</URIObject\s*>",
@@ -257,6 +261,8 @@ class TeamsHtmlParser(HTMLParser):
         self.last_mention_content_start: int | None = None
         self.last_mention_close_index: int | None = None
         self.paragraph_starts: list[int] = []
+        self.images: list[Attachment] = []
+        self.image_names: set[str] = set()
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attributes = {name.lower(): value or "" for name, value in attrs}
@@ -269,18 +275,9 @@ class TeamsHtmlParser(HTMLParser):
             if join_snapshot is None:
                 self.parts.append("@(")
             self.mention_content_starts.append(len(self.parts))
-        if "amsimage" in item_type:
-            image_url = (
-                attributes.get("src")
-                or attributes.get("data-src")
-                or attributes.get("itemid")
-                or attributes.get("alt")
-            )
-            if image_url or tag == "img":
-                self._newline(1)
-                self.parts.append(f"[Image: {image_url or 'inline image'}]")
-                if tag == "img":
-                    return
+        if tag == "img" and not self.ignored_depth:
+            self._image(attributes)
+            return
         if tag in {"script", "style"}:
             self.ignored_depth += 1
             return
@@ -323,17 +320,6 @@ class TeamsHtmlParser(HTMLParser):
             self.pre_depth += 1
         elif tag == "code" and not self.pre_depth:
             self.parts.append("`")
-        elif tag == "img":
-            item_type = attributes.get("itemtype", "").lower()
-            if "amsimage" in item_type or attributes.get("src"):
-                image_url = (
-                    attributes.get("src")
-                    or attributes.get("data-src")
-                    or attributes.get("itemid")
-                    or attributes.get("alt")
-                )
-                self._newline(1)
-                self.parts.append(f"[Image: {image_url or 'inline image'}]")
 
     def handle_endtag(self, tag: str) -> None:
         if self.mention_tags and tag == self.mention_tags[-1]:
@@ -408,6 +394,19 @@ class TeamsHtmlParser(HTMLParser):
                 data = data[:leading_whitespace] + data[leading_whitespace + 1 :]
             self.suppress_leading_mention_at = False
         self.parts.append(data)
+
+    def _image(self, attributes: dict[str, str]) -> None:
+        image = inline_images.inline_image(attributes)
+        if image.name is None:
+            if image.own_line:
+                self._newline(1)
+            self.parts.append(image.text)
+            return
+        name = inline_images.unique_name(image.name, self.image_names)
+        self._newline(1)
+        self.parts.append(f"[Image: {name}]")
+        if image.attachment is not None:
+            self.images.append(image.attachment.model_copy(update={"name": name}))
 
     def _join_previous_mention(self) -> tuple[list[str], int] | None:
         close_index = self.last_mention_close_index
@@ -502,8 +501,21 @@ def adaptive_card_text(payload: Any) -> list[str]:
     return _adaptive_card_text(payload)
 
 
+@dataclass(frozen=True)
+class RenderedBody:
+    """A message body's readable text, and its inline images as attachments, named as the text names them."""
+
+    text: str
+    images: list[Attachment]
+
+
 def render_body(content: str, *, is_html: bool) -> str:
     """Readable text for one Teams message body (HTML or plain text)."""
+    return render_message(content, is_html=is_html).text
+
+
+def render_message(content: str, *, is_html: bool) -> RenderedBody:
+    """Readable text for one Teams message body (HTML or plain text), with its inline images."""
     decoded_content = html.unescape(content)
     if not re.search(r"<URIObject\b", content, re.IGNORECASE) and re.search(
         r"<URIObject\b", decoded_content, re.IGNORECASE
@@ -511,16 +523,16 @@ def render_body(content: str, *, is_html: bool) -> str:
         content = decoded_content
     content, _ = _rewrite_swift_uriobjects(content, as_html=is_html)
     if not content:
-        return ""
+        return RenderedBody("", [])
     if not is_html:
-        return normalize_plain_text(content)
+        return RenderedBody(normalize_plain_text(content), [])
     parser = TeamsHtmlParser()
     try:
         parser.feed(content)
         parser.close()
-        return parser.text()
+        return RenderedBody(parser.text(), parser.images)
     except Exception:
-        return _render_visible_html(content)
+        return RenderedBody(_render_visible_html(content), [])
 
 
 def graph_html(content: str) -> str:

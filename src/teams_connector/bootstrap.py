@@ -21,6 +21,7 @@ from teams_connector.remote.csa import CsaCatalog
 from teams_connector.remote.csa_mapping import Me
 from teams_connector.remote.graph import Graph
 from teams_connector.remote.graph_teams import GraphChannels, GraphFiles, GraphPeople, GraphWriter
+from teams_connector.remote.image_readers import AmsCredential, AmsImages, GraphHostedImages
 from teams_connector.remote.substrate_search import SubstrateChatSearch, SubstrateSearch
 from teams_connector.remote.teams_session import TeamsSession
 from teams_connector.remote.transport import Bearer, Transport
@@ -111,7 +112,12 @@ class AppContext:
             Bearer(account_tokens, "m365.search"),
             anchor_mailbox=f"Oid:{account.object_id}@{account.tenant_id}",
         )
-        files = Files(history, GraphFiles(graph))
+        files = Files(
+            history,
+            GraphFiles(graph),
+            AmsImages(transport, AmsCredential(session)),
+            GraphHostedImages(graph),
+        )
         person = Participant(id=account.object_id, name=name)
         return Services(
             account=account,

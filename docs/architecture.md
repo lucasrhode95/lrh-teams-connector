@@ -22,6 +22,7 @@ overview; this document records the rules and contracts they cannot show.
 | `remote/transport.py` | The only general HTTP client. Applies the allowlist, authentication, one-time 401 renewal, bounded idempotent retries, response limits, error mapping, and credential-free download redirects. |
 | `remote/chat_service.py`, `remote/csa.py` | Private Teams service adapters for the chat catalog, chat history, chat members, and CSA updates. Their endpoints are undocumented and described as private in the research record. |
 | `remote/graph.py`, `remote/graph_teams.py` | Microsoft Graph paging, batching, channel history, people/photos, file download, and the explicitly authorized message-send request. |
+| `remote/inline_images.py`, `remote/image_readers.py` | Pasted images: the marker name and attachment record of each image in a message (`inline_images.py`, no network); the AMS full-size and Graph hosted-copy readers (`image_readers.py`). |
 | `remote/*_mapping.py` and `remote/teams_html.py` | Convert wire responses into domain records and readable message text. Wire-format field names remain inside this layer. |
 | `store/db.py` | Account-bound SQLite store for the chat catalog and account metadata only. Holds no message content and no tokens. |
 | `service/export/` | Text/JSONL formatting and safe output packaging. Exports read Teams page by page and spool to a temporary file, use exclusive temporary paths, and publish only after completion. |
@@ -92,9 +93,11 @@ A store left by an earlier version that kept messages is moved, without deletion
 `legacy-archive-<timestamp>` folder the first time this version opens the account; the catalog is then
 rebuilt from Teams. A damaged store is moved into a `corrupt-<timestamp>` folder the same way.
 
-Exports and downloaded attachments are written below the Teams data directory, are given exclusive
-filenames, and are removed after seven days when their output directory is next used. A failed or
-cancelled export publishes nothing.
+Exports and downloaded attachments are written below the Teams data directory and are removed after seven
+days when their folder is next used, subfolders included. Downloads are cached per source
+(`downloads/<source>/<key>/`: AMS and Graph images by object id, data images by digest, shared files by drive
+item and version), so a file already there is returned without fetching its content. A failed or cancelled
+export publishes nothing.
 
 ## HTTP and safety rules
 
@@ -109,6 +112,10 @@ allows one HTTPS redirect to a SharePoint download host and does not forward the
 to that host. Downloads have caller-supplied byte limits and are streamed to temporary files before
 publication. URLs, query strings, bodies, authorization headers, message content, and search terms
 are omitted from operational logs; credential-like values are redacted as another safeguard.
+
+Pasted images are fetched only from the URL their message names: AMS full-size views from `*.asm.skype.com`
+with the session's Skype token, and Graph's hosted copies of channel images with the Graph token. Nothing is
+downloaded while a message is read.
 
 The local UI rejects non-local Host headers and requires a random per-process token on API calls.
 It uses a restrictive Content Security Policy and renders message content as text. The browser page
@@ -224,11 +231,13 @@ An export reads each conversation from Teams page by page, newest first, and spo
 file; the text is then written oldest first from those pages. The temporary folder is removed when the export
 ends, so a failed export publishes nothing.
 
-`download_attachment` saves one file linked from a message. It reads that message again from Teams by its id
-(`message_id`), and `name` selects one file when the message has several. The file streams to a temporary file
-with a byte limit and is published under its file name, numbered if the name is taken, once it is complete.
-General OneDrive and SharePoint discovery belongs to the SharePoint connector. Email attachments belong to
-Outlook.
+`download_attachment` saves the files a message names: its shared files and its pasted images. Pass exactly
+one of `message_id`, or `sent_at` (the time exactly as the TXT export prints it). `names` selects files by
+their markers; all of them are saved when it is omitted. The message is read again from Teams: by id, or by
+time through Chat Service, and a channel message is then read through Graph, as `get_messages` reads it, so
+the names match the text. Several messages at the same time are refused with their ids. Each file is fetched
+once into the download cache (see Storage), and the tool returns the local paths. General OneDrive and
+SharePoint discovery belongs to the SharePoint connector. Email attachments belong to Outlook.
 
 ### Send a message
 

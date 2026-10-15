@@ -126,62 +126,6 @@ which requires admin consent
 ([research](api-research.md#meeting-recaps-and-transcripts-as-search-sources-2026-10-10)). Respect
 the download restriction the Teams UI showed for one meeting; a reference is not permission.
 
-### N1 — Attachments and inline images by name
-
-Decided 2026-10-15. Today pasted images appear only as
-`[Image: https://…/views/imgo]` in the text, never as attachments, so exports and
-`download_attachment` skip them; the URL is a compressed preview; downloads go only through Graph
-`/shares`; and an emoji sent as a `data:` URI puts its base64 into the text
-([research](api-research.md#inline-images-ams)).
-
-**One extraction, three uses.** The same text rendering serves every route:
-
-- `get_messages` returns text only. Each attachment or inline image is a marker with a stable name.
-- `download_attachment` fetches the files the agent chooses, so it can judge from context what is
-  worth downloading and what is a joke GIF.
-- `export_chats` wraps the same extraction: by default it downloads every file its text names and
-  writes each beside the text under that exact name; `include_attachments=false` writes text only.
-
-**Markers.** Names come from the message itself, so the same message always gives the same names:
-
-| Source | Marker | Name from |
-|---|---|---|
-| AMS image (`itemtype=…/AMSImage`) | `[Image: 0-neu-d1-0123….png]` | `itemid` (the AMS object id) and `itemscope` (the type) |
-| `data:` image | `[Image: sha-3f9a1c2e.png]` | SHA-256 prefix of the decoded bytes and the MIME type |
-| SharePoint or OneDrive file (`properties.files`) | `[File: budget-report.xlsx]` | the file's own name |
-
-Equal names within one message get ` (2)`, ` (3)` in message order. Emoji, custom emoji and stickers
-render as their `alt` or `title` text, not as markers. External images such as Giphy render as
-`[GIF: <title>] <link>` and are never fetched. Base64 never reaches a response.
-
-**`download_attachment` contract:** `conversation_id`; exactly one of `message_id` or `sent_at` (the
-time exactly as the TXT export prints it); `names`, optional, all of the message's files when
-omitted. It reads that one message again from Chat Service, by id
-(`GET …/messages/{id}`) or by time (`startTime` = `endTime`, then the exact-time match), runs the
-same extraction and resolves the names. Both are plain reads that leave the chat's read state as it
-was ([requirements §8](requirements.md#8-history-exports-and-sending)). No identity cache is kept:
-the message is the index. Several
-messages at the same time is an error that lists their ids. Results are local paths, never MCP
-resources or inline bytes.
-
-**Fetching:** always full resolution. AMS images: `GET <AMS host>/v1/objects/{id}/views/imgpsh_fullsize`
-with `Authorization: skype_token`; previews such as `imgo` are never used. Add the AMS hosts
-(`*.asm.skype.com`, `*.asyncgw.teams.microsoft.com`) to the allowed hosts. `data:` images are decoded
-from the message. SharePoint and OneDrive files keep the Graph `/shares` route.
-
-**Download once:** the disk is the cache. Files go to a folder named by their source, under the
-marker name: AMS by object id, `data:` images by SHA-256, SharePoint and OneDrive by drive item id
-and version. An existing file is returned without fetching. Write to a temporary file and rename, so
-concurrent processes are safe; the seven-day cleanup applies. Nothing downloads while reading
-([requirements §6](requirements.md#6-local-data-decided-2026-10-14)).
-
-**Exports:** TXT keeps today's lean header (exact UTC time, sender, reply and deletion marks) with the
-markers in place of image URLs, and no ids; JSONL keeps every field, ids included.
-
-**Settle while building:** channel history is read through Graph, which presents pasted images as
-`hostedContents` URLs rather than AMS elements. Chat Service also serves channels (single reads were
-checked live), so read channel history there too, or map Graph's hosted content to the same names.
-
 ### N5 — Presence
 
 Show availability, activity, last-active time and device type, and nothing richer (no status notes

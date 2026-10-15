@@ -19,17 +19,18 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from teams_connector.bootstrap import AppContext, Services
+from teams_connector.domain.errors import InvalidRequest
 from teams_connector.domain.models import (
     ChatKind,
     ChatPage,
     ChatSearchResult,
+    DownloadedFiles,
     ExportArtifact,
     ExportFormat,
     ExportProgress,
     ExportRequest,
     MessagePage,
     MessageSearchResult,
-    SavedFile,
     SendResult,
 )
 
@@ -58,8 +59,9 @@ outer .zip, with an inner .zip for each conversation with attachments and a plai
 without them. Attachments are included by default; set include_attachments=false to omit them. Date \
 bounds and latest-N message_limit apply per conversation; export fetches the selected history, \
 so a long selection takes a while. Read the returned file path with your file tools.
-- Attachments: download_attachment saves a message's shared file (from get_messages) and returns its \
-local path.
+- Attachments: download_attachment saves the files a message names (its shared files and pasted images, \
+shown as [File: name] and [Image: name] markers) and returns their local paths. Pass the message_id from \
+get_messages, or the message's sent_at time instead.
 - Messages are read from Teams on each call; nothing is kept locally. Messages with is_deleted=true were \
 deleted in Teams, and Teams keeps no text for them; edited ones show their newest text.
 - Times are UTC; a date-time without an offset is taken as UTC.
@@ -300,13 +302,28 @@ def build_server(context: AppContext) -> FastMCP:
     @_logged
     async def download_attachment(
         conversation_id: ConversationId,
-        message_id: str,
-        name: Annotated[
-            str | None, Field(description="Attachment name, when the message has several.")
+        message_id: Annotated[
+            str | None, Field(description="The message's id, from get_messages or search_messages.")
         ] = None,
-    ) -> SavedFile:
-        """Save one shared file attached to a message as a local file and return its path."""
-        return await (await services()).files.download_attachment(conversation_id, message_id, name)
+        sent_at: Annotated[
+            datetime | None,
+            Field(description="The message's time, exactly as the TXT export prints it, instead of its id."),
+        ] = None,
+        names: Annotated[
+            list[str] | None,
+            Field(
+                description="The files to save, by the names their markers show; all of them when omitted."
+            ),
+        ] = None,
+    ) -> DownloadedFiles:
+        """Save the files a message names (shared files and pasted images) as local files and return their
+        paths. Pass exactly one of message_id or sent_at."""
+        if (message_id is None) == (sent_at is None):
+            raise InvalidRequest("Pass exactly one of message_id or sent_at.")
+        when = _utc(sent_at) if sent_at is not None else None
+        return await (await services()).files.download_attachments(
+            conversation_id, message_id=message_id, sent_at=when, names=names
+        )
 
     @mcp.tool(annotations=SEND)
     @_logged

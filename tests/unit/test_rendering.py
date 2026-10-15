@@ -81,7 +81,7 @@ def test_attachment_and_image_markers() -> None:
         },
         "c",
     )  # fmt: skip
-    assert "[Attachment: report.xlsx]" in message.text and "https://files.example.test/report" in message.text
+    assert "[File: report.xlsx]" in message.text and "https://files.example.test/report" not in message.text
     assert "[Image: https://images.example.test/one.png]" in message.text
     assert message.attachments[0].url == "https://files.example.test/report"
 
@@ -185,7 +185,7 @@ def test_graph_message_mapping() -> None:
     }
     message = graph_mapping.to_message(raw, "19:c@thread.tacv2")
     assert message.text.startswith("@(Example, User) see")
-    assert "Poll" in message.text and "[Attachment: deck.pptx]" in message.text
+    assert "Poll" in message.text and "[File: deck.pptx]" in message.text
     assert message.author_id == "aaaaaaaa-0000-0000-0000-000000000001" and message.reply_to_id == "6"
     assert message.subject == "Plan" and message.edited_at and message.attachments[0].url
 
