@@ -3,9 +3,7 @@
 It holds the chat catalog and its delta token, and the account's metadata. It holds no message content:
 Teams is the record, and every history read goes to Teams. Several short-lived processes may share the file:
 WAL mode, busy timeout, one connection per operation, short transactions. If SQLite reports it damaged when
-it is opened, the damaged files are moved to a ``corrupt-<timestamp>`` folder next to it. A file left by an
-earlier version that held a message archive is moved to a ``legacy-archive-<timestamp>`` folder; the catalog
-is then rebuilt from Teams.
+it is opened, the damaged files are moved to a ``corrupt-<timestamp>`` folder next to it.
 """
 
 from __future__ import annotations
@@ -37,7 +35,6 @@ CREATE TABLE IF NOT EXISTS chats (
 CREATE INDEX IF NOT EXISTS chats_activity ON chats (last_message_at);
 """
 
-LEGACY_TABLES = ("messages", "participants", "chat_state")
 log = logging.getLogger(__name__)
 
 
@@ -70,12 +67,6 @@ class Store:
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists() and not self._healthy():
             self._move_aside("corrupt", "Local store was damaged; moved to %s and starting a fresh one.")
-        if path.exists() and self._has_legacy_archive():
-            self._move_aside(
-                "legacy-archive",
-                "A message archive from an earlier version was moved to %s. It is not used any more; the "
-                "catalog is rebuilt from Teams.",
-            )
         with contextlib.closing(sqlite3.connect(self.path, timeout=15)) as db:
             db.execute("PRAGMA journal_mode=WAL")  # persistent: set once per database file
         with self._tx() as db:
@@ -95,18 +86,6 @@ class Store:
                 db.close()
         except sqlite3.DatabaseError:
             return False
-
-    def _has_legacy_archive(self) -> bool:
-        """Whether the file still holds the message tables of an earlier version."""
-        try:
-            db = sqlite3.connect(self.path, timeout=15)
-            try:
-                names = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-            finally:
-                db.close()
-        except sqlite3.DatabaseError:
-            return False
-        return bool(names & set(LEGACY_TABLES))
 
     def _move_aside(self, folder_prefix: str, message: str) -> None:
         """Move the store's files into a timestamped folder next to it. Nothing is deleted."""
