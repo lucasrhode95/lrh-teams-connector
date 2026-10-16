@@ -74,7 +74,7 @@
 <text class="group-title" x="360" y="626">Search</text>
 <g><title>One page of Search v2 message hits for the terms, scope and dates. → Search.search_messages</title><text class="detail small" x="360" y="656">• <tspan class="code">search_messages</tspan></text></g>
 <text class="group-title" x="360" y="722">Write</text>
-<g><title>Send one message, optionally with files and inline images, after explicit authorization; checks the live chat name; sent once. → Sender.send</title><text class="detail small" x="360" y="752">• <tspan class="code">send_message</tspan></text></g>
+<g><title>Send one message, optionally with files and inline images, after explicit authorization; checks the live chat name; never resent after an uncertain outcome; a failed send deletes its uploads. → Sender.send</title><text class="detail small" x="360" y="752">• <tspan class="code">send_message</tspan></text></g>
 <g><title>Delete a confirmed set of the user's own chat messages; re-reads each, deletes each once, reports deleted, skipped and uncertain. → Deleter.delete</title><text class="detail small" x="360" y="779">• <tspan class="code">delete_messages</tspan></text></g>
 <text class="group-title" x="668" y="626">Export</text>
 <g><title>Export conversations to .txt, .jsonl or a .zip with attachments. → Exports.export</title><text class="detail small" x="668" y="656">• <tspan class="code">export_chats</tspan></text></g>
@@ -162,7 +162,7 @@
 <text class="group-title" x="1265" y="1406">Method</text>
 <g><title>Checks the destination against the live catalog and the expected chat name, uploads and shares any files once each, then attempts the send exactly once.</title><text class="detail" x="1265" y="1436">• <tspan class="code">send(...)</tspan></text></g>
 <text class="group-title" x="1265" y="1475">Rules</text>
-<text class="detail" x="1265" y="1505">sent once · large-upload parts resumed</text>
+<text class="detail" x="1265" y="1505">never resent if uncertain · failed sends cleaned up</text>
 <text class="detail" x="1265" y="1532">uncertain result: inspect Teams first</text>
 <text class="muted" x="1265" y="1598">uses <tspan class="code">Catalog</tspan> · <tspan class="code">ChatWriter</tspan> · <tspan class="code">FileSharer</tspan></text>
 
@@ -301,7 +301,7 @@
 <g><title>Small binary reads and streamed downloads, size-capped.</title><text class="detail" x="678" y="3246">• <tspan class="code">get_bytes</tspan> · <tspan class="code">download</tspan></text></g>
 <g><title>A profile's bearer token from the shared TokenProvider, renewed once on a 401.</title><text class="detail" x="678" y="3273">• <tspan class="code">Bearer(tokens, profile)</tspan></text></g>
 <g><title>HTTPS only; Graph and Teams hosts checked before credentials are sent; regional Chat Service hosts must be in the Teams domain.</title><text class="detail" x="1040" y="3219">host allowlist · HTTPS only</text></g>
-<g><title>Bounded retries for transient read failures, honoring Retry-After. Writes are sent once; an ambiguous answer raises WriteOutcomeUnknown.</title><text class="detail" x="1040" y="3246">reads retried · writes sent once</text></g>
+<g><title>Bounded retries for transient read failures, honoring Retry-After. Writes retry only a connection that never opened or a 429/503; an ambiguous answer raises WriteOutcomeUnknown and is never resent.</title><text class="detail" x="1040" y="3246">reads retried · writes only if not applied</text></g>
 <g><title>One HTTPS redirect to a SharePoint download host, without forwarding the Graph token.</title><text class="detail" x="1040" y="3273">token-free download redirects</text></g>
 
 <path class="call-flow" d="M1230 3334 V3390"/>
