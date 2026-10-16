@@ -324,6 +324,7 @@ def test_presence_is_lazy_accessible_and_never_confuses_unknown_with_offline() -
     assert 'chat.photo_user_id.startsWith("28:")' in script
     assert '"Last seen: " + lastActive.toLocaleString()' in script
     assert 'parts.join(" · ")' in script and "metadata.hidden = !metadata.textContent" in script
+    assert r"/\b(away|berightback|outofoffice|offline)\b/" in script  # last seen only when inactive, as Teams
     assert "Last seen: unavailable" not in script and ".chat-meta[hidden] { display: none; }" in styles
     assert '"Presence unavailable"' in script and 'value === "offline"' in script
     assert ".presence-unknown::after" in styles and ".chat-row:focus-visible" in styles

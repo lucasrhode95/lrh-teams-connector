@@ -299,13 +299,16 @@ function setPresenceBadge(badge, presence) {
   badge.title = label;
 }
 
-// Teams reports a last-active time only for people who are not active now. Each part is shown only when
+// As Teams Web's persona card: "last seen" only for someone away, be right back, out of office or offline
+// (Teams also sends a time for busy people, and none for available ones). Each part is shown only when
 // reported, so a row may show just the device, or no line at all.
 function lastSeenText(presence) {
   const lastActive = new Date(presence?.last_active_at || NaN);
+  const status = (String(presence?.availability || "") + " " + String(presence?.activity || "")).toLowerCase();
+  const inactive = /\b(away|berightback|outofoffice|offline)\b/.test(status);
   const device = String(presence?.device_type || "").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ").trim();
   const parts = [];
-  if (!Number.isNaN(lastActive.getTime())) parts.push("Last seen: " + lastActive.toLocaleString());
+  if (inactive && !Number.isNaN(lastActive.getTime())) parts.push("Last seen: " + lastActive.toLocaleString());
   if (device) parts.push(device);
   return parts.join(" · ");
 }

@@ -162,12 +162,14 @@ Add Teams-style presence badges to the signed-in avatar and to one-to-one chats 
 availability and activity the service returns to familiar indicators, with accessible text so
 colour is not the only signal. Unknown presence must not look like a confirmed offline status.
 
-Move the conversation kind and last-message time into a tooltip, also shown on keyboard focus.
-Replace the one-to-one subtitle with `Last seen: <localized last-active time> · <device>`, using
-presence's last-active field, never the last message time. Show each part only when Teams reports it,
-with the separator only between two parts: Teams omits the last-active time for people active now
-(probed 2026-10-16; it also omits the device for offline people), so such a row shows just the device, or no subtitle without one. Groups, channels, meetings and bot chats (`28:` peers) get no badge and
-no person subtitle. The self chat may use the signed-in user's presence.
+Move the conversation kind and last-message time into a tooltip, also shown on keyboard focus. Replace
+the one-to-one subtitle with `Last seen: <localized last-active time> · <device>`, using presence's
+last-active field, never the last message time. Show each part only when Teams reports it, with the
+separator only between two parts. As Teams Web's persona card does, show the time only for someone away,
+be right back, out of office or offline: Teams omits it for available people and sends one for busy
+people that Teams does not show (probed 2026-10-16). Teams also omits the device for offline people, so
+a row may show just the device, or no subtitle. Groups, channels, meetings and bot chats (`28:` peers)
+get no badge and no person subtitle. The self chat may use the signed-in user's presence.
 
 Reuse `service/presence.py` and `remote/presence.py`. The own-presence route uses the active account
 id, and the peer route accepts only a catalog conversation id; the page cannot request an arbitrary
