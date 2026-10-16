@@ -81,7 +81,7 @@ The shared `lrh-m365-auth` package supplies six named profiles shared by the thr
 | `teams.graph` | Graph teams, channels, people, and message operations. |
 | `outlook.graph` | Outlook and validated OneDrive/SharePoint Graph capabilities. |
 | `outlook.api` | Outlook Web operations owned by the Outlook connector. |
-| `m365.search` | Search v2 for online Teams message discovery (and Outlook calendar search). |
+| `m365.search` | Search v2 for online Teams message discovery (and Outlook calendar search), and the AI meeting summaries that exports read from `substrate.office.com`. |
 
 The auth package owns MSAL state and the encrypted cross-process cache; it does not issue Teams or
 Graph requests or exchange a Teams Skype token. Each connector keeps its product wire logic. An
