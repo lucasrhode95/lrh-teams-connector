@@ -45,9 +45,11 @@ text ([architecture](architecture.md#exports)). Still open:
 
 ### P2.2f — Meeting transcripts
 
-Treat a meeting's transcript like an attachment of its recording message. Graph's `media/transcripts` route
-works with the existing `teams.graph` token, with no SharePoint token or admin consent
-([research](api-research.md#transcripts)).
+Treat a meeting's transcript like an attachment of its recording message. On one account and tenant (live,
+2026-10-16), Graph's undocumented `media/transcripts` route worked with the existing `teams.graph` token,
+with no SharePoint token or admin consent ([research](api-research.md#transcripts)). Grants differ between
+deployments (see A1): reassess this before relying on it elsewhere, and report transcripts as unavailable
+when the route is denied, rather than failing the read or export.
 
 - **Marker:** in `get_messages` and exports, a recording message whose card references a transcript gets a
   marker like its file markers, built only from the card: `[Transcript: <recording title>]`. Reading fetches
@@ -68,8 +70,12 @@ works with the existing `teams.graph` token, with no SharePoint token or admin c
     match in memory. The result is complete within the scope. If long chats make this slow, run the
     unscoped search first and keep only the scope's recordings.
   - *Unscoped:* Graph `POST /search/query` over `driveItem` with `filetype:mp4` and the terms finds
-    recordings by their spoken words across all meetings, ranked, with approximate totals. Then fetch each
-    hit's JSON transcript to find the speaker and offset, and to drop title-only hits.
+    transcribed videos by their spoken words, ranked, with approximate totals. Not every hit is a Teams
+    meeting: the search covers any OneDrive or SharePoint video the user can open, and the response has no
+    conversation. Keep a hit only when it resolves to a meeting recording, such as a recording card in a
+    meeting chat that links to that item, which also supplies the conversation. List the rest as non-meeting
+    videos or drop them. Then fetch each kept hit's JSON transcript to find the speaker and offset, and to drop
+    title-only hits. How to resolve a recording to its chat cheaply is open; probe it before building.
 - **Later:** recaps (AI summary, mentions, tasks; an internal service).
 
 ## Validation
