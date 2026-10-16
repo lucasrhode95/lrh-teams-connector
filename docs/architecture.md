@@ -300,7 +300,7 @@ Exports (with attachments) and `download_attachment` read the page with one Grap
 `GET /shares/{share}/driveItem/content?format=html`, and `remote/loop_notes.py` keeps the agenda and goal,
 the notes under their headings, and each task with its assignee and due date; the AI disclaimer, empty
 paragraphs, checkboxes and "Task list category" labels are dropped. An export reads each page once,
-within the conversation's attachment limits (200 items, 250 MiB), and writes the notes after the message;
+within the conversation's attachment limits (200 items, 250 MiB), which its files share, and writes the notes after the message;
 `download_attachment` saves them as a text file. The page is live, so the text starts with the time it was
 read and says later edits are not included, and the page is read again on every call rather than served
 from the download cache. A page Graph will not convert (no access, deleted, a conversion error) is

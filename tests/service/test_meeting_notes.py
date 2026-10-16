@@ -131,6 +131,30 @@ async def test_pages_beyond_the_attachment_limit_are_not_read(
     assert f"[Attachment unavailable: Meeting notes.txt] {second}" in text
 
 
+async def test_notes_and_files_share_one_attachment_budget(
+    services: Services, fake: FakeTeams, notes_message: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake.chats[MEETING].messages.append(
+        cs_message(
+            "3006",
+            "2026-07-01T13:00:00.000Z",
+            "Slides attached",
+            files=[
+                {"fileName": "notes.txt", "fileInfo": {"shareUrl": "https://tenant.sharepoint.com/s/notes"}}
+            ],
+        )
+    )
+    monkeypatch.setattr(orchestrator, "MAX_ASSETS_PER_CONVERSATION", 1)
+
+    artifact = await services.exports.export(ExportRequest(conversation_ids=[MEETING]))
+
+    assert fake.loop_reads == [LINK]  # the notes took the one item the conversation allows
+    assert artifact.chats[0].attachments_downloaded == 1 and artifact.chats[0].attachments_failed == 1
+    with zipfile.ZipFile(artifact.path) as archive:
+        text = next(archive.read(n).decode() for n in archive.namelist() if n.endswith(".txt"))
+    assert "[Attachment unavailable: notes.txt]" in text
+
+
 async def test_without_attachments_the_export_reads_no_page(
     services: Services, fake: FakeTeams, notes_message: None
 ) -> None:
