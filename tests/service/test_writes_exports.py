@@ -219,3 +219,67 @@ def test_failed_zip_packaging_removes_the_partial_output(
     with pytest.raises(OSError, match="synthetic archive failure"):
         packaging.package(source_paths, zip_name="synthetic.zip")
     assert not list(tmp_path.glob("synthetic*.zip"))
+
+
+def _add_files_message(fake: FakeTeams, names: list[str], size: int) -> None:
+    """One message sharing several synthetic files of ``size`` bytes each."""
+    for name in names:
+        fake.files[f"https://tenant.sharepoint.com/s/{name}"] = (name, b"x" * size)
+    shared = [
+        {"fileName": n, "fileInfo": {"shareUrl": f"https://tenant.sharepoint.com/s/{n}"}} for n in names
+    ]
+    fake.chats[ONE].messages.append(cs_message("1009", "2026-09-09T10:00:00.000Z", "Files", files=shared))
+
+
+async def test_attachments_download_in_parallel_and_package_in_text_order(
+    services: Services, fake: FakeTeams, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    names = [f"part-{n}.bin" for n in range(6)]
+    _add_files_message(fake, names, 8)
+    save = services.files.save
+    in_flight = peak = 0
+
+    async def slow_save(attachment, *, max_bytes):  # type: ignore[no-untyped-def]
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0.01 * (6 - int(attachment.name[5]) if attachment.name.startswith("part") else 0))
+        try:
+            return await save(attachment, max_bytes=max_bytes)
+        finally:
+            in_flight -= 1
+
+    monkeypatch.setattr(services.files, "save", slow_save)
+    artifact = await services.exports.export(ExportRequest(conversation_ids=[ONE]))
+
+    assert peak == orchestrator.DOWNLOAD_CONCURRENCY
+    stem = packaging.filename_stem(await services.catalog.get(ONE))
+    with zipfile.ZipFile(artifact.path) as archive:
+        listed = [n for n in archive.namelist() if n.startswith(f"{stem}/")]
+    assert listed == [f"{stem}/notes.txt", *(f"{stem}/{n}" for n in names)]  # the text's order
+    assert artifact.chats[0].attachments_downloaded == 7
+
+
+async def test_the_byte_budget_keeps_the_first_files_in_text_order(
+    services: Services, fake: FakeTeams, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    names = ["a.bin", "b.bin", "c.bin"]
+    _add_files_message(fake, names, 100)
+    fake.files.pop("https://tenant.sharepoint.com/s/notes")  # leave only the three files
+    save = services.files.save
+
+    async def reversed_save(attachment, *, max_bytes):  # type: ignore[no-untyped-def]
+        await asyncio.sleep({"a.bin": 0.03, "b.bin": 0.02}.get(attachment.name, 0))  # a finishes last
+        return await save(attachment, max_bytes=max_bytes)
+
+    monkeypatch.setattr(services.files, "save", reversed_save)
+    monkeypatch.setattr(orchestrator, "MAX_TOTAL_ASSET_BYTES", 250)  # room for two files
+
+    artifact = await services.exports.export(ExportRequest(conversation_ids=[ONE]))
+
+    stem = packaging.filename_stem(await services.catalog.get(ONE))
+    with zipfile.ZipFile(artifact.path) as archive:
+        listed = sorted(n for n in archive.namelist() if n.startswith(f"{stem}/"))
+        text = archive.read(f"{stem}.txt").decode("utf-8")
+    assert listed == [f"{stem}/a.bin", f"{stem}/b.bin"]
+    assert "[Attachment unavailable: c.bin]" in text and "[Attachment unavailable: notes.txt]" in text

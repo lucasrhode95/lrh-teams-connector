@@ -17,6 +17,7 @@ partial file.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import shutil
@@ -34,6 +35,7 @@ from teams_connector.domain.models import (
     ExportProgress,
     ExportRequest,
     Message,
+    SavedFile,
 )
 from teams_connector.service import localfiles
 from teams_connector.service.catalog import Catalog
@@ -50,6 +52,7 @@ from teams_connector.service.history import History, check_range
 MAX_ASSETS_PER_CONVERSATION = 200
 MAX_ASSET_BYTES = 100 * 1024 * 1024
 MAX_TOTAL_ASSET_BYTES = 250 * 1024 * 1024
+DOWNLOAD_CONCURRENCY = 4  # attachments fetched at once, as many as the transport sends at once
 
 Progress = Callable[[ExportProgress], None]
 Span = tuple[int, int, int]  # one spooled page: where it starts in the spool file, its length, its messages
@@ -246,45 +249,58 @@ class Exports:
         *,
         budget_used: tuple[int, int] = (0, 0),
     ) -> tuple[ConversationOutput, int, int, int]:
-        """Fetch the chat's attachments through the download cache, to be packaged beside its text.
+        """Fetch the chat's attachments through the download cache, ``DOWNLOAD_CONCURRENCY`` at a time, to be
+        packaged beside its text.
 
-        An attachment that cannot be fetched, or lies beyond the export's limits, is marked in the text.
+        An attachment that cannot be fetched, or lies beyond the export's limits, is marked in the text. The
+        limits are applied in the order the text names the attachments, so the result does not depend on
+        which download finishes first; a file fetched in parallel that no longer fits the total is dropped.
         ``budget_used`` is the (items, bytes) of the conversation's limits the meeting notes already took.
         """
         if not request.include_attachments or not references:
             return ConversationOutput(text_path), 0, 0, 0
 
         report(phase="attachments", attachments_total=total_before + len(references))
-        files: list[tuple[Path, str]] = []
-        unavailable: list[str] = []
-        downloaded = failed = 0
-        items_before, total_bytes = budget_used
-        for index, (name, attachment) in enumerate(references.items(), start=items_before + 1):
-            remaining = MAX_TOTAL_ASSET_BYTES - total_bytes
-            if index > MAX_ASSETS_PER_CONVERSATION or remaining <= 0:
-                unavailable.append(name)
-                failed += 1
-            else:
+        items_before, bytes_before = budget_used
+        allowed = list(references.items())[: max(0, MAX_ASSETS_PER_CONVERSATION - items_before)]
+        max_bytes = min(MAX_ASSET_BYTES, MAX_TOTAL_ASSET_BYTES - bytes_before)
+        results: dict[str, SavedFile | None] = {}
+        gate = asyncio.Semaphore(DOWNLOAD_CONCURRENCY)
+
+        async def fetch(name: str, attachment: Attachment) -> None:
+            async with gate:
                 try:
-                    saved = await self._files.save(attachment, max_bytes=min(MAX_ASSET_BYTES, remaining))
+                    results[name] = await self._files.save(attachment, max_bytes=max_bytes)
                 except ConnectorError:
-                    unavailable.append(name)
-                    failed += 1
-                else:
-                    if saved.size > remaining:
-                        unavailable.append(name)
-                        failed += 1
-                    else:
-                        files.append((Path(saved.path), name))
-                        downloaded += 1
-                        total_bytes += saved.size
+                    results[name] = None
+            done = [saved for saved in results.values() if saved is not None]
             report(
-                attachments_downloaded=downloaded_before + downloaded,
-                attachments_failed=failed_before + failed,
+                attachments_downloaded=downloaded_before + len(done),
+                attachments_failed=failed_before + len(results) - len(done),
             )
 
+        if max_bytes > 0:
+            async with asyncio.TaskGroup() as group:
+                for name, attachment in allowed:
+                    group.create_task(fetch(name, attachment))
+
+        # In the order the text names them: the first files that fit the conversation's budget are kept.
+        files: list[tuple[Path, str]] = []
+        unavailable: list[str] = []
+        total_bytes = bytes_before
+        for name in references:
+            saved = results.get(name)
+            if saved is None or total_bytes + saved.size > MAX_TOTAL_ASSET_BYTES:
+                unavailable.append(name)
+                continue
+            files.append((Path(saved.path), name))
+            total_bytes += saved.size
+        report(
+            attachments_downloaded=downloaded_before + len(files),
+            attachments_failed=failed_before + len(unavailable),
+        )
         _mark_unavailable(text_path, unavailable)
-        return ConversationOutput(text_path, files), len(references), downloaded, failed
+        return ConversationOutput(text_path, files), len(references), len(files), len(unavailable)
 
 
 def _name_attachments(
