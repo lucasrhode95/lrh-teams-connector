@@ -272,7 +272,7 @@ This operation does not discover recap or transcript text; those capabilities re
 
 `export_chats` writes `.txt` by default or `.jsonl` when requested, with inclusive date bounds and an optional
 latest-message limit per conversation. Each conversation becomes one text or JSONL file, named after the
-conversation and part of its id (with a counter if two still clash). A single conversation with no
+conversation and part of its id (with a counter if two still clash). In a text file, a message with no sender reads Teams when Teams posted it (an event or a meeting card) and Unknown sender otherwise. A single conversation with no
 attachment saved (none referenced, `include_attachments=false`, or every download failed) downloads as that
 file. Anything else is one ZIP, named after the conversation or `teams-conversations.zip` for several: each
 file at its root and its saved attachments in a folder named after it, with no ZIP inside it. A
