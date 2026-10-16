@@ -136,6 +136,7 @@ uv run ruff check .
 uv run ruff format --check .
 uv run pyright
 uv run pytest
+node --test tests/surfaces/export_ui.test.cjs
 ```
 
 Tests use synthetic accounts and fake HTTP transports. They do not use browser captures or real
