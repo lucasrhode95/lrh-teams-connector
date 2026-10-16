@@ -142,10 +142,10 @@ counts as broad Microsoft 365 search.
 - **Meeting notes** (decided and implemented 2026-10-15): the meeting app's link to a Loop notes page reads
   as a `[Meeting notes]` marker with the link. Exports and `download_attachment` read the live page once
   per call and keep only its agenda and goal, notes, and tasks with assignee and due date, saying when it
-  was read. A page that cannot be read is reported like an unavailable attachment. A page that forbids
-  export must not be exported. The connector cannot check that itself (it has no SharePoint-audience
-  token), so it relies on Graph's conversion refusing such a page; that is unverified, and whether to add
-  a check is open (roadmap N9).
+  was read. A page that cannot be read is reported like an unavailable attachment. **Export restrictions
+  are ignored by design** (decided 2026-10-16): a page the user can read in Teams can also be read,
+  screenshotted or retyped, so the connector does not check a page's export or extract permissions. A
+  page Graph itself refuses to convert is still reported as unavailable.
 - **Meeting and membership events** read as one short line each, never as their raw markup. The
   line keeps what Teams shows (a meeting's subject, duration and participants, members who joined or
   left, a new topic) and drops identifiers and flags.

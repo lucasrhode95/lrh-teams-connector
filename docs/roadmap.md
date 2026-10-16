@@ -36,10 +36,6 @@ or more through upload sessions ([architecture](architecture.md#send-a-message),
 The meeting app's notes link reads as a marker, and exports and `download_attachment` read the page as
 text ([architecture](architecture.md#exports)). Still open:
 
-- **Restrictions:** Teams Web checks `opStream/capabilities` (`canExport`, `canExtract`) before showing a
-  page. Find out whether Graph's `?format=html` refuses a page that forbids export. If it does not, the
-  connector must check, which needs a SharePoint-audience token: a new shared auth profile, for the user
-  to decide.
 - **Pasted Loop components:** do they use the same embed? A person's message with one keeps its text and
   link today; handle it like the notes if the page converts the same way.
 - **Page name in the marker:** the app's message carries no page name, so reading shows

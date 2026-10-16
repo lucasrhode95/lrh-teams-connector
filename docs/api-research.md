@@ -591,8 +591,8 @@ access to the organizer's file, which an attendee had in this case.
 
 That is a collaborative editing session; the connector's HTML conversion needs none of it. The connector
 reads meeting notes through `?format=html` since 2026-10-15 (exports and downloads only).
-`canExport`/`canExtract` are the flags to respect if a page forbids export; whether Graph's conversion
-already honors them is untested.
+`canExport`/`canExtract` are where a page would say it forbids export; whether Graph's conversion honors
+them is untested. The connector does not check them, by design (decided 2026-10-16).
 Loop components that people paste into a chat may use the same `FluidAutoEmbedLink` embed; untested.
 
 ### Sending files
