@@ -12,7 +12,7 @@ from httpx import ASGITransport
 
 from teams_connector.bootstrap import AppContext
 from teams_connector.surfaces.web import routes
-from teams_connector.surfaces.web.routes import Activity, create_app, export_request
+from teams_connector.surfaces.web.routes import Activity, create_app, export_request, preview_request
 from tests.fakes.teams_fake import PEER, FakeTeams, FakeTokens
 
 SESSION = "synthetic-session-token"
@@ -96,6 +96,54 @@ async def test_ui_rejects_invalid_export_and_unknown_job(web_client: httpx.Async
 
     missing = await web_client.get("/api/exports/unknown", headers=headers)
     assert missing.status_code == 404
+
+
+async def test_ui_runs_a_preview_job_and_returns_text_with_coverage(
+    web_client: httpx.AsyncClient,
+) -> None:
+    headers = {"x-session-token": SESSION}
+    await web_client.get("/api/chats?refresh=1", headers=headers)
+    started = await web_client.post(
+        "/api/preview",
+        headers=headers,
+        json={"conversation_ids": ["19:one@unq.gbl.spaces"], "entire_range": False},
+    )
+    assert started.status_code == 202
+    job_id = started.json()["id"]
+
+    for _ in range(30):
+        await asyncio.sleep(0)
+        result = await web_client.get(f"/api/preview/{job_id}", headers=headers)
+        if result.json()["status"] != "running":
+            break
+    assert result.json()["status"] == "complete"
+    assert "First hello" in result.json()["result"]["text"]
+    assert result.json()["result"]["messages"] > 0
+    assert result.json()["result"]["capped"] is False
+    assert (await web_client.get(f"/api/preview/{job_id}", headers=headers)).status_code == 404
+
+
+async def test_ui_rejects_invalid_preview_request(web_client: httpx.AsyncClient) -> None:
+    headers = {"x-session-token": SESSION}
+    multiple = await web_client.post(
+        "/api/preview",
+        headers=headers,
+        json={"conversation_ids": ["a", "b"]},
+    )
+    invalid_mode = await web_client.post(
+        "/api/preview",
+        headers=headers,
+        json={"conversation_ids": ["a"], "entire_range": "yes"},
+    )
+    assert multiple.status_code == 400
+    assert invalid_mode.status_code == 400
+
+
+def test_preview_request_accepts_only_one_conversation_and_boolean_mode() -> None:
+    request, entire_range = preview_request(
+        {"conversation_ids": ["19:sample@thread.v2"], "entire_range": True}
+    )
+    assert request.conversation_ids == ["19:sample@thread.v2"] and entire_range
 
 
 async def test_ui_serves_graph_profile_photo_and_reports_missing_photo(

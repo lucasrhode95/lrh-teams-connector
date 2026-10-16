@@ -117,7 +117,12 @@ minutes. Use `uv run teams-connector ui --help` for `--port`, `--no-browser`, an
 If the preferred port is busy, the connector selects another free loopback port. The page uses a
 per-run session token and rejects non-local hosts. It supports chat selection, an inclusive date
 range in the browser's time zone, a per-chat message limit, and text or attachment-inclusive
-downloads. The browser opens only after the server reports ready and prints the selected URL.
+downloads. Selecting a chat shows its export text in a preview pane; **View entire range** expands
+the preview to all messages in the chosen date range and message limit without downloading a file.
+The preview text follows the export settings, including meeting notes, transcript markers and AI
+summaries, and never downloads binary files. The page keeps up to ten recent previews in memory for
+60 seconds. Refresh chats reloads both the conversation list and the active preview. The browser
+opens only after the server reports ready and prints the selected URL.
 The date picker behaves like the Outlook connector's: weeks start on Sunday, future days are
 disabled, two clicks in either order make the range, and the calendar stays open until Done or
 Escape. The × beside the field clears the range.

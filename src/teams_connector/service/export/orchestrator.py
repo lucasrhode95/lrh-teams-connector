@@ -25,6 +25,7 @@ import tempfile
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from teams_connector.domain.errors import ConnectorError, InvalidRequest
 from teams_connector.domain.models import (
@@ -35,6 +36,7 @@ from teams_connector.domain.models import (
     ExportProgress,
     ExportRequest,
     Message,
+    PreviewOutput,
     SavedFile,
 )
 from teams_connector.service import localfiles
@@ -54,6 +56,9 @@ MAX_ASSETS_PER_CONVERSATION = 200
 MAX_ASSET_BYTES = 100 * 1024 * 1024
 MAX_TOTAL_ASSET_BYTES = 250 * 1024 * 1024
 DOWNLOAD_CONCURRENCY = 4  # attachments fetched at once, as many as the transport sends at once
+MAX_PREVIEW_MESSAGES = 200
+MAX_PREVIEW_TEXT_BYTES = 1024 * 1024
+PREVIEW_HEADER_RESERVE_BYTES = 8192
 
 Progress = Callable[[ExportProgress], None]
 Span = tuple[int, int, int]  # one spooled page: where it starts in the spool file, its length, its messages
@@ -93,7 +98,7 @@ class Exports:
                 stem = self._unique_stem(chat, used)
                 spool = work / f"{stem}.spool"
                 text_name = f"{stem}{suffix}"
-                spans, references, written, notes = await self._spool(
+                spans, references, written, notes, _ = await self._spool(
                     chat, request, spool, report, state, text_name
                 )
                 text_path = work / f"{stem}{suffix}"
@@ -141,6 +146,70 @@ class Exports:
             chats=summary,
         )
 
+    async def preview(
+        self,
+        request: ExportRequest,
+        *,
+        entire_range: bool = False,
+        progress: Progress | None = None,
+    ) -> PreviewOutput:
+        """Prepare export text without saving binary attachments or publishing a file.
+
+        The caller validates the web payload. The request must contain one conversation, and its date bounds
+        and message limit have already been checked by ``export_request``. An excerpt reads only the newest
+        messages within those bounds; the complete view removes only the preview-specific caps.
+        """
+        check_range(request.since, request.until)
+        ids = list(dict.fromkeys(value.strip() for value in request.conversation_ids if value.strip()))
+        if len(ids) != 1:
+            raise InvalidRequest("Preview exactly one conversation.")
+        chat = await self._catalog.get(ids[0])
+        effective_limit = request.message_limit
+        if not entire_range:
+            effective_limit = min(effective_limit or MAX_PREVIEW_MESSAGES, MAX_PREVIEW_MESSAGES)
+        preview_request = request.model_copy(
+            update={"conversation_ids": [chat.id], "format": "txt", "message_limit": effective_limit}
+        )
+        state = ExportProgress(phase="retrieving", chats_total=1)
+
+        def report(**changes: object) -> None:
+            for key, value in changes.items():
+                setattr(state, key, value)
+            if progress:
+                progress(state.model_copy())
+
+        exported_at = datetime.now(UTC)
+        with TemporaryDirectory(prefix="teams-preview-") as directory:
+            work = Path(directory)
+            spool = work / "preview.spool"
+            text_path = work / "preview.txt"
+            text_budget = (
+                None if entire_range else max(0, MAX_PREVIEW_TEXT_BYTES - PREVIEW_HEADER_RESERVE_BYTES)
+            )
+            spans, _, messages, _, text_limited = await self._spool(
+                chat,
+                preview_request,
+                spool,
+                report,
+                state,
+                text_path.name,
+                text_budget=text_budget,
+            )
+            report(phase="writing")
+            self._assemble(chat, text_path, spool, spans, request, exported_at, messages, report, state)
+            text = text_path.read_text(encoding="utf-8")
+
+        byte_limit = None if entire_range else MAX_PREVIEW_TEXT_BYTES
+        if byte_limit is not None and len(text.encode("utf-8")) > byte_limit:
+            text = _fit_preview_text(text, byte_limit)
+            text_limited = True
+        message_limited = (
+            not entire_range
+            and (request.message_limit is None or request.message_limit > MAX_PREVIEW_MESSAGES)
+            and messages >= MAX_PREVIEW_MESSAGES
+        )
+        return PreviewOutput(text=text, messages=messages, capped=text_limited or message_limited)
+
     @staticmethod
     def _unique_stem(chat: Chat, used: set[str]) -> str:
         stem = filename_stem(chat)
@@ -160,7 +229,9 @@ class Exports:
         report: Callable[..., None],
         state: ExportProgress,
         text_name: str,
-    ) -> tuple[list[Span], dict[str, Attachment], int, dict[str, str | None]]:
+        *,
+        text_budget: int | None = None,
+    ) -> tuple[list[Span], dict[str, Attachment], int, dict[str, str | None], bool]:
         """Read the selection from Teams, newest page first, and spool each page's records. Returns the page
         spans, the attachments the messages reference by their final names, the message count, and the
         meeting-notes pages by link, each with its text or None when it was not read. The chat's own file
@@ -171,15 +242,21 @@ class Exports:
         used: set[str] = {text_name.casefold()}
         notes: dict[str, str | None] = {}  # page link -> the notes as text, or None when unreadable
         written = 0
+        text_bytes = 0
+        text_limited = False
         with spool.open("wb") as output:
             async for page in self._history.selection(
                 chat, since=request.since, until=request.until, message_limit=request.message_limit
             ):
+                if text_budget is not None and text_bytes >= text_budget:
+                    text_limited = True
+                    break
                 start = output.tell()
+                records: list[str] = []
                 for message in page:
                     if not request.include_summaries:  # the flag governs the Facilitator's notes too
                         withhold_meeting_notes(message)
-                    if request.include_attachments:
+                    if request.include_summaries:
                         await self._add_meeting_notes(message, notes)
                     if request.include_summaries:
                         await self._summaries.add_to_message(
@@ -198,14 +275,40 @@ class Exports:
                         if request.format == "txt"
                         else formatter.jsonl_record(chat, message)
                     )
-                    output.write(record.encode("utf-8"))
-                    written += 1
-                spans.append((start, output.tell() - start, len(page)))
+                    records.append(record)
+                if text_budget is None:
+                    retained = records
+                else:
+                    remaining = text_budget - text_bytes
+                    retained_reversed: list[str] = []
+                    for record in reversed(records):
+                        encoded = record.encode("utf-8")
+                        if len(encoded) <= remaining:
+                            retained_reversed.append(record)
+                            remaining -= len(encoded)
+                        elif remaining > 0:
+                            retained_reversed.append(_truncate_preview_record(record, remaining))
+                            remaining = 0
+                            text_limited = True
+                            break
+                        else:
+                            text_limited = True
+                            break
+                    if len(retained_reversed) < len(records):
+                        text_limited = True
+                    retained = list(reversed(retained_reversed))
+                if retained:
+                    output.write("".join(retained).encode("utf-8"))
+                    text_bytes += sum(len(record.encode("utf-8")) for record in retained)
+                    written += len(retained)
+                    spans.append((start, output.tell() - start, len(retained)))
                 report(
                     pages_fetched=state.pages_fetched + 1,
                     messages_retrieved=state.messages_retrieved + len(page),
                 )
-        return spans, references, written, notes
+                if text_limited:
+                    break
+        return spans, references, written, notes, text_limited
 
     async def _add_meeting_notes(self, message: Message, notes: dict[str, str | None]) -> None:
         """Put each meeting-notes page the message links to after its marker, read once per export; a page
@@ -422,3 +525,35 @@ def _replace_text(text: str, old: str, new: str, *, jsonl: bool) -> str:
         old = json.dumps(old, ensure_ascii=False)[1:-1]
         new = json.dumps(new, ensure_ascii=False)[1:-1]
     return text.replace(old, new)
+
+
+def _truncate_preview_record(record: str, byte_limit: int) -> str:
+    """Keep the newest UTF-8 suffix of one oversized message and label the omission."""
+    marker = "[Earlier text in this message omitted]\n"
+    marker_bytes = marker.encode("utf-8")
+    if byte_limit <= len(marker_bytes):
+        return marker_bytes[:byte_limit].decode("utf-8", errors="ignore")
+    suffix = record.encode("utf-8")[-(byte_limit - len(marker_bytes)) :].decode("utf-8", errors="ignore")
+    return marker + suffix
+
+
+def _fit_preview_text(text: str, byte_limit: int) -> str:
+    """Keep the export header and newest body suffix within the initial-preview byte budget."""
+    encoded = text.encode("utf-8")
+    if len(encoded) <= byte_limit:
+        return text
+    header_end = text.find("\n\n")
+    if header_end < 0:
+        return encoded[:byte_limit].decode("utf-8", errors="ignore")
+    header = text[: header_end + 2]
+    header_bytes = header.encode("utf-8")
+    if len(header_bytes) >= byte_limit:
+        marker = "[Preview header truncated]\n"
+        room = max(0, byte_limit - len(marker.encode("utf-8")))
+        return header_bytes[:room].decode("utf-8", errors="ignore") + marker
+    marker = "[Earlier messages omitted]\n\n"
+    marker_bytes = marker.encode("utf-8")
+    body_room = byte_limit - len(header_bytes) - len(marker_bytes)
+    body = encoded[header_end + 2 :]
+    suffix = body[-max(0, body_room) :].decode("utf-8", errors="ignore") if body_room else ""
+    return header + marker + suffix

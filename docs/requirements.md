@@ -21,7 +21,8 @@ The connector must:
   correct types and honest catalog coverage;
 - read history with reliable paging and inclusive date and count filters;
 - search message text across Teams or in a chosen scope, on the server;
-- treat Teams as the record: keep no local copy of message content (§6);
+- treat Teams as the record: keep no local copy of message content beyond the local UI's short-lived
+  in-memory preview cache (§6);
 - send a text message the user explicitly authorized.
 
 Presence (one-on-one, read only) is part of the reads. Outlook, Teams and
@@ -104,7 +105,13 @@ broad heterogeneous search, and AMS media.
 
 ## 6. Local data (decided 2026-10-14)
 
-**Teams is the record.** The connector keeps no local copy of message content. Teams itself keeps
+**Teams is the record.** The connector keeps no durable local copy of message content. The local UI
+may keep up to ten completed conversation previews in browser memory for 60 seconds after each
+preview finishes; cache hits do not extend that period. The least recently used entry is evicted
+when adding an eleventh. There is no size limit. Refresh chats, account changes and authentication
+failures clear the cache; closing or reloading the page drops it. Preview jobs hold their result only
+until the UI retrieves it. Preview and export work files are temporary and removed when the job ends.
+This cache exists only to make recently viewed text quick to revisit. Teams itself keeps
 no readable copy of deleted text or of an edited message's earlier version
 ([research](api-research.md#edits-and-deletes)), so the connector shows what Teams returns now: an
 edited message with its newest text and `edited_at`, and a deleted message marked deleted with

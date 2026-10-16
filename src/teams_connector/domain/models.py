@@ -318,6 +318,14 @@ class ExportProgress(Compact):
     attachments_failed: int = 0
 
 
+class PreviewOutput(Compact):
+    """One conversation's plain-text export preview and whether the initial excerpt is incomplete."""
+
+    text: str
+    messages: int
+    capped: bool
+
+
 # -------------------------------------------------------------------------------------------- transcripts
 
 

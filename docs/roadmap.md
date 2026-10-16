@@ -5,7 +5,7 @@ Open bugs, improvements, enhancements and validation only. What the connector mu
 evidence is in the [research record](api-research.md). Delete an item once it is done. Codes are
 never reused.
 
-Snapshot **2026-10-15**.
+Snapshot **2026-10-16**.
 
 ## Bugs
 
@@ -21,6 +21,12 @@ Working behavior that could be cheaper, simpler or better informed.
 None open.
 
 ## Enhancements
+
+### UI — Preview selected conversations in the browser
+
+The design and implementation are tracked in the [UI facelift plan](ui-facelift-plan.md). The local
+page will show a bounded preview, allow viewing the entire selected range, retain recent previews
+briefly in browser memory, and show Teams presence alongside conversations.
 
 ### P1.5 — Send host files as attachments
 

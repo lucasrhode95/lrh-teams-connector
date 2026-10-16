@@ -69,6 +69,7 @@ and the adapters behind them. The split of backends (which private or public ser
 | UI | `GET /api/status` | token status | none | `TokenProvider` |
 | UI | `GET /api/chats` | `Catalog.list` (or `ensure`) | as `list_chats` | as `list_chats` |
 | UI | `GET /api/photos/{user_id}` | `Photos.photo` | `People` | `GraphPeople` |
+| UI | `POST /api/preview` and its job routes | `Exports.preview` in the single cancellable preview slot | `HistoryReader` (`History.selection`), `MeetingSummaryReader`, `FileReader` (meeting notes only) | `ChatService`, `GraphChannels`, `SubstrateMeetingSummaries`, `GraphFiles` (text conversion only) |
 | UI | `POST /api/exports` and its job routes | `Exports.export` in a background job | as `export_chats` | as `export_chats` |
 
 ## Authentication and account boundaries
