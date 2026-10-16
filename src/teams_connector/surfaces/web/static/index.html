@@ -80,7 +80,13 @@
       <div id="chat-list" class="chat-list" aria-live="polite"><div class="loading-state" role="status"><span class="spinner" aria-hidden="true"></span><span>Loading conversations…</span></div></div>
     </div>
     <section class="preview-pane" aria-label="Conversation preview">
-      <div id="preview-content" class="preview-content" aria-live="polite">
+      <div id="preview-toolbar" class="preview-toolbar" hidden>
+        <button id="view-entire-range" class="preview-link" type="button" hidden>View entire range</button>
+        <div id="preview-status" class="preview-status" role="status" aria-live="polite"></div>
+        <button id="retry-preview" class="secondary" type="button" hidden>Retry</button>
+        <button id="cancel-preview" class="secondary" type="button" hidden>Cancel</button>
+      </div>
+      <div id="preview-content" class="preview-content" aria-label="Export text preview">
         <div class="preview-empty">Select a conversation to preview its export text.</div>
       </div>
     </section>

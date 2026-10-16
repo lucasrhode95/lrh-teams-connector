@@ -172,7 +172,19 @@ input[type="checkbox"] { accent-color: var(--teams-purple); }
 .empty, .preview-empty { padding: 24px; color: var(--muted); text-align: center; }
 .database-notice { padding: 11px 12px; border-radius: 7px; background: var(--notice-bg); color: var(--notice-text); }
 .preview-pane { position: relative; border: 1px solid var(--surface-border); border-radius: 5px; background: var(--surface); }
-.preview-content { min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; overflow-wrap: anywhere; white-space: pre-wrap; }
+.preview-toolbar { position: sticky; z-index: 2; top: 0; display: flex; min-height: 48px; flex: none; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.preview-toolbar[hidden] { display: none; }
+.preview-link { min-height: 32px; padding: 4px 8px; color: var(--teams-purple-dark); background: transparent; text-decoration: underline; text-underline-offset: 2px; }
+.preview-link:hover { background: var(--hover); }
+.preview-status { display: inline-flex; min-width: 0; flex: 1; align-items: center; gap: 8px; color: var(--muted); font-size: .84rem; overflow-wrap: anywhere; }
+.preview-status:empty { display: none; }
+.preview-status.error { color: var(--error); }
+.preview-status .spinner { width: 17px; height: 17px; flex: none; border-width: 2px; }
+.preview-toolbar button.secondary { min-height: 32px; padding: 5px 10px; font-size: .82rem; }
+.preview-content { min-width: 0; min-height: 0; flex: 1; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; overflow-wrap: anywhere; }
+.preview-text-block { padding: 10px 13px; overflow-wrap: anywhere; white-space: pre-wrap; font: .86rem/1.45 ui-monospace, Consolas, monospace; content-visibility: auto; contain-intrinsic-size: auto 80px; }
+.preview-text-block + .preview-text-block { border-top: 1px solid var(--line); }
+.preview-empty { padding: 24px; color: var(--muted); text-align: center; }
 .loading-state { display: flex; min-height: 90px; flex-direction: column; align-items: center; justify-content: center; gap: 9px; padding: 20px; color: var(--muted); text-align: center; }
 .spinner { width: 24px; height: 24px; border: 3px solid var(--teams-purple-light); border-top-color: var(--teams-purple); border-radius: 50%; animation: spinner-turn .8s linear infinite; }
 @keyframes spinner-turn { to { transform: rotate(360deg); } }

@@ -43,7 +43,17 @@ calendarMonth.setDate(1);
 let choosingEnd = false;
 let rangeStartDraft = null;
 let activeExportId = null;
+let activePreviewJobId = null;
+let previewGeneration = 0;
+let previewEntireRange = false;
+let previewIsCapped = false;
+let previewHasText = false;
+let previewDebounce = null;
+let currentAccountKey = null;
 let chatRefreshInProgress = false;
+const previewCache = new Map();
+const PREVIEW_CACHE_MS = 60_000;
+const PREVIEW_CACHE_LIMIT = 10;
 
 class ApiError extends Error {
   constructor(status, body) {
@@ -91,6 +101,7 @@ function setDateRange(start, end) {
     : start === end ? formatCalendarDate(start) : formatCalendarDate(start) + " – " + formatCalendarDate(end);
   $("date-filter-clear").hidden = !start;
   renderCalendar();
+  reloadPreviewForSettings();
 }
 
 function focusCalendarDate(key) {
@@ -119,8 +130,8 @@ function renderCalendar() {
   calendarMonthLabel.textContent = calendarMonth.toLocaleDateString(undefined, { month: "long", year: "numeric" });
   const first = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1);
   const sundayOffset = first.getDay(); // weeks start on Sunday, as in the Outlook connector
-  const start = fromDateInput.value;
-  const end = toDateInput.value;
+  const start = choosingEnd && rangeStartDraft ? rangeStartDraft : fromDateInput.value;
+  const end = choosingEnd && rangeStartDraft ? rangeStartDraft : toDateInput.value;
   const today = dateKey(new Date());
   const days = [];
   for (let index = 0; index < 42; index += 1) {
@@ -152,10 +163,10 @@ function chooseCalendarDate(key) {
   if (!choosingEnd) {
     rangeStartDraft = key;
     choosingEnd = true;
-    setDateRange(key, key);
+    renderCalendar();
   } else {
-    setDateRange(key < rangeStartDraft ? key : rangeStartDraft, key < rangeStartDraft ? rangeStartDraft : key);
     choosingEnd = false;
+    setDateRange(key < rangeStartDraft ? key : rangeStartDraft, key < rangeStartDraft ? rangeStartDraft : key);
   }
   focusCalendarDate(key);
 }
@@ -274,9 +285,6 @@ function updateControls() {
   downloadButton.disabled = selected.size === 0 || busy;
   cancelButton.hidden = !busy;
   cancelButton.disabled = !activeExportId;
-  includeAttachmentsInput.disabled = busy;
-  includeTranscriptsInput.disabled = busy;
-  includeSummariesInput.disabled = busy;
 }
 
 function renderSelection() {
@@ -324,12 +332,9 @@ function setChatSelection(id, checked, { preview = true } = {}) {
   else selected.delete(id);
   if (preview) {
     previewConversationId = id;
-    const chat = chats.find((item) => item.id === id);
-    previewContent.replaceChildren();
-    const placeholder = document.createElement("div");
-    placeholder.className = "preview-empty";
-    placeholder.textContent = chat ? "Loading preview for " + chat.name + "…" : "Loading preview…";
-    previewContent.appendChild(placeholder);
+    previewEntireRange = false;
+    previewIsCapped = false;
+    void startPreview({ entireRange: false });
   }
   renderSelection();
   renderChatStates();
@@ -375,7 +380,8 @@ function renderChats() {
     name.textContent = chat.name;
     const metadata = document.createElement("span");
     metadata.className = "chat-meta";
-    metadata.textContent = chat.last_message_at ? new Date(chat.last_message_at).toLocaleString() : "No recent activity shown";
+    metadata.textContent = chatKind(chat) === "one_on_one" ? "Last seen: loading presence…"
+      : chat.last_message_at ? new Date(chat.last_message_at).toLocaleString() : "No recent activity shown";
     text.append(name, metadata);
     row.append(checkbox, avatar, text);
     row.addEventListener("click", (event) => {
@@ -395,6 +401,10 @@ function renderChats() {
 
 async function showError(error) {
   if (error instanceof ApiError && error.status === 401) {
+    clearPreviewCache();
+    previewGeneration += 1;
+    activePreviewJobId = null;
+    showPreviewEmpty("Teams sign-in is required to load conversation previews.");
     try {
       const status = await json("/api/status");
       authHelp.textContent = "Teams sign-in is required. In a terminal, run `" + status.sign_in_command +
@@ -409,7 +419,259 @@ async function showError(error) {
   setStatus(error instanceof ApiError ? error.message : "Could not reach the local server.", true);
 }
 
+function clearPreviewCache() {
+  previewCache.clear();
+}
+
+function showPreviewEmpty(message) {
+  previewHasText = false;
+  previewIsCapped = false;
+  previewEntireRange = false;
+  previewContent.replaceChildren();
+  const empty = document.createElement("div");
+  empty.className = "preview-empty";
+  empty.textContent = message;
+  previewContent.appendChild(empty);
+  setPreviewToolbar();
+}
+
+function setPreviewToolbar({ view = false, status = "", spinning = false, error = false, retry = false, cancel = false } = {}) {
+  const toolbar = $("preview-toolbar");
+  const statusBox = $("preview-status");
+  $("view-entire-range").hidden = !view;
+  $("retry-preview").hidden = !retry;
+  $("cancel-preview").hidden = !cancel;
+  statusBox.replaceChildren();
+  statusBox.classList.toggle("error", error);
+  if (spinning) {
+    const spinner = document.createElement("span");
+    spinner.className = "spinner";
+    spinner.setAttribute("aria-hidden", "true");
+    statusBox.appendChild(spinner);
+  }
+  if (status) statusBox.appendChild(document.createTextNode(status));
+  toolbar.hidden = !view && !status && !retry && !cancel;
+}
+
+function renderPreviewText(result) {
+  previewContent.replaceChildren();
+  const blocks = result.text.split(/\n{2,}/);
+  for (const block of blocks) {
+    const element = document.createElement("div");
+    element.className = "preview-text-block";
+    element.textContent = block;
+    previewContent.appendChild(element);
+  }
+  previewHasText = true;
+  previewIsCapped = Boolean(result.capped);
+}
+
+function previewPayload(conversationId, entireRange) {
+  const limit = getMessageLimit();
+  if (!limit.valid) return null;
+  return {
+    conversation_ids: [conversationId],
+    from_date: fromDateInput.value || null,
+    to_date: toDateInput.value || null,
+    from_utc_offset_minutes: fromDateInput.value ? browserUtcOffsetMinutes(fromDateInput.value, false) : null,
+    to_utc_offset_minutes: toDateInput.value ? browserUtcOffsetMinutes(toDateInput.value, true) : null,
+    message_limit: limit.value,
+    include_attachments: includeAttachmentsInput.checked,
+    include_transcripts: includeTranscriptsInput.checked,
+    include_summaries: includeSummariesInput.checked,
+    entire_range: entireRange,
+  };
+}
+
+function previewCacheKey(conversationId, payload) {
+  return JSON.stringify([currentAccountKey, conversationId, payload.from_date, payload.from_utc_offset_minutes,
+    payload.to_date, payload.to_utc_offset_minutes, payload.message_limit, payload.include_summaries,
+    payload.include_transcripts, payload.include_attachments, payload.entire_range]);
+}
+
+function getCachedPreview(key) {
+  const entry = previewCache.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    previewCache.delete(key);
+    return null;
+  }
+  previewCache.delete(key);
+  previewCache.set(key, entry);
+  return entry.result;
+}
+
+function cachePreview(key, result) {
+  previewCache.delete(key);
+  previewCache.set(key, { result, expiresAt: Date.now() + PREVIEW_CACHE_MS });
+  while (previewCache.size > PREVIEW_CACHE_LIMIT) previewCache.delete(previewCache.keys().next().value);
+}
+
+function reloadPreviewForSettings() {
+  window.clearTimeout(previewDebounce);
+  if (!previewConversationId) return;
+  previewGeneration += 1;
+  const oldJobId = activePreviewJobId;
+  activePreviewJobId = null;
+  if (oldJobId) void cancelServerPreview(oldJobId);
+  previewDebounce = window.setTimeout(() => {
+    previewEntireRange = false;
+    void startPreview({ entireRange: false });
+  }, 220);
+}
+
+async function cancelServerPreview(jobId) {
+  if (!jobId) return;
+  try {
+    await api("/api/preview/" + encodeURIComponent(jobId) + "/cancel", { method: "POST" });
+  } catch (_) { /* a newer request may already have replaced this job */ }
+}
+
+function previewProgress(progress) {
+  if (!progress) return "Loading the entire range…";
+  const parts = [];
+  if (progress.pages_fetched) parts.push(progress.pages_fetched + " pages");
+  if (progress.messages_retrieved) parts.push(progress.messages_retrieved + " messages read");
+  return "Loading the entire range" + (parts.length ? " · " + parts.join(" · ") : "…");
+}
+
+async function startPreview({ entireRange = false, forceRefresh = false, keepCurrent = false } = {}) {
+  const conversationId = previewConversationId;
+  const chat = chats.find((item) => item.id === conversationId);
+  if (!conversationId || !chat) {
+    showPreviewEmpty("Select a conversation to preview its export text.");
+    return;
+  }
+  const payload = previewPayload(conversationId, entireRange);
+  if (!payload) {
+    setPreviewToolbar({ view: previewIsCapped && !previewEntireRange, status: "Enter a positive whole number for the message limit, or leave it blank.", error: true, retry: true });
+    return;
+  }
+
+  const generation = ++previewGeneration;
+  const oldJobId = activePreviewJobId;
+  activePreviewJobId = null;
+  if (oldJobId) await cancelServerPreview(oldJobId);
+  if (generation !== previewGeneration) return;
+
+  previewEntireRange = entireRange;
+  if (!keepCurrent) {
+    previewHasText = false;
+    previewIsCapped = false;
+    previewContent.replaceChildren();
+    const loading = document.createElement("div");
+    loading.className = "loading-state";
+    loading.setAttribute("role", "status");
+    const spinner = document.createElement("span");
+    spinner.className = "spinner";
+    spinner.setAttribute("aria-hidden", "true");
+    const label = document.createElement("span");
+    label.textContent = "Loading preview for " + chat.name + "…";
+    loading.append(spinner, label);
+    previewContent.appendChild(loading);
+  }
+  setPreviewToolbar({
+    view: previewIsCapped && !entireRange,
+    status: entireRange ? "Preparing the entire range…" : "Preparing preview…",
+    spinning: true,
+    cancel: entireRange,
+  });
+
+  const key = previewCacheKey(conversationId, payload);
+  const cached = forceRefresh ? null : getCachedPreview(key);
+  if (cached) {
+    renderPreviewText(cached);
+    setPreviewToolbar({
+      view: cached.capped && !entireRange,
+      status: (entireRange ? "Entire range" : "Preview") + " · " + cached.messages + " messages",
+    });
+    return;
+  }
+
+  try {
+    const started = await json("/api/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (generation !== previewGeneration) {
+      await cancelServerPreview(started.id);
+      return;
+    }
+    activePreviewJobId = started.id;
+    for (;;) {
+      const job = await json("/api/preview/" + encodeURIComponent(started.id));
+      if (generation !== previewGeneration) return;
+      if (job.status === "running") {
+        setPreviewToolbar({
+          view: previewIsCapped && !entireRange,
+          status: entireRange ? previewProgress(job.progress) : "Preparing preview…",
+          spinning: true,
+          cancel: entireRange,
+        });
+        await wait(300);
+        continue;
+      }
+      activePreviewJobId = null;
+      if (job.status === "complete" && job.result) {
+        cachePreview(key, job.result);
+        renderPreviewText(job.result);
+        setPreviewToolbar({
+          view: job.result.capped && !entireRange,
+          status: (entireRange ? "Entire range" : "Preview") + " · " + job.result.messages + " messages" +
+            (job.result.capped ? " · excerpt limited" : ""),
+        });
+        return;
+      }
+      if (job.status === "cancelled") {
+        if (entireRange && previewHasText) {
+          previewEntireRange = false;
+          setPreviewToolbar({ view: previewIsCapped, status: "Entire-range view cancelled. Showing the excerpt." });
+        } else {
+          setPreviewToolbar({ status: "Preview cancelled.", retry: true });
+        }
+        return;
+      }
+      const message = job.error?.message || "The preview could not be loaded.";
+      setPreviewToolbar({ view: previewIsCapped && !entireRange, status: message, error: true, retry: true });
+      if (job.error?.kind === "AuthenticationRequired") await showError(new ApiError(401, job.error));
+      return;
+    }
+  } catch (error) {
+    if (generation !== previewGeneration) return;
+    activePreviewJobId = null;
+    const message = error instanceof ApiError ? error.message : "Could not reach the local server.";
+    setPreviewToolbar({ view: previewIsCapped && !entireRange, status: message, error: true, retry: true });
+    if (error instanceof ApiError && error.status === 401) await showError(error);
+  }
+}
+
+async function cancelPreview() {
+  if (!activePreviewJobId) return;
+  const jobId = activePreviewJobId;
+  previewGeneration += 1;
+  activePreviewJobId = null;
+  await cancelServerPreview(jobId);
+  if (previewEntireRange && previewHasText) {
+    previewEntireRange = false;
+    setPreviewToolbar({ view: previewIsCapped, status: "Entire-range view cancelled. Showing the excerpt." });
+  } else {
+    setPreviewToolbar({ status: "Preview cancelled.", retry: true });
+  }
+}
+
 function applyCatalog(body) {
+  const nextAccountKey = body.account?.photo_user_id || body.account?.email || null;
+  if (currentAccountKey && nextAccountKey !== currentAccountKey) {
+    clearPreviewCache();
+    selected.clear();
+    previewConversationId = null;
+    previewGeneration += 1;
+    if (activePreviewJobId) void cancelServerPreview(activePreviewJobId);
+    activePreviewJobId = null;
+    showPreviewEmpty("Select a conversation to preview its export text.");
+  }
+  currentAccountKey = nextAccountKey;
   chats.splice(0, chats.length, ...body.chats);
   $("account-name").textContent = body.account?.name || "";
   $("account-email").textContent = body.account?.email || "";
@@ -419,7 +681,10 @@ function applyCatalog(body) {
   for (const id of Array.from(selected)) if (!known.has(id)) selected.delete(id);
   if (previewConversationId && !known.has(previewConversationId)) {
     previewConversationId = null;
-    previewContent.textContent = "The previewed conversation is no longer available.";
+    previewGeneration += 1;
+    if (activePreviewJobId) void cancelServerPreview(activePreviewJobId);
+    activePreviewJobId = null;
+    showPreviewEmpty("The previewed conversation is no longer available.");
   }
   renderChats();
   renderSelection();
@@ -429,6 +694,13 @@ function applyCatalog(body) {
 async function loadChats() {
   if (chatRefreshInProgress) return;
   chatRefreshInProgress = true;
+  const refreshPreviewId = previewConversationId;
+  const refreshPreviewEntireRange = previewEntireRange;
+  clearPreviewCache();
+  previewGeneration += 1;
+  const oldPreviewJobId = activePreviewJobId;
+  activePreviewJobId = null;
+  if (oldPreviewJobId) void cancelServerPreview(oldPreviewJobId);
   authHelp.hidden = true;
   const refreshButton = $("refresh");
   refreshButton.disabled = true;
@@ -452,6 +724,9 @@ async function loadChats() {
     .catch(() => { /* the live refresh decides */ });
   try {
     await Promise.all([refresh, cached]);
+    if (refreshPreviewId && previewConversationId === refreshPreviewId && chats.some((chat) => chat.id === refreshPreviewId)) {
+      void startPreview({ entireRange: refreshPreviewEntireRange, forceRefresh: true, keepCurrent: true });
+    }
     if (refreshed) setStatus(chats.length + " conversations loaded.", false);
     else if (refreshError) {
       await showError(refreshError);
@@ -515,26 +790,35 @@ async function downloadSelected() {
     return;
   }
   messageLimitInput.setCustomValidity("");
+  const payload = {
+    conversation_ids: Array.from(selected),
+    from_date: fromDateInput.value || null,
+    to_date: toDateInput.value || null,
+    from_utc_offset_minutes: fromDateInput.value ? browserUtcOffsetMinutes(fromDateInput.value, false) : null,
+    to_utc_offset_minutes: toDateInput.value ? browserUtcOffsetMinutes(toDateInput.value, true) : null,
+    message_limit: limit.value,
+    include_attachments: includeAttachmentsInput.checked,
+    include_transcripts: includeTranscriptsInput.checked,
+    include_summaries: includeSummariesInput.checked,
+  };
+  const previewJobId = activePreviewJobId;
+  previewGeneration += 1;
+  activePreviewJobId = null;
+  if (previewJobId) {
+    if (previewEntireRange && previewHasText) previewEntireRange = false;
+    setPreviewToolbar({ view: previewIsCapped, status: "Preview stopped for download.", retry: true });
+  }
   authHelp.hidden = true;
   downloadButton.dataset.busy = "true";
   downloadButton.textContent = "Preparing…";
   updateControls();
   setStatus("Retrieving and formatting the selected conversations…", false);
   try {
+    if (previewJobId) await cancelServerPreview(previewJobId);
     const started = await json("/api/exports", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        conversation_ids: Array.from(selected),
-        from_date: fromDateInput.value || null,
-        to_date: toDateInput.value || null,
-        from_utc_offset_minutes: fromDateInput.value ? browserUtcOffsetMinutes(fromDateInput.value, false) : null,
-        to_utc_offset_minutes: toDateInput.value ? browserUtcOffsetMinutes(toDateInput.value, true) : null,
-        message_limit: limit.value,
-        include_attachments: includeAttachmentsInput.checked,
-        include_transcripts: includeTranscriptsInput.checked,
-        include_summaries: includeSummariesInput.checked,
-      }),
+      body: JSON.stringify(payload),
     });
     activeExportId = started.id;
     updateControls();
@@ -584,9 +868,10 @@ async function cancelExport() {
 
 search.addEventListener("input", renderChats);
 messageLimitInput.addEventListener("input", () => {
-  messageLimitInput.setCustomValidity(
-    getMessageLimit().valid ? "" : "Enter a positive whole number, or leave the field blank for unlimited."
-  );
+  const valid = getMessageLimit().valid;
+  messageLimitInput.setCustomValidity(valid ? "" : "Enter a positive whole number, or leave the field blank for unlimited.");
+  window.clearTimeout(previewDebounce);
+  if (valid) reloadPreviewForSettings();
 });
 rangeToggle.addEventListener("click", () => setCalendarOpen(calendar.hidden));
 $("previous-month").addEventListener("click", () => changeCalendarMonth(-1));
@@ -622,7 +907,15 @@ $("today-date").addEventListener("click", () => {
   renderCalendar();
   focusCalendarDate(dateKey(today));
 });
-$("calendar-done").addEventListener("click", () => setCalendarOpen(false, { restoreFocus: true }));
+$("calendar-done").addEventListener("click", () => {
+  if (choosingEnd && rangeStartDraft) {
+    const day = rangeStartDraft;
+    choosingEnd = false;
+    rangeStartDraft = null;
+    setDateRange(day, day);
+  }
+  setCalendarOpen(false, { restoreFocus: true });
+});
 document.addEventListener("pointerdown", (event) => {
   if (!calendar.hidden && !$("range-picker").contains(event.target)) setCalendarOpen(false);
   if (!settingsMenu.hidden && !$("settings-wrap")?.contains(event.target)) setSettingsOpen(false);
@@ -637,11 +930,17 @@ function setSettingsOpen(open, { restoreFocus = false } = {}) {
   if (!open && restoreFocus) settingsToggle.focus();
 }
 settingsToggle.addEventListener("click", () => setSettingsOpen(settingsMenu.hidden));
+$("view-entire-range").addEventListener("click", () => void startPreview({ entireRange: true, keepCurrent: true }));
+$("retry-preview").addEventListener("click", () => void startPreview({ entireRange: previewEntireRange, forceRefresh: true, keepCurrent: previewHasText }));
+$("cancel-preview").addEventListener("click", cancelPreview);
 $("refresh").addEventListener("click", loadChats);
 downloadButton.addEventListener("click", downloadSelected);
 cancelButton.addEventListener("click", cancelExport);
-includeAttachmentsInput.addEventListener("change", updateControls);
-includeTranscriptsInput.addEventListener("change", updateControls);
-includeSummariesInput.addEventListener("change", updateControls);
+for (const input of [includeAttachmentsInput, includeTranscriptsInput, includeSummariesInput]) {
+  input.addEventListener("change", () => {
+    updateControls();
+    reloadPreviewForSettings();
+  });
+}
 setInterval(() => api("/api/heartbeat", { method: "POST" }).catch(() => {}), 60_000);
 loadChats();

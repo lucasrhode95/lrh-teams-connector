@@ -190,6 +190,21 @@ def test_selection_pills_and_preview_target_are_separate() -> None:
     assert "if (preview) {\n    previewConversationId = id;" in script
 
 
+def test_preview_ui_supports_full_range_cancellation_and_page_memory_cache() -> None:
+    static = Path(routes.__file__).parent / "static"
+    page = (static / "index.html").read_text(encoding="utf-8")
+    styles = (static / "app.css").read_text(encoding="utf-8")
+    script = (static / "app.js").read_text(encoding="utf-8")
+    assert 'id="view-entire-range"' in page and 'id="cancel-preview"' in page
+    assert 'id="preview-toolbar"' in page
+    assert "const PREVIEW_CACHE_MS = 60_000" in script
+    assert "const PREVIEW_CACHE_LIMIT = 10" in script
+    assert "previewCache.keys().next().value" in script
+    assert "entire_range: entireRange" in script
+    assert "overflow-x: hidden; overflow-y: auto" in styles
+    assert "content-visibility: auto" in styles
+
+
 def test_date_picker_weeks_start_on_sunday_like_outlook() -> None:
     page = (Path(routes.__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
     weekdays = re.search(r'<div class="weekdays"[^>]*>(.*?)</div>', page)
