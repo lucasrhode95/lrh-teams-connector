@@ -2,7 +2,8 @@
 
 - One ``httpx.AsyncClient`` per process (keep-alive within a call).
 - No redirects, and only allowlisted hosts. A download may follow one redirect to a pre-authenticated
-  SharePoint URL, without credentials.
+  SharePoint URL, without credentials. A Graph upload session's ``uploadUrl`` (also pre-authenticated, on
+  SharePoint) is called through ``upload_session``, without credentials.
 - Credentials are pluggable: a bearer token profile (Graph, CSA) or the Teams Skype token
   (Chat Service). A rejected credential (401) is renewed once.
 - Retries only when the caller marks the request idempotent (GETs by default), honoring
@@ -42,7 +43,7 @@ log = logging.getLogger(__name__)
 
 ALLOWED_HOSTS = frozenset({"graph.microsoft.com", "outlook.office.com", "substrate.office.com"})
 ALLOWED_HOST_SUFFIXES = ("teams.microsoft.com", "teams.cloud.microsoft", "asm.skype.com")  # Teams and AMS
-DOWNLOAD_HOST_SUFFIXES = (".sharepoint.com",)  # pre-authenticated download URLs only
+DOWNLOAD_HOST_SUFFIXES = (".sharepoint.com",)  # pre-authenticated download and upload-session URLs only
 RETRY_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 MAX_JSON_BYTES = 32 * 1024 * 1024
 MAX_CONCURRENCY = 4
@@ -141,6 +142,38 @@ class Transport:
     ) -> httpx.Response:
         """Send a request and return a successful response, or raise a domain error."""
         _check_host(url)
+        return await self._send(
+            method,
+            url,
+            credential=credential,
+            headers=headers,
+            json_body=json_body,
+            content=content,
+            retry=retry,
+        )
+
+    async def upload_session(
+        self, method: str, url: str, *, headers: Mapping[str, str] | None = None, content: bytes | None = None
+    ) -> httpx.Response:
+        """A request to a Graph upload session's ``uploadUrl``: HTTPS on a SharePoint host only, and sent
+        without any credential, since the URL is pre-authenticated and must not receive a token. GETs (the
+        session's status) are retried like any read; PUTs (chunks) and DELETEs (cancelling) are sent once.
+        """
+        _check_sharepoint_host(url, "an upload session")
+        return await self._send(method, url, credential=None, headers=headers, content=content, retry=None)
+
+    async def _send(
+        self,
+        method: str,
+        url: str,
+        *,
+        credential: Credential | None,
+        headers: Mapping[str, str] | None,
+        json_body: Any = None,
+        content: bytes | None,
+        retry: bool | None,
+    ) -> httpx.Response:
+        """The request loop, for a host the caller has checked. ``credential`` None sends no credential."""
         retry = (method.upper() == "GET") if retry is None else retry
         attempts = self._max_attempts if retry else 1
         renewal: dict[str, Any] | None = None  # after a 401: how to renew the credential, for one request
@@ -148,7 +181,8 @@ class Transport:
         attempt = 0
         while attempt < attempts:
             attempt += 1
-            request_headers = {**(await credential.headers(renewal)), **(headers or {})}
+            authorization = await credential.headers(renewal) if credential is not None else {}
+            request_headers = {**authorization, **(headers or {})}
             renewal = None
             started = time.monotonic()
             try:
@@ -176,11 +210,11 @@ class Transport:
             log.debug(
                 "http %s %s -> %s in %dms",
                 method,
-                _path(url),
+                _path(url) if credential is not None else "{upload session}",
                 response.status_code,
                 (time.monotonic() - started) * 1000,
             )
-            if response.status_code == 401:
+            if response.status_code == 401 and credential is not None:
                 if not renewed:  # the credential was rejected (revoked, expired early): renew once
                     renewed, renewal = True, _renewal(response)
                     attempt -= 1
@@ -256,10 +290,7 @@ class Transport:
                 return await _stream_into(response, dest, max_bytes)
 
     async def _download_redirect(self, url: str, dest: BinaryIO, *, max_bytes: int) -> tuple[str | None, int]:
-        parts = urlsplit(url)
-        host = (parts.hostname or "").lower()
-        if parts.scheme != "https" or not host.endswith(DOWNLOAD_HOST_SUFFIXES):
-            raise Upstream(f"Refusing a download redirect to a non-allowlisted host: {host or '(none)'}")
+        _check_sharepoint_host(url, "a download redirect")
         async with self._limit, self._client.stream("GET", url) as response:
             if not response.is_success:
                 await response.aread()
@@ -283,6 +314,14 @@ def _check_host(url: str) -> None:
     parts = urlsplit(url)
     if parts.scheme != "https" or not host_allowed(parts.hostname):
         raise InvalidRequest(f"Refusing to call a non-allowlisted URL host: {parts.hostname}")
+
+
+def _check_sharepoint_host(url: str, what: str) -> None:
+    """A pre-authenticated SharePoint URL, called without credentials: HTTPS on ``*.sharepoint.com`` only."""
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if parts.scheme != "https" or not host.endswith(DOWNLOAD_HOST_SUFFIXES):
+        raise Upstream(f"Refusing {what} to a non-allowlisted host: {host or '(none)'}")
 
 
 def _path(url: str) -> str:

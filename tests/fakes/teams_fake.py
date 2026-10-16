@@ -2,8 +2,8 @@
 
 It understands exactly the request shapes the connector sends: Teams AuthZ, the CSA catalog (snapshot
 and delta), Chat Service history, members and listing, and the Graph endpoints for teams, channels, channel
-threads, members, people, photos, sends, OneDrive uploads and invites, and shared files. All data is
-synthetic.
+threads, members, people, photos, sends, OneDrive uploads (single PUTs and upload sessions) and invites,
+and shared files. All data is synthetic.
 """
 
 from __future__ import annotations
@@ -165,6 +165,14 @@ class FakeTeams:
     invites: list[tuple[str, dict[str, Any], str | None]] = field(default_factory=list)
     fail_upload_names: set[str] = field(default_factory=set)  # file names whose upload answers 500
     fail_invites: bool = False
+    # Upload sessions: id -> {"folder", "name", "size", "data", "received" (byte offsets)}
+    upload_sessions: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Chunk failures, each used once: (chunk start, "500" answers 500 and keeps nothing, "lost" keeps the
+    # bytes but drops the response)
+    chunk_failures: list[tuple[int, str]] = field(default_factory=list)
+    fail_upload_status: bool = False  # reading an upload session's status answers 503
+    upload_session_auth: list[str | None] = field(default_factory=list)  # Authorization on uploadUrl calls
+    cancelled_uploads: list[str] = field(default_factory=list)
     partial_invites: bool = False  # invites answer 207 with an error for the last recipient
     token_counter: int = 0
 
@@ -195,6 +203,8 @@ class FakeTeams:
             return self._presence(request)
         if url.hostname == "graph.microsoft.com":
             return self._graph(request, path.removeprefix("/v1.0"), parse_qs(url.query))
+        if url.hostname == "tenant-my.sharepoint.com" and "/uploadSession/" in path:
+            return self._upload_session(request, path.rsplit("/", 1)[-1])
         if url.hostname and url.hostname.endswith(".sharepoint.com"):
             key = path.rsplit("/", 1)[-1]
             for name, data in self.files.values():
@@ -345,23 +355,82 @@ class FakeTeams:
         folder, name = path.removeprefix("/me/drive/root:/").removesuffix(":/content").rsplit("/", 1)
         if name in self.fail_upload_names:
             return httpx.Response(500, json={"error": {"code": "generalException", "message": "failed"}})
+        return httpx.Response(201, json=self._store_upload(folder, name, request.content))
+
+    def _create_upload_session(self, request: httpx.Request, path: str) -> httpx.Response:
+        body = json.loads(request.content)
+        if body != {"item": {"@microsoft.graph.conflictBehavior": "rename"}}:
+            return httpx.Response(400, json={"error": {"code": "invalidRequest"}})
+        folder, name = (
+            path.removeprefix("/me/drive/root:/").removesuffix(":/createUploadSession").rsplit("/", 1)
+        )
+        if name in self.fail_upload_names:
+            return httpx.Response(500, json={"error": {"code": "generalException", "message": "failed"}})
+        key = str(len(self.upload_sessions) + 1)
+        self.upload_sessions[key] = {"folder": folder, "name": name, "size": None, "data": {}, "done": False}
+        upload_url = f"https://tenant-my.sharepoint.com/personal/mia/_api/v2.0/drive/uploadSession/{key}"
+        return httpx.Response(
+            200,
+            json={
+                "uploadUrl": upload_url,
+                "expirationDateTime": "2026-10-15T12:15:00Z",
+                "nextExpectedRanges": ["0-"],
+            },
+        )
+
+    def _upload_session(self, request: httpx.Request, key: str) -> httpx.Response:
+        """A pre-authenticated ``uploadUrl``: PUT a chunk with ``Content-Range``, GET the status, DELETE."""
+        self.upload_session_auth.append(request.headers.get("authorization"))
+        session = self.upload_sessions.get(key)
+        if session is None or session["done"]:
+            return _not_found()
+        if request.method == "DELETE":
+            session["done"] = True
+            self.cancelled_uploads.append(key)
+            return httpx.Response(204)
+        if request.method == "GET":
+            if self.fail_upload_status:
+                return httpx.Response(503, json={"error": {"code": "serviceNotAvailable"}})
+            return httpx.Response(200, json={"nextExpectedRanges": _missing(session)})
+        span, total = request.headers["content-range"].removeprefix("bytes ").split("/")
+        start, end = (int(value) for value in span.split("-"))
+        assert len(request.content) == end - start + 1 and session["size"] in (None, int(total))
+        session["size"] = int(total)
+        failure = next((f for f in self.chunk_failures if f[0] == start), None)
+        if failure:
+            self.chunk_failures.remove(failure)
+            if failure[1] == "500":
+                return httpx.Response(500, json={"error": {"code": "generalException"}})
+        for index, byte in enumerate(request.content):
+            session["data"][start + index] = byte
+        missing = _missing(session)
+        item = None
+        if not missing:
+            session["done"] = True
+            data = bytes(session["data"][i] for i in range(session["size"]))
+            item = self._store_upload(session["folder"], session["name"], data)
+        if failure:
+            raise httpx.ReadError("connection reset", request=request)
+        if item is not None:
+            return httpx.Response(201, json=item)
+        return httpx.Response(202, json={"nextExpectedRanges": missing})
+
+    def _store_upload(self, folder: str, name: str, data: bytes) -> dict[str, Any]:
+        """Keep an uploaded file, renamed on a clash, and describe it as Graph's drive item."""
         stem, dot, ext = name.rpartition(".")
         stored, n = name, 0
         while any(f == folder and s == stored for f, s, _ in self.uploads):
             n += 1
             stored = f"{stem} {n}{dot}{ext}" if dot else f"{name} {n}"
-        self.uploads.append((folder, stored, request.content))
+        self.uploads.append((folder, stored, data))
         number = len(self.uploads)
-        return httpx.Response(
-            201,
-            json={
-                "id": f"ITEM{number}",
-                "name": stored,
-                "webUrl": f"https://tenant-my.sharepoint.com/personal/mia/Documents/chat/{stored}",
-                "eTag": f'"{{0000000{number}-AAAA-BBBB-CCCC-DDDDEEEEFFFF}},1"',
-                "parentReference": {"driveId": "b!drive"},
-            },
-        )
+        return {
+            "id": f"ITEM{number}",
+            "name": stored,
+            "webUrl": f"https://tenant-my.sharepoint.com/personal/mia/Documents/chat/{stored}",
+            "eTag": f'"{{0000000{number}-AAAA-BBBB-CCCC-DDDDEEEEFFFF}},1"',
+            "parentReference": {"driveId": "b!drive"},
+        }
 
     def _invite(self, request: httpx.Request, item_id: str) -> httpx.Response:
         if self.fail_invites:
@@ -378,6 +447,12 @@ class FakeTeams:
         parts = path.strip("/").split("/")
         if request.method == "PUT" and path.startswith("/me/drive/root:/") and path.endswith(":/content"):
             return self._upload(request, path, query)
+        if (
+            request.method == "POST"
+            and path.startswith("/me/drive/root:/")
+            and path.endswith(":/createUploadSession")
+        ):
+            return self._create_upload_session(request, path)
         if request.method == "POST" and len(parts) == 5 and parts[0] == "drives" and parts[4] == "invite":
             return self._invite(request, parts[3])
         if len(parts) in (9, 11) and parts[-3] == "hostedContents" and parts[-1] == "$value":
@@ -598,3 +673,20 @@ def sample_tenant() -> FakeTeams:
     )  # fmt: skip
     fake.files["https://tenant.sharepoint.com/s/notes"] = ("notes.txt", b"shared notes")
     return fake
+
+
+def _missing(session: dict[str, Any]) -> list[str]:
+    """An upload session's ``nextExpectedRanges``: the missing byte ranges, the last one open-ended."""
+    size, have = session["size"], session["data"]
+    if size is None:
+        return ["0-"]
+    ranges, index = [], 0
+    while index < size:
+        if index in have:
+            index += 1
+            continue
+        start = index
+        while index < size and index not in have:
+            index += 1
+        ranges.append(f"{start}-" if index == size else f"{start}-{index - 1}")
+    return ranges
