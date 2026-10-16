@@ -10,6 +10,7 @@ other substrate calls do.
 from __future__ import annotations
 
 import base64
+import json
 import re
 import uuid
 from typing import Any
@@ -83,8 +84,46 @@ def summary_text(data: Any) -> str | None:
                 source = row.get("Source") if isinstance(row, dict) else None
                 text = source.get("MeetingSummary") if isinstance(source, dict) else None
                 if isinstance(text, str) and text.strip():
-                    return text.strip()
+                    return readable_summary(text.strip())
     return None
+
+
+def readable_summary(text: str) -> str | None:
+    """Teams' summary as readable text.
+
+    Teams sends a JSON document of key topics, each with a headline, a summary and detailed points. The text
+    keeps those, one bullet per point, and drops citations and model fields. Text that is not that
+    document is returned as it is. A document without topics has no summary.
+    """
+    try:
+        document = json.loads(text)
+    except ValueError:
+        return text
+    topics = document.get("KeyTopics") if isinstance(document, dict) else None
+    if not isinstance(topics, list):
+        return text
+    blocks = [block for block in (_topic_text(topic) for topic in topics) if block]
+    return "\n\n".join(blocks) or None
+
+
+def _topic_text(topic: Any) -> str:
+    if not isinstance(topic, dict):
+        return ""
+    lines = [_plain(topic.get("Headline")), _plain(topic.get("Summary"))]
+    details = topic.get("DetailedSummaries")
+    for detail in details if isinstance(details, list) else []:
+        if not isinstance(detail, dict):
+            continue
+        label, body = _plain(detail.get("topic")), _plain(detail.get("text"))
+        if label and body:
+            lines.append(f"- {label}: {body}")
+        elif label or body:
+            lines.append(f"- {label or body}")
+    return "\n".join(line for line in lines if line)
+
+
+def _plain(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
 
 
 def _items(container: Any, key: str) -> list[Any]:

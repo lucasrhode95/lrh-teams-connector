@@ -205,11 +205,19 @@ class Graph:
             self._absolute(path), credential=self._credential, headers=PREFER, max_bytes=max_bytes
         )
 
-    async def download_bytes(self, path: str, *, max_bytes: int) -> bytes:
-        """A small GET body that may come through one SharePoint redirect, as ``download`` does."""
+    async def download_bytes(
+        self, path: str, *, max_bytes: int, redirect_hosts: frozenset[str] = frozenset()
+    ) -> bytes:
+        """A small GET body that may come through one redirect, as ``download`` does. ``redirect_hosts`` names
+        the media host such a redirect may go to, for a caller that expects one (Loop pages)."""
         buffer = io.BytesIO()
         await self._transport.download(
-            self._absolute(path), buffer, credential=self._credential, headers=PREFER, max_bytes=max_bytes
+            self._absolute(path),
+            buffer,
+            credential=self._credential,
+            headers=PREFER,
+            max_bytes=max_bytes,
+            redirect_hosts=redirect_hosts,
         )
         return buffer.getvalue()
 

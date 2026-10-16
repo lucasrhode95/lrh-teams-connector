@@ -42,6 +42,7 @@ from teams_connector.service.history import History
 from teams_connector.service.presence import Presences
 from teams_connector.service.search import Search
 from teams_connector.service.send import Sender
+from teams_connector.service.summaries import MeetingSummaries
 from teams_connector.service.transcripts import TranscriptSearch
 from teams_connector.store.db import Store, store_path
 
@@ -128,13 +129,15 @@ class AppContext:
             chat_service,
             members=member_search,
         )
-        history = History(catalog, chat_service, channels, account.object_id)
-        search_source = SubstrateSearch(
-            transport,
-            Bearer(account_tokens, "m365.search"),
-            anchor_mailbox=f"Oid:{account.object_id}@{account.tenant_id}",
+        summaries = MeetingSummaries(
+            SubstrateMeetingSummaries(
+                transport,
+                Bearer(account_tokens, "m365.search"),
+                anchor_mailbox=f"Oid:{account.object_id}@{account.tenant_id}",
+            )
         )
-        summaries = SubstrateMeetingSummaries(
+        history = History(catalog, chat_service, channels, account.object_id, summaries)
+        search_source = SubstrateSearch(
             transport,
             Bearer(account_tokens, "m365.search"),
             anchor_mailbox=f"Oid:{account.object_id}@{account.tenant_id}",
@@ -170,7 +173,9 @@ class AppContext:
             deleter=Deleter(catalog, history, chat_service),
             files=files,
             photos=Photos(people),
-            transcript_search=TranscriptSearch(catalog, history, transcripts, GraphVideoSearch(graph)),
+            transcript_search=TranscriptSearch(
+                catalog, history, transcripts, GraphVideoSearch(graph), summaries
+            ),
             presence=Presences(
                 catalog, TeamsPresence(transport, session, Bearer(account_tokens, "teams.spaces"))
             ),

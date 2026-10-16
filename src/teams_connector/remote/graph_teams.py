@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from teams_connector import config
 from teams_connector.domain.errors import (
     ConnectorError,
     InvalidRequest,
@@ -507,7 +508,9 @@ class GraphFiles:
         share = _share_id(url)
         with operation("reading meeting notes"):
             page = await self._graph.download_bytes(
-                f"/shares/{share}/driveItem/content?format=html", max_bytes=MAX_NOTES_BYTES
+                f"/shares/{share}/driveItem/content?format=html",
+                max_bytes=MAX_NOTES_BYTES,
+                redirect_hosts=config.notes_media_hosts(),
             )
         return loop_notes.meeting_notes(page.decode("utf-8", errors="replace"))
 

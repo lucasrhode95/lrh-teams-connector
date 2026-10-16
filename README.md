@@ -35,7 +35,7 @@ Run the `auth` command above and it logs you in. All `lrh-*` Microsoft 365 conne
 
 The Teams store and local output files are stored under `%LOCALAPPDATA%\lrh-teams-connector` on
 Windows, or `~/.local/share/lrh-teams-connector` on other systems. Set `TEAMS_CONNECTOR_HOME` to
-override the Teams data directory.
+override the Teams data directory. If your tenant's region differs from the default, set `TEAMS_CONNECTOR_NOTES_MEDIA_HOSTS` to its Loop media host (comma-separated), so Loop meeting notes can be read.
 
 ### Configure a local MCP client
 
@@ -90,9 +90,9 @@ The MCP server exposes the tools below. Each one's inputs, results and caveats a
 | `auth_status` | shared auth provider | Read cached account/client credentials and resource-token expiry |
 | `list_chats` | [`service/catalog.py`](src/teams_connector/service/catalog.py) | List chats and channels by recent activity, with kind filters and paging |
 | `search_chats` | [`service/catalog.py`](src/teams_connector/service/catalog.py) | Match conversation names, and with a refresh the named group and meeting chats Teams matches by member and the one-on-ones with the people Teams suggests |
-| `get_messages` | [`service/history.py`](src/teams_connector/service/history.py) | Read a conversation's history, newest pages first (a channel: threads by latest activity), with inclusive date bounds |
+| `get_messages` | [`service/history.py`](src/teams_connector/service/history.py) | Read a conversation's history, newest pages first (a channel: threads by latest activity), with inclusive date bounds, and each transcribed meeting's AI summary after its marker (`include_summaries`, on by default) |
 | `search_messages` | [`service/search.py`](src/teams_connector/service/search.py) | Search Teams messages online through Microsoft Search v2: any of up to 25 terms, optionally within chosen chats and dates; one page of hits with message ids |
-| `search_transcripts` | [`service/transcripts.py`](src/teams_connector/service/transcripts.py) | Find words said in meetings, in the transcripts of recordings: complete within chosen conversations, or ranked across meetings (a video counts only when a meeting chat holds its recording) |
+| `search_transcripts` | [`service/transcripts.py`](src/teams_connector/service/transcripts.py) | Find words said in meetings, in the transcripts of recordings: complete within chosen conversations, or ranked across meetings (a video counts only when a meeting chat holds its recording), and each matched meeting's AI summary once (`include_summaries`, on by default) |
 | `export_chats` | [`service/export/`](src/teams_connector/service/export/) | Export conversations to `.txt`, `.jsonl` or `.zip`, with their attachments, meeting transcripts and their AI summaries |
 | `download_attachment` | [`service/files.py`](src/teams_connector/service/files.py) | Save the files a message names (shared files and pasted images), by message id or by its arrival time; lists those it could not fetch |
 | `get_presence` | [`service/presence.py`](src/teams_connector/service/presence.py) | Availability, activity, device and last-active time of the other person in a one-on-one chat; nothing richer |

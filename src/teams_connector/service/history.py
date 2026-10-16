@@ -18,6 +18,7 @@ from teams_connector.domain.models import Chat, HistoryCoverage, Message, Messag
 from teams_connector.remote.ports import ChannelHistoryReader, ChatHistoryReader, HistoryReader
 from teams_connector.service import cursors
 from teams_connector.service.catalog import Catalog
+from teams_connector.service.summaries import MeetingSummaries, withhold_meeting_notes
 from teams_connector.store.db import from_iso, iso
 
 REMOTE_PAGE_SIZE = 100
@@ -31,11 +32,13 @@ class History:
         chats: ChatHistoryReader,
         channels: ChannelHistoryReader,
         me_id: str,
+        summaries: MeetingSummaries,
     ) -> None:
         self._catalog = catalog
         self._chats = chats
         self._channels = channels
         self._me_id = me_id
+        self._summaries = summaries
 
     def reader(self, chat: Chat) -> HistoryReader:
         return self._channels if chat.kind == "channel" else self._chats
@@ -130,15 +133,19 @@ class History:
         page_size: int = 25,
         max_chars: int = 30_000,
         cursor: str | None = None,
+        include_summaries: bool = True,
     ) -> MessagePage:
         """Entry point: one response of a conversation's history, newest first within the walk, oldest first
-        within the response. With a cursor, the selection and paging come from the cursor."""
+        within the response. With a cursor, the selection, paging and summary choice come from the cursor. A
+        transcribed meeting's marker is followed by Teams' AI summary of it when ``include_summaries`` is set;
+        the summary counts toward ``max_chars``."""
         if cursor:
             state = cursors.decode(cursor, "get_messages")
             conversation_id = state["conversation_id"]
             since, until = from_iso(state["since"]), from_iso(state["until"])
             message_limit, page_size, max_chars = state["limit"], state["page_size"], state["max_chars"]
             link, before, returned = state["link"], _marker(state["before"]), int(state["returned"])
+            include_summaries = state["include_summaries"]
         else:
             check_range(since, until)
             link, before, returned = None, None, 0
@@ -172,8 +179,15 @@ class History:
             for message in candidates:
                 over_count = len(items) >= page_size
                 over_limit = message_limit is not None and returned + len(items) >= message_limit
+                if over_count or over_limit:
+                    stopped = True
+                    break
+                if not include_summaries:  # the flag governs the Facilitator's notes too
+                    withhold_meeting_notes(message)
+                if include_summaries:  # read before the budget check: the summary counts toward max_chars
+                    await self._summaries.add_to_message(message, include_transcripts=True)
                 over_budget = bool(items) and used + len(message.text) > max_chars
-                if over_count or over_limit or over_budget:
+                if over_budget:
                     stopped = True
                     break
                 items.append(message)
@@ -211,6 +225,7 @@ class History:
                 link=link,
                 before=before,
                 returned=returned + len(items),
+                include_summaries=include_summaries,
             )
         return MessagePage(
             chat=chat,

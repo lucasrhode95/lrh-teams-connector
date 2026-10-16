@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
+from teams_connector import config
 from teams_connector.domain.models import Attachment, Message, RecordingRef
 from teams_connector.remote import chat_events, inline_images, loop_notes, recording_cards, teams_html
 
@@ -19,6 +20,7 @@ _MRI = re.compile(
 _OBJECT_ID = re.compile(r"(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _ORDINARY_TYPES = ("richtext", "text")  # message types that carry user content (prefixes)
 _DELETE_TYPES = {"messagedelete"}
+_NOTICE_TYPES = {"richtext/media_calltranscript"}  # rich-text types that are system notices, not user content
 
 
 def mapping(value: Any) -> dict[str, Any]:
@@ -154,7 +156,8 @@ def to_message(raw: dict[str, Any], conversation_id: str) -> Message:
     is_deleted = lowered in _DELETE_TYPES or deleted_at is not None
     system_event = None
     inline: list[Attachment] = []
-    if kind and not lowered.startswith(_ORDINARY_TYPES) and lowered not in _DELETE_TYPES:
+    is_notice = lowered in _NOTICE_TYPES or not lowered.startswith(_ORDINARY_TYPES)
+    if kind and is_notice and lowered not in _DELETE_TYPES:
         system_event = kind
         text = chat_events.render(kind, content)
     else:
@@ -163,7 +166,8 @@ def to_message(raw: dict[str, Any], conversation_id: str) -> Message:
         inline, text = rendered.images, rendered.text
     files = _files(raw, props, {item.name.casefold() for item in inline})
     author_id = message_author_id(raw)
-    notes = _meeting_notes(content, author_id, props, {item.name.casefold() for item in [*inline, *files]})
+    notes = _meeting_notes(content, author_id, {item.name.casefold() for item in [*inline, *files]})
+    own_text = text  # kept for a read that withholds the meeting notes
     if notes:  # the bot's sentence is replaced by the notes marker
         text, inline = "", []
     recording = recording_cards.recording(content) if kind.casefold().startswith("richtext") else None
@@ -177,6 +181,10 @@ def to_message(raw: dict[str, Any], conversation_id: str) -> Message:
             *(f"[Transcript: {item.name}]" for item in transcripts),
         ]
         text = "\n\n".join(part for part in (text, "\n".join(markers)) if part)
+    text_without_notes = None
+    if notes:  # the message's own text and its other markers, as they read with the notes withheld
+        other_markers = [*file_markers(files), *(f"[Transcript: {item.name}]" for item in transcripts)]
+        text_without_notes = "\n\n".join(part for part in (own_text, "\n".join(other_markers)) if part)
     sent_at = message_datetime(raw)
     author = _first_string(raw, "imdisplayname", "imDisplayName", "fromDisplayNameInToken", "displayName")
     message_id = raw.get("id")
@@ -200,6 +208,7 @@ def to_message(raw: dict[str, Any], conversation_id: str) -> Message:
         attachments=[*inline, *files, *notes, *transcripts],
         reply_to_id=str(root) if root and str(root) != str(message_id) else None,
         recording=recording,
+        text_without_notes=text_without_notes,
     )
 
 
@@ -243,19 +252,13 @@ def _files(raw: dict[str, Any], props: dict[str, Any], used: set[str]) -> list[A
     return out
 
 
-def _meeting_notes(
-    content: str, author_id: str | None, props: dict[str, Any], used: set[str]
-) -> list[Attachment]:
-    """The Loop meeting-notes pages the meeting's "Facilitator" app links to when a meeting ends: an app
-    message whose ``botMetadata.aiMetadata.botAiSkill`` names ``eventType: TM_MeetingEnded``. Nothing is
-    fetched: exports and downloads read the page. Other Loop links (people's messages, other apps) keep
-    their text; pasted Loop components are not handled yet."""
-    if not author_id or not author_id.startswith("28:") or "fluidautoembedlink" not in content.casefold():
-        return []
-    skill = _json_mapping(
-        _json_mapping(_json_mapping(props.get("botMetadata")).get("aiMetadata")).get("botAiSkill")
-    )
-    if skill.get("eventType") != "TM_MeetingEnded":
+def _meeting_notes(content: str, author_id: str | None, used: set[str]) -> list[Attachment]:
+    """The Loop meeting-notes pages a message links to, if its sender is allowlisted: the meeting's
+    "Facilitator" app (``config.NOTES_SENDER_IDS``).
+
+    Nothing is fetched here. Exports and downloads read the page, for these messages only. Other Loop links
+    (people's messages, other apps) keep their text; pasted Loop components are not handled yet."""
+    if author_id not in config.NOTES_SENDER_IDS:
         return []
     return [
         Attachment(name=inline_images.unique_name("Meeting notes.txt", used), source="loop", url=link)
@@ -277,16 +280,6 @@ def _transcripts(content: str, recording: RecordingRef | None, used: set[str]) -
             recording=recording,
         )
     ]
-
-
-def _json_mapping(value: Any) -> dict[str, Any]:
-    """An object Chat Service sends either as JSON or as a string holding JSON."""
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except json.JSONDecodeError:
-            return {}
-    return mapping(value)
 
 
 def _is_site_page(name: str, link: str) -> bool:

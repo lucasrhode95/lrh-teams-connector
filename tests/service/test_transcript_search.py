@@ -9,10 +9,14 @@ import pytest
 
 from teams_connector.bootstrap import Services
 from teams_connector.domain.errors import InvalidRequest, Upstream
-from tests.fakes.teams_fake import FakeTeams, add_meeting, cs_message
+from tests.fakes.teams_fake import FakeTeams, add_meeting, cs_message, synthetic_drive
 
 CHAT = "19:one@unq.gbl.spaces"
-DRIVE = "b!SYNTH-DRIVE"
+DRIVE = synthetic_drive(
+    "11111111-2222-3333-4444-555555555555",
+    "66666666-7777-8888-9999-aaaaaaaaaaaa",
+    "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+)
 
 
 def _document(*lines: tuple[str, str, str]) -> dict[str, object]:

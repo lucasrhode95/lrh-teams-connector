@@ -23,7 +23,8 @@ overview; this document records the rules and contracts they cannot show.
 | `remote/chat_service.py`, `remote/csa.py` | Private Teams service adapters for the chat catalog, chat history, chat members, and CSA updates. Their endpoints are undocumented and described as private in the research record. |
 | `remote/graph.py`, `remote/graph_teams.py` | Microsoft Graph paging, batching, channel history, people/photos, file download, and the explicitly authorized message-send request. |
 | `remote/substrate_search.py` | Search v2 message search and named-chat matches, and Teams Web's search-box people suggestions (`substrate.office.com`), all with the `m365.search` token. |
-| `remote/substrate_summaries.py` | Teams' AI meeting summary from the search recommendations route (`substrate.office.com`, `MeetingCatchUp`), with the `m365.search` token; exports read it, nothing else does. |
+| `remote/substrate_summaries.py` | Teams' AI meeting summary from the search recommendations route (`substrate.office.com`, `MeetingCatchUp`), with the `m365.search` token; only `service/summaries.py` calls it. |
+| `service/summaries.py` | The one place that reads a meeting's AI summary for exports, `get_messages` and transcript search, each only for the meetings its result returns. Nothing is cached. |
 | `remote/presence.py`, `service/presence.py` | Presence of a one-on-one peer, read at the presence service AuthZ names (`presenceUPS`); the service keeps a result for a minute and fails open. |
 | `remote/inline_images.py`, `remote/image_readers.py` | Pasted images: the marker name and attachment record of each image in a message (`inline_images.py`, no network); the AMS full-size and Graph hosted-copy readers (`image_readers.py`). |
 | `remote/*_mapping.py` and `remote/teams_html.py` | Convert wire responses into domain records and readable message text. Wire-format field names remain inside this layer. |
@@ -57,9 +58,9 @@ and the adapters behind them. The split of backends (which private or public ser
 | MCP | `auth_status` | `TokenProvider` (shared auth package) | none | `TokenProvider` |
 | MCP | `list_chats` | `Catalog.list` (a refresh reads the self chat's newest message too) | `ChatCatalog`, `ChannelDirectory`, `HistoryReader` | `CsaCatalog`, `GraphChannels`, `ChatService` |
 | MCP | `search_chats` | `Catalog.search` (with `refresh`, after a catalog refresh as `list_chats`) | `ChatMemberSearch` (named chats and people), and the refresh's ports | `SubstrateChatSearch`, and the refresh's adapters |
-| MCP | `get_messages` | `History.get_messages` | `HistoryReader` (chats and channels) | `ChatService`, `GraphChannels` |
+| MCP | `get_messages` | `History.get_messages` | `HistoryReader` (chats and channels), `MeetingSummaryReader` | `ChatService`, `GraphChannels`, `SubstrateMeetingSummaries` |
 | MCP | `search_messages` | `Search.search_messages` | `MessageSearchReader` | `SubstrateSearch` |
-| MCP | `search_transcripts` | `TranscriptSearch.search` | `HistoryReader` (recording messages), `TranscriptReader`, `VideoSearch` (across meetings), `Catalog.active_since` | `ChatService`, `GraphTranscripts`, `GraphVideoSearch` |
+| MCP | `search_transcripts` | `TranscriptSearch.search` | `HistoryReader` (recording messages), `TranscriptReader`, `VideoSearch` (across meetings), `Catalog.active_since`, `MeetingSummaryReader` | `ChatService`, `GraphTranscripts`, `GraphVideoSearch`, `SubstrateMeetingSummaries` |
 | MCP | `export_chats` | `Exports.export` | `HistoryReader` (`History.selection`), `FileReader` and `ImageReader` (`Files.save`), `MeetingSummaryReader` | `ChatService`, `GraphChannels`, `GraphFiles`, `AmsImages`, `GraphHostedImages`, `SubstrateMeetingSummaries` |
 | MCP | `download_attachment` | `Files.download_attachments` (`History.resolve`) | `ChatHistoryReader` (finds the message, and a channel reply's thread), `ChannelHistoryReader`, `FileReader`, `ImageReader` | `ChatService`, `GraphChannels`, `GraphFiles`, `AmsImages`, `GraphHostedImages` |
 | MCP | `send_message` | `Sender.send` (and `Catalog.recipient`) | `ChatWriter`, `ChatCatalog` (chats), `ChannelDirectory` (channels), `MemberReader` and `FileSharer` (files) | `GraphWriter`, `CsaCatalog`, `GraphChannels`, `ChatService`, `GraphFileSharer` |
@@ -271,7 +272,7 @@ This operation does not discover recap or transcript text; those capabilities re
 
 `export_chats` writes `.txt` by default or `.jsonl` when requested, with inclusive date bounds and an optional
 latest-message limit per conversation. Each conversation becomes one text or JSONL file, named after the
-conversation and part of its id (with a counter if two still clash). A single conversation with no
+conversation and part of its id (with a counter if two still clash). In a text file, a message with no sender reads Teams when Teams posted it (an event or a meeting card) and Unknown sender otherwise. A single conversation with no
 attachment saved (none referenced, `include_attachments=false`, or every download failed) downloads as that
 file. Anything else is one ZIP, named after the conversation or `teams-conversations.zip` for several: each
 file at its root and its saved attachments in a folder named after it, with no ZIP inside it. A
@@ -298,10 +299,10 @@ once into the download cache (see Storage), and the tool returns the local paths
 SharePoint discovery belongs to the SharePoint connector. Email attachments belong to Outlook.
 
 **Meeting notes.** When a meeting ends, its "Facilitator" app posts a link to the meeting's Loop notes
-page ([research](api-research.md#loop-pages-and-meeting-notes)). An app (`28:`) message whose bot metadata
-names `eventType: TM_MeetingEnded` and whose HTML has a `FluidAutoEmbedLink` anchor to a `/:fl:/` link
+page ([research](api-research.md#loop-pages-and-meeting-notes)). A message from an allowlisted sender (`config.NOTES_SENDER_IDS`, the meeting's Facilitator app)
+and whose HTML has a `FluidAutoEmbedLink` anchor to a `/:fl:/` link
 reads as `[Meeting notes] <link>` instead of the app's sentence, and carries a `loop` attachment named
-`Meeting notes.txt`; reading fetches nothing. Any other message with such a link keeps its text.
+`Meeting notes.txt`; reading fetches nothing. The page is read only for such messages, through Graph's HTML conversion, which may redirect once to a regional media host (`config.notes_media_hosts()`, set per deployment by `TEAMS_CONNECTOR_NOTES_MEDIA_HOSTS`), followed without credentials. Any other message with such a link keeps its text. The `include_summaries` flag governs these notes too: without it, the message keeps its own text, no attachment is made, and no page is read.
 
 Exports (with attachments) and `download_attachment` read the page with one Graph
 `GET /shares/{share}/driveItem/content?format=html`, and `remote/loop_notes.py` keeps the agenda and goal,
@@ -329,13 +330,16 @@ messages and searches each transcript. Without them it runs Graph's `driveItem` 
 reads the chats active from an hour before the video's creation, quietest first, at most 25 per video, and
 counts videos it cannot place. The result is never complete across meetings.
 
-**AI summaries.** With `include_summaries` (on by default), an export reads Teams' AI summary of each transcribed
-meeting and puts it after the transcript's marker, labeled as generated by AI and possibly inaccurate
-(`remote/substrate_summaries.py`, `MeetingSummaryReader`). The request names the meeting by an entity id built from
-the recording's drive id (api-research, "Meeting summary"). Only the export's selected messages are read; `get_messages`
-and search read none. With `include_transcripts=false`, the marker reads `[Transcript not included: title]` and the
-summary stays in the text. A meeting without a summary keeps its marker alone; a summary whose read fails is marked
-as unavailable, and the export goes on.
+**AI summaries.** The flag `include_summaries` (on by default) governs exports, `get_messages` and
+`search_transcripts`. Each reads Teams' AI summary through `service/summaries.py` and the adapter in
+`remote/substrate_summaries.py` (`MeetingSummaryReader`), labeled as AI-generated and possibly inaccurate. The request
+names the meeting by an entity id built from the recording's drive id (api-research, "Meeting summary"). Teams sends the summary as a JSON document of topics, which `readable_summary` turns into text. A read happens
+only for a meeting the call returns, once per meeting, and nothing is cached. An export puts the summary after the
+transcript's marker; with `include_transcripts=false`, the marker reads `[Transcript not included: title]` so the
+summary stays in the text. `get_messages` does the same after the marker, counts the summary toward `max_chars` and
+keeps the choice in its cursor. `search_transcripts` lists each matched meeting's summary once in `summaries`; a
+summary that cannot be read leaves the matches and the completeness unchanged. A meeting without a summary keeps its
+marker alone; a failed read is marked as unavailable, and the call goes on.
 
 ### Send a message
 

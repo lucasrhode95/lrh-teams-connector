@@ -29,6 +29,10 @@ def render(kind: str, content: str) -> str:
         return "[Member added]"
     if kind == "ThreadActivity/TopicUpdate":
         return _topic(content) or f"[{kind}]"
+    if kind.casefold() == "richtext/media_calltranscript":
+        return (
+            "[Transcript saved]"  # the content is a JSON notice of identifiers and storage flags: never shown
+        )
     return f"[{kind}]"
 
 
@@ -54,7 +58,7 @@ def _ended(root: ET.Element) -> str:
     if seconds:
         fields.append(_duration(seconds))
     if names:
-        fields.append(", ".join(names))
+        fields.append("Participants: " + "; ".join(names))
     return "[" + " · ".join(fields) + "]"
 
 
@@ -68,7 +72,7 @@ def _members(content: str, verb: str) -> str | None:
     names = _unique(
         _text(member.get("friendlyname")) for member in record["members"] if isinstance(member, dict)
     )
-    return f"[{', '.join(names)} {verb}]" if names else f"[A member {verb}]"
+    return f"[{'; '.join(names)} {verb}]" if names else f"[A member {verb}]"
 
 
 def _topic(content: str) -> str | None:

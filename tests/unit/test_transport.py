@@ -154,6 +154,58 @@ async def test_download_redirect_does_not_forward_the_bearer_token() -> None:
     }
 
 
+async def test_a_download_follows_one_redirect_to_a_named_media_host_without_credentials() -> None:
+    headers_by_host: dict[str, str | None] = {}
+
+    async def handle(request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        headers_by_host[host] = request.headers.get("authorization")
+        if host == "graph.microsoft.com":
+            return httpx.Response(
+                302, headers={"Location": "https://media.example.invalid/page?sig=synthetic"}
+            )
+        return httpx.Response(200, content=b"synthetic page", headers={"Content-Type": "text/html"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    transport = Transport(client=client)
+    destination = BytesIO()
+    try:
+        content_type, size = await transport.download(
+            "https://graph.microsoft.com/v1.0/shares/id/driveItem/content",
+            destination,
+            credential=Credential(),
+            max_bytes=100,
+            redirect_hosts=frozenset({"media.example.invalid"}),
+        )
+    finally:
+        await transport.aclose()
+
+    assert content_type == "text/html" and size == len(b"synthetic page")
+    assert destination.getvalue() == b"synthetic page"
+    assert headers_by_host == {"graph.microsoft.com": "Bearer synthetic-token", "media.example.invalid": None}
+
+
+async def test_a_redirect_to_a_host_not_named_is_still_refused() -> None:
+    async def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "graph.microsoft.com":
+            return httpx.Response(302, headers={"Location": "https://other.example.invalid/page"})
+        return httpx.Response(200, content=b"never read")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    transport = Transport(client=client)
+    try:
+        with pytest.raises(Upstream, match="non-allowlisted"):
+            await transport.download(
+                "https://graph.microsoft.com/v1.0/shares/id/driveItem/content",
+                BytesIO(),
+                credential=Credential(),
+                max_bytes=100,
+                redirect_hosts=frozenset({"media.example.invalid"}),
+            )
+    finally:
+        await transport.aclose()
+
+
 async def test_non_allowlisted_hosts_and_oversized_downloads_are_rejected() -> None:
     requests = 0
 

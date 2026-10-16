@@ -13,7 +13,12 @@ import pytest
 from teams_connector import config
 from teams_connector.domain.errors import Upstream
 from teams_connector.domain.models import RecordingRef
-from teams_connector.remote.substrate_summaries import SubstrateMeetingSummaries, entity_id, summary_text
+from teams_connector.remote.substrate_summaries import (
+    SubstrateMeetingSummaries,
+    entity_id,
+    readable_summary,
+    summary_text,
+)
 from teams_connector.remote.transport import Transport
 
 SITE = "11111111-2222-3333-4444-555555555555"
@@ -114,3 +119,48 @@ def test_a_processing_state_under_the_same_name_is_not_the_summary() -> None:
 )
 def test_an_answer_without_a_summary_is_none(answer: Any) -> None:
     assert summary_text(answer) is None
+
+
+def _topics(*topics: dict[str, Any]) -> str:
+    return json.dumps(
+        {"KeyTopics": list(topics), "Version": "2.0.0", "ProcessingResult": "ProcessedSuccessfully"}
+    )
+
+
+def test_a_key_topics_document_reads_as_text() -> None:
+    document = _topics(
+        {
+            "Headline": "Synthetic topic",
+            "Summary": "Synthetic summary.",
+            "DetailedSummaries": [
+                {"topic": "First point", "text": "Synthetic detail."},
+                {"topic": "Second point", "text": "Another detail."},
+            ],
+            "Citations": [{"UtteranceId": "synthetic/1", "Source": "Transcript"}],
+        }
+    )
+    assert readable_summary(document) == (
+        "Synthetic topic\nSynthetic summary.\n"
+        "- First point: Synthetic detail.\n- Second point: Another detail."
+    )
+
+
+def test_topics_are_separated_by_a_blank_line() -> None:
+    document = _topics({"Headline": "One", "Summary": "First."}, {"Headline": "Two", "Summary": "Second."})
+    assert readable_summary(document) == "One\nFirst.\n\nTwo\nSecond."
+
+
+def test_a_document_without_topics_is_no_summary() -> None:
+    assert readable_summary(_topics()) is None
+
+
+def test_text_that_is_not_the_document_is_returned_as_it_is() -> None:
+    assert readable_summary("Synthetic plain summary.") == "Synthetic plain summary."
+    assert readable_summary('{"Other": 1}') == '{"Other": 1}'
+
+
+def test_the_summary_answer_is_read_as_text() -> None:
+    answer = _answer(
+        {"MeetingSummary": _topics({"Headline": "Synthetic topic", "Summary": "Synthetic summary."})}
+    )
+    assert summary_text(answer) == "Synthetic topic\nSynthetic summary."

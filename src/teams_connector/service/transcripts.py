@@ -25,6 +25,7 @@ from typing import Literal
 from teams_connector.domain.errors import AuthenticationRequired, ConnectorError, InvalidRequest
 from teams_connector.domain.models import (
     Chat,
+    MeetingSummaryEntry,
     Message,
     RecordingRef,
     Transcript,
@@ -36,6 +37,7 @@ from teams_connector.remote.ports import TranscriptReader, VideoHit, VideoSearch
 from teams_connector.service import transcript_text
 from teams_connector.service.catalog import Catalog
 from teams_connector.service.history import History, check_range
+from teams_connector.service.summaries import MeetingSummaries
 
 MAX_TERMS = 25
 MAX_TERM_CHARS = 200
@@ -58,6 +60,8 @@ class _Tally:
     unverified: int = 0  # across meetings: some chat that could hold the card could not be read
     channels_skipped: int = 0
     notes: list[str] = field(default_factory=list)
+    # recordings with matches, by (conversation id, message id): a message id can repeat across chats
+    matched: dict[tuple[str, str], RecordingRef] = field(default_factory=dict)
 
 
 class TranscriptSearch:
@@ -69,11 +73,13 @@ class TranscriptSearch:
         history: History,
         transcripts: TranscriptReader,
         videos: VideoSearch,
+        summaries: MeetingSummaries,
     ) -> None:
         self._catalog = catalog
         self._history = history
         self._transcripts = transcripts
         self._videos = videos
+        self._summaries = summaries
 
     async def search(
         self,
@@ -83,8 +89,12 @@ class TranscriptSearch:
         since: datetime | None = None,
         until: datetime | None = None,
         limit: int = 25,
+        include_summaries: bool = True,
     ) -> TranscriptSearchResult:
-        """Find the utterances that match any term. ``terms`` are checked here, once, at this entry point."""
+        """Find the utterances that match any term. ``terms`` are checked here, once, at this entry point.
+
+        With ``include_summaries``, the result also lists Teams' AI summary of each matched meeting once.
+        """
         words = _checked_terms(terms)
         check_range(since, until)
         if not 1 <= limit <= MAX_LIMIT:
@@ -93,8 +103,8 @@ class TranscriptSearch:
             ids = list(dict.fromkeys(i.strip() for i in conversation_ids if i.strip()))
             if not ids or len(ids) > MAX_CONVERSATIONS:
                 raise InvalidRequest(f"Pass 1 to {MAX_CONVERSATIONS} conversation ids, or omit them.")
-            return await self._in_conversations(words, ids, since, until, limit)
-        return await self._across_meetings(words, since, until, limit)
+            return await self._in_conversations(words, ids, since, until, limit, include_summaries)
+        return await self._across_meetings(words, since, until, limit, include_summaries)
 
     # ------------------------------------------------------------------ in conversations
 
@@ -105,6 +115,7 @@ class TranscriptSearch:
         since: datetime | None,
         until: datetime | None,
         limit: int,
+        include_summaries: bool,
     ) -> TranscriptSearchResult:
         tally = _Tally()
         hits: list[TranscriptHit] = []
@@ -125,10 +136,22 @@ class TranscriptSearch:
                         continue
                     hits.extend(await self._hits_of(chat, message, recording, words, tally))
                     if len(hits) > limit:  # one match beyond the limit: there is more, so say so
-                        return self._result(
-                            "conversations", hits[:limit], tally, truncated=True, exhaustive=True
+                        return await self._result(
+                            "conversations",
+                            hits[:limit],
+                            tally,
+                            truncated=True,
+                            exhaustive=True,
+                            include_summaries=include_summaries,
                         )
-        return self._result("conversations", hits, tally, truncated=False, exhaustive=True)
+        return await self._result(
+            "conversations",
+            hits,
+            tally,
+            truncated=False,
+            exhaustive=True,
+            include_summaries=include_summaries,
+        )
 
     # ------------------------------------------------------------------ across meetings
 
@@ -138,6 +161,7 @@ class TranscriptSearch:
         since: datetime | None,
         until: datetime | None,
         limit: int,
+        include_summaries: bool,
     ) -> TranscriptSearchResult:
         tally = _Tally()
         hits: list[TranscriptHit] = []
@@ -151,7 +175,9 @@ class TranscriptSearch:
                 if not _in_dates(video, since, until):
                     continue
                 if tally.candidates >= MAX_CANDIDATES:
-                    return self._across_result(hits, tally, truncated=True)
+                    return await self._across_result(
+                        hits, tally, truncated=True, include_summaries=include_summaries
+                    )
                 tally.candidates += 1
                 located = await self._recording_card(video, tally)
                 if located is None:  # not a meeting, or not placed: already tallied
@@ -163,20 +189,29 @@ class TranscriptSearch:
                     continue
                 hits.extend(await self._hits_of(chat, message, recording, words, tally))
                 if len(hits) > limit:
-                    return self._across_result(hits[:limit], tally, truncated=True)
+                    return await self._across_result(
+                        hits[:limit], tally, truncated=True, include_summaries=include_summaries
+                    )
             offset += len(page)
             if total is not None and offset >= total:
                 break
-        return self._across_result(hits, tally, truncated=False)
+        return await self._across_result(hits, tally, truncated=False, include_summaries=include_summaries)
 
-    def _across_result(
-        self, hits: list[TranscriptHit], tally: _Tally, *, truncated: bool
+    async def _across_result(
+        self, hits: list[TranscriptHit], tally: _Tally, *, truncated: bool, include_summaries: bool
     ) -> TranscriptSearchResult:
         tally.notes.append(
             "Ranked search over the videos Graph returns: not a complete list of meetings, and the total is "
             "approximate."
         )
-        return self._result("meetings", hits, tally, truncated=truncated, exhaustive=False)
+        return await self._result(
+            "meetings",
+            hits,
+            tally,
+            truncated=truncated,
+            exhaustive=False,
+            include_summaries=include_summaries,
+        )
 
     async def _recording_card(self, video: VideoHit, tally: _Tally) -> tuple[Chat, Message] | None:
         """The meeting chat and recording message that name this video, or None. A video counts as not a
@@ -248,9 +283,12 @@ class TranscriptSearch:
         if transcript is None:
             tally.unavailable += 1
             return []
-        return _matches(chat, message, recording, transcript, words)
+        found = _matches(chat, message, recording, transcript, words)
+        if found:
+            tally.matched[(chat.id, message.id)] = recording
+        return found
 
-    def _result(
+    async def _result(
         self,
         mode: Literal["conversations", "meetings"],
         hits: list[TranscriptHit],
@@ -258,10 +296,17 @@ class TranscriptSearch:
         *,
         truncated: bool,
         exhaustive: bool,
+        include_summaries: bool,
     ) -> TranscriptSearchResult:
         """The result. ``exhaustive`` says the search reads everything it claims to cover. A truncated result,
         one whose transcripts were not all read, or one that skipped a channel is never complete."""
+        summaries: list[MeetingSummaryEntry] = []
+        failed = 0
+        if include_summaries:
+            summaries, failed = await self._summaries_of(hits, tally)
         notes = list(tally.notes)
+        if failed:
+            notes.append(f"{failed} meeting summary(ies) could not be read; the matches are unaffected.")
         if tally.untranscribed:
             notes.append(f"{tally.untranscribed} recording(s) have no transcript in Teams.")
         if tally.unavailable:
@@ -293,7 +338,36 @@ class TranscriptSearch:
                 truncated=truncated,
                 notes=notes,
             ),
+            summaries=summaries,
         )
+
+    async def _summaries_of(
+        self, hits: list[TranscriptHit], tally: _Tally
+    ) -> tuple[list[MeetingSummaryEntry], int]:
+        """Teams' AI summary of each meeting the returned matches name, read once per meeting.
+
+        Returns the summaries and the count of failed reads. The matches and completeness do not depend on it.
+        Each returned match's recording is in ``tally.matched``, recorded by ``_hits_of``."""
+        entries: list[MeetingSummaryEntry] = []
+        failed = 0
+        seen: set[tuple[str, str]] = set()
+        for hit in hits:
+            key = (hit.conversation_id, hit.message_id)  # a message id can repeat across chats
+            if key in seen:
+                continue
+            seen.add(key)
+            read = await self._summaries.read(tally.matched[key])
+            failed += 1 if read.failed else 0
+            entries.append(
+                MeetingSummaryEntry(
+                    meeting=hit.meeting,
+                    conversation_id=hit.conversation_id,
+                    message_id=hit.message_id,
+                    summary=read.text,
+                    unavailable=read.failed,
+                )
+            )
+        return entries, failed
 
 
 def _transcribed(message: Message) -> RecordingRef | None:

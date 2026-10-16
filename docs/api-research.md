@@ -334,7 +334,9 @@ The type name carries no `Html`, so the card is plain text to a reader that keys
 recording's `driveId` and `driveItemId`. The `onedriveForBusinessTranscript` item carries the same drive and
 item ids and the transcript's `id`, which equals the id of the default transcript that `media/transcripts`
 lists. The card's `amsTranscript` item has no drive ids. Transcripts
-also appear as `RichText/Media_CallTranscript` messages.
+also appear as `RichText/Media_CallTranscript` messages. Such a message is a notice: its content is a JSON document of
+  identifiers and storage flags (`scopeId`, `storageId`, `callId`, `isExportedToOdsp`, and others). The connector
+  renders it as `[Transcript saved]` and never shows the document (2026-10-16).
 
 ## AMS (Async Media Service)
 
@@ -600,6 +602,11 @@ reads meeting notes through `?format=html` since 2026-10-15 (exports and downloa
 them is untested. The connector does not check them, by design (decided 2026-10-16).
 Loop components that people paste into a chat may use the same `FluidAutoEmbedLink` embed; untested.
 
+**Live, 2026-10-16** (the standup's rundown message, the connector's read, and a browser capture of a reload):
+- The browser loads the page as a live Fluid document from SharePoint: `POST …/_api/v2.1/drives/{drive}/items/{item}/opStream/snapshots/trees/latest` (`application/ms-fluid`; two responses of about 97 KB and 149 KB, both containing the page's wording). The HAR strips credential headers, so the capture does not show which credential it used. The connector has no SharePoint-audience token, so it does not use this route.
+- The connector's read, `GET /shares/{share}/driveItem/content?format=html` with the Teams client's Graph token, answered with a redirect to a regional Fluid media host, `francecentral1-mediap.svc.ms` for this tenant. The browser capture has no request to that host. The read followed the redirect once, without credentials, once the host was named in the notes media-host setting (`TEAMS_CONNECTOR_NOTES_MEDIA_HOSTS`; the default is this tenant's region); the converted page then parsed into headings and bullets, and the AI disclaimer was dropped as before.
+- The rundown's sender is the Facilitator app: one sender id across its three messages in the standup chat. `config.NOTES_SENDER_IDS` allowlists that Microsoft app's id, so a link from it is read whether or not the meeting-ended record is present. The rundown message has the embed but no meeting-ended metadata.
+
 ### Sending files
 
 Teams Web, Capture 2026-10-15: a one-on-one and a four-member group chat, a repeated name, an 8 MB file and an
@@ -768,9 +775,11 @@ sign-in (the summary text is not kept):
   [{"entityType": "MeetingCatchUp"}]}], "scenario": {"name": "MeetingCatchup"}}`. Teams Web's capture of the same
   call has this shape. Its captured request carried no `X-AnchorMailbox`; the connector sends one, as its other
   substrate calls do, and the answer matched the capture.
-- The summary is `EntitySets[0].ResultSets[0].Results[0].Source.MeetingSummary`: one line of plain text, about
-  2,300 characters for the probed meeting. The same name under `InsightProcessingStates` is a processing state,
-  not the text.
+- The summary is `EntitySets[0].ResultSets[0].Results[0].Source.MeetingSummary`, a JSON document, not plain text
+  (corrected 2026-10-16; an earlier note said plain text). Its `KeyTopics` list holds, per topic, a `Headline`, a
+  `Summary` and `DetailedSummaries` (`topic` and `text` pairs), with `Citations` (utterance ids) and model fields
+  alongside. About 2,300 characters for the probed meeting. The same name under `InsightProcessingStates` is a
+  processing state (`ProcessedSuccessfully`), not the text.
 - The entity id is `SPO_` + the base64url of the site, web and library GUIDs as comma-joined text + `_` + the
   recording's drive item id. The GUIDs come from the drive id: `b!` + the base64url of three 16-byte blocks in
   little-endian GUID byte order, in the order site, web, library. The id built from the card's `driveId` and
