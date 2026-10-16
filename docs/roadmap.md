@@ -44,7 +44,7 @@ text ([architecture](architecture.md#exports)). Still open:
 - Decided 2026-10-16: the downloaded file is text, not the PDF (`?format=pdf`).
 - Done 2026-10-16: notes are recognized by the allowlisted Facilitator sender, not by the meeting-ended record, and
   the converted page's media host is named in config for that one read (api-research, "Meeting notes" live
-  findings). Checked live on the standup's rundown page.
+  findings). Checked live on the standup's rundown page. The flag that governs the AI summaries governs these notes too.
 
 ### P2.2f — Meeting recaps, and transcripts beyond the first version
 

@@ -302,7 +302,7 @@ SharePoint discovery belongs to the SharePoint connector. Email attachments belo
 page ([research](api-research.md#loop-pages-and-meeting-notes)). A message from an allowlisted sender (`config.NOTES_SENDER_IDS`, the meeting's Facilitator app)
 and whose HTML has a `FluidAutoEmbedLink` anchor to a `/:fl:/` link
 reads as `[Meeting notes] <link>` instead of the app's sentence, and carries a `loop` attachment named
-`Meeting notes.txt`; reading fetches nothing. The page is read only for such messages, through Graph's HTML conversion, which may redirect once to a regional media host (`config.NOTES_MEDIA_HOSTS`), followed without credentials. Any other message with such a link keeps its text.
+`Meeting notes.txt`; reading fetches nothing. The page is read only for such messages, through Graph's HTML conversion, which may redirect once to a regional media host (`config.NOTES_MEDIA_HOSTS`), followed without credentials. Any other message with such a link keeps its text. The `include_summaries` flag governs these notes too: without it, the message keeps its own text, no attachment is made, and no page is read.
 
 Exports (with attachments) and `download_attachment` read the page with one Graph
 `GET /shares/{share}/driveItem/content?format=html`, and `remote/loop_notes.py` keeps the agenda and goal,
@@ -330,7 +330,7 @@ messages and searches each transcript. Without them it runs Graph's `driveItem` 
 reads the chats active from an hour before the video's creation, quietest first, at most 25 per video, and
 counts videos it cannot place. The result is never complete across meetings.
 
-**AI summaries.** Three reads use `include_summaries` (on by default): exports, `get_messages` and
+**AI summaries.** The flag `include_summaries` (on by default) governs exports, `get_messages` and
 `search_transcripts`. Each reads Teams' AI summary through `service/summaries.py` and the adapter in
 `remote/substrate_summaries.py` (`MeetingSummaryReader`), labeled as AI-generated and possibly inaccurate. The request
 names the meeting by an entity id built from the recording's drive id (api-research, "Meeting summary"). Teams sends the summary as a JSON document of topics, which `readable_summary` turns into text. A read happens
