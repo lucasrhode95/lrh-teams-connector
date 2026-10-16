@@ -41,7 +41,7 @@ text ([architecture](architecture.md#exports)). Still open:
 - **Page name in the marker:** the app's message carries no page name, so reading shows
   `[Meeting notes] <link>`; the title appears only once the page is read. Is there a name to show without
   reading the page?
-- Should the PDF (`?format=pdf`) be offered as the downloaded file instead of text?
+- Decided 2026-10-16: the downloaded file is text, not the PDF (`?format=pdf`).
 
 ### P2.2f — Meeting recaps and transcripts
 
