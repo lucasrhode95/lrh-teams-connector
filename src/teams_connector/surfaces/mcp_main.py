@@ -70,7 +70,12 @@ shown as [File: name] and [Image: name] markers) and returns their local paths. 
 show as [Meeting notes] and a link; download_attachment (as "Meeting notes.txt") and exports read the live \
 page and keep its agenda, notes and tasks. Pass the message_id from \
 get_messages, or the message's sent_at time instead.
-- Transcripts: a meeting recording whose transcript Teams made shows [Transcript: title] in get_messages. download_attachment (as "title") and exports (include_transcripts, on by default; the transcripts folder) save it as text with speakers and times. search_transcripts finds words said in meetings: with conversation_ids it reads those chats' recordings and is complete unless a transcript could not be read or the limit was reached; without them it ranks videos Graph's search returns, keeps only those a meeting chat holds, and is never complete.
+- Transcripts: a meeting recording whose transcript Teams made shows [Transcript: title] in get_messages. \
+download_attachment (as "title") and exports (include_transcripts, on by default; the transcripts folder) \
+save it as text with speakers and times. search_transcripts finds words said in meetings: with \
+conversation_ids it reads those chats' recordings and is complete unless a transcript could not be read or \
+the limit was reached; without them it ranks videos Graph's search returns, keeps only those a meeting chat \
+holds, and is never complete.
 - Messages are read from Teams on each call; nothing is kept locally. Messages with is_deleted=true were \
 deleted in Teams, and Teams keeps no text for them; edited ones show their newest text.
 - Times are UTC; a date-time without an offset is taken as UTC.
