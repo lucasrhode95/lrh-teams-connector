@@ -79,7 +79,8 @@ class Graph:
     async def post(
         self, path: str, body: Any, *, idempotent: bool, prefer: str | None = None
     ) -> tuple[dict[str, Any], dict[str, str]]:
-        """POST JSON. Read-style POSTs ($batch) are idempotent and retried; writes are sent once. ``prefer``
+        """POST JSON. Read-style POSTs ($batch) are idempotent and retried like reads; writes are retried only
+        when nothing was applied. ``prefer``
         replaces the default ``Prefer`` header."""
         response = await self._transport.request(
             "POST",
@@ -92,7 +93,7 @@ class Graph:
         return _json_object(response.content), dict(response.headers)
 
     async def put_content(self, path: str, data: bytes) -> dict[str, Any]:
-        """PUT raw bytes (a file's content). A write: sent once, never retried."""
+        """PUT raw bytes (a file's content). A write: retried only when nothing was applied."""
         response = await self._transport.request(
             "PUT",
             self._absolute(path),
@@ -102,6 +103,12 @@ class Graph:
             retry=False,
         )
         return _json_object(response.content)
+
+    async def delete(self, path: str) -> None:
+        """DELETE one resource. A write: retried only when nothing was applied."""
+        await self._transport.request(
+            "DELETE", self._absolute(path), credential=self._credential, retry=False
+        )
 
     async def upload_session(
         self,

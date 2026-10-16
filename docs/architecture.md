@@ -131,8 +131,10 @@ export publishes nothing.
 The shared transport accepts HTTPS only and checks Graph and Teams hosts before sending credentials.
 Regional Chat Service URLs come from the Teams AuthZ response and are checked against the Teams
 domain allowlist. Read-only requests retry a bounded set of transient failures; the retry delay
-honors `Retry-After` within its limit. Writes are not retried. A request whose result is ambiguous
-raises `WriteOutcomeUnknown` so an agent can inspect the target before taking another action.
+honors `Retry-After` within its limit. Writes are retried only when the failure proves nothing was
+applied: the connection never opened, or the service answered 429 or 503 (requirements §4). A write sent
+without a complete answer, or answered 504, is never resent: it raises `WriteOutcomeUnknown` so an agent
+can inspect the target before taking another action.
 
 Graph file-download endpoints can return a preauthenticated SharePoint redirect. The transport
 allows one HTTPS redirect to a SharePoint download host and does not forward the Graph bearer token
@@ -319,8 +321,8 @@ channel's name from its team), then checks the name before sending. Pass exactly
 text; HTML characters are escaped) or `html` (HTML sent as written, after a passive check that refuses
 scripts, frames, form controls, event-handler attributes, `javascript:` and `vbscript:` URLs, embedded
 media, declarations and CDATA sections, and unfinished markup); with files or images both may be omitted.
-The message is attempted once. A network failure after the request may leave the result uncertain, so
-inspect the conversation before deciding whether another send is needed. A search result or request to
+The message is never resent after an uncertain outcome: a network failure after the request may leave the
+result uncertain, so inspect the conversation before deciding whether another send is needed. A search result or request to
 analyze a conversation does not authorize a send.
 
 Files and images go to one-on-one and group chats and the self chat, and may share a message. Every
@@ -346,13 +348,16 @@ default). The service does what Teams Web does, through Graph ([research](api-re
    (`direct`). The self chat has nobody to share with, so this step is skipped there.
 3. Post the message with one `reference` attachment per file.
 
-Each request is made once, with one user-approved exception: after a failed chunk, the uploader reads the
-session's `nextExpectedRanges` and resends only the missing bytes, at most `graph_teams.UPLOAD_RESUMES`
-(3) times per file; then it cancels the session (`DELETE uploadUrl`) and the send fails. If the last chunk
-fails and the session's state cannot be read, the file may have been uploaded, so the outcome is reported
-as unknown. The message is posted only after every upload and share has succeeded; a share that fails for
-some members (Graph's `207 Multi-Status`) counts as failed. When something fails, the error names the
-files already in the sender's OneDrive, which stay there. A member without an object id in the directory,
+Each request follows the transport's write rule (retried only on a 429, a 503 or a connection that never
+opened). After a chunk that still fails, the uploader reads the session's `nextExpectedRanges` and resends
+only the missing bytes, at most `graph_teams.UPLOAD_RESUMES` (3) times per file; then it cancels the
+session (`DELETE uploadUrl`) and the send fails. If the chunk that closes the file fails and the session's
+state cannot be read, the file may have been uploaded, so the outcome is reported as unknown. The message
+is posted only after every upload and share has succeeded; a share that fails for some members (Graph's
+`207 Multi-Status`) counts as failed. When the send fails, the files it uploaded are deleted again
+(`DELETE /drives/{drive}/items/{item}`, to the OneDrive recycle bin), except when the post's outcome is
+unknown, since the message may reference them. The error says which files were deleted, which are still
+in the sender's OneDrive and why, and which upload's outcome is unknown. A member without an object id in the directory,
 such as a federated user, makes the send fail before anything is uploaded. The result lists each file's
 name, as renamed, and its link.
 
@@ -366,7 +371,7 @@ so the rule lives in the tool description and the MCP instructions. The service 
 
 1. Reads the message again (`History.message`). A message it cannot read, someone else's, a system event
    or an already deleted message is skipped with the reason.
-2. Sends Chat Service `DELETE …/messages/{id}?behavior=softDelete` with the Skype token, once
+2. Sends Chat Service `DELETE …/messages/{id}?behavior=softDelete` with the Skype token
    ([research](api-research.md#writes-not-used-by-the-connector)). Teams Web's Delete does the same, and
    it can be undone in Teams.
 

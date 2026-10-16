@@ -216,8 +216,8 @@ class ChatWriter(Protocol):
         images: Sequence[HostedImage] = (),
     ) -> SendReceipt:
         """Send once: the HTML ``body``, which names every one of ``images`` (``hosted_image_src``), with
-        ``attachments`` after it (``body`` may then be empty). Never retried: an ambiguous outcome raises
-        WriteOutcomeUnknown."""
+        ``attachments`` after it (``body`` may then be empty). Never resent after an ambiguous outcome,
+        which raises WriteOutcomeUnknown."""
         ...
 
 
@@ -229,18 +229,22 @@ class MeetingNotesReader(Protocol):
 
 class MessageDeleter(Protocol):
     async def delete(self, chat: Chat, message_id: str) -> None:
-        """Soft-delete one of the user's own messages in a chat, once. Never retried: an ambiguous outcome
-        raises WriteOutcomeUnknown."""
+        """Soft-delete one of the user's own messages in a chat. Never resent after an ambiguous outcome,
+        which raises WriteOutcomeUnknown."""
         ...
 
 
 class FileSharer(Protocol):
     async def upload(self, path: Path) -> UploadedFile:
-        """Upload one local file to the sender's chat-files folder, renaming on a name clash. Sent once."""
+        """Upload one local file to the sender's chat-files folder, renaming on a name clash."""
         ...
 
     async def share(self, file: UploadedFile, recipients: Sequence[str]) -> None:
-        """Grant people (Entra object ids) access to an uploaded file without notifying them. Sent once."""
+        """Grant people (Entra object ids) access to an uploaded file without notifying them."""
+        ...
+
+    async def delete(self, file: UploadedFile) -> None:
+        """Delete a file a failed send uploaded (it goes to the OneDrive recycle bin)."""
         ...
 
 

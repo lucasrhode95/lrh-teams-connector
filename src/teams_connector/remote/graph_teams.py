@@ -355,14 +355,18 @@ class GraphFileSharer:
                 + (f" ({code})." if isinstance(code, str) and code else ".")
             )
 
+    async def delete(self, file: UploadedFile) -> None:
+        """Delete an uploaded file (Graph moves it to the OneDrive recycle bin)."""
+        with operation("deleting an uploaded file"):
+            await self._graph.delete(f"/drives/{segment(file.drive_id)}/items/{segment(file.item_id)}")
+
     async def _upload_in_chunks(self, path: Path, target: str) -> dict[str, Any]:
         """An upload session: chunks read from disk one at a time and PUT, without the Graph token, to the
         session's pre-authenticated ``uploadUrl``. The last chunk's answer is the drive item.
 
-        Each chunk is sent once. After a failed chunk the session's status names the ranges still missing
-        and only those are sent again, at most ``UPLOAD_RESUMES`` times per file (an exception to sending
-        each write once, approved by the user on 2026-10-15). Then the session is cancelled and the upload
-        fails.
+        A chunk the transport could not deliver is resumed: the session's status names the ranges still
+        missing and only those are sent again, at most ``UPLOAD_RESUMES`` times per file (approved by the
+        user on 2026-10-15). Then the session is cancelled and the upload fails.
         """
         session, _ = await self._graph.post(
             f"{target}/createUploadSession",

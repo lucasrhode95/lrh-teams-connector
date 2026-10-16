@@ -6,8 +6,10 @@
   SharePoint) is called through ``upload_session``, without credentials.
 - Credentials are pluggable: a bearer token profile (Graph, CSA) or the Teams Skype token
   (Chat Service). A rejected credential (401) is renewed once.
-- Retries only when the caller marks the request idempotent (GETs by default), honoring
-  429 / Retry-After. Writes are never retried.
+- Reads (GETs by default, or a request the caller marks idempotent) retry transient failures,
+  honoring 429 / Retry-After. Writes retry only failures that prove nothing was applied: the
+  connection never opened, or the service answered 429 or 503. A write sent without a complete
+  answer, or answered 504, is never resent: it raises WriteOutcomeUnknown.
 - Concurrency limiter: at most 4 requests in flight per process.
 - Logs metadata only: no URLs with query text, no bodies, no tokens.
 - Errors name the operation in progress (``operation()``), the service error code and message
@@ -45,6 +47,7 @@ ALLOWED_HOSTS = frozenset({"graph.microsoft.com", "outlook.office.com", "substra
 ALLOWED_HOST_SUFFIXES = ("teams.microsoft.com", "teams.cloud.microsoft", "asm.skype.com")  # Teams and AMS
 DOWNLOAD_HOST_SUFFIXES = (".sharepoint.com",)  # pre-authenticated download and upload-session URLs only
 RETRY_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+WRITE_RETRY_STATUSES = frozenset({429, 503})  # throttled or unavailable: the write was not processed
 MAX_JSON_BYTES = 32 * 1024 * 1024
 MAX_CONCURRENCY = 4
 MAX_ERROR_TEXT = 200
@@ -157,7 +160,7 @@ class Transport:
     ) -> httpx.Response:
         """A request to a Graph upload session's ``uploadUrl``: HTTPS on a SharePoint host only, and sent
         without any credential, since the URL is pre-authenticated and must not receive a token. GETs (the
-        session's status) are retried like any read; PUTs (chunks) and DELETEs (cancelling) are sent once.
+        session's status) are retried like any read; PUTs (chunks) and DELETEs (cancelling) are writes.
         """
         _check_sharepoint_host(url, "an upload session")
         return await self._send(method, url, credential=None, headers=headers, content=content, retry=None)
@@ -173,9 +176,10 @@ class Transport:
         content: bytes | None,
         retry: bool | None,
     ) -> httpx.Response:
-        """The request loop, for a host the caller has checked. ``credential`` None sends no credential."""
+        """The request loop, for a host the caller has checked. ``credential`` None sends no credential.
+        ``retry`` marks a read; anything else is a write, retried only when nothing was applied."""
         retry = (method.upper() == "GET") if retry is None else retry
-        attempts = self._max_attempts if retry else 1
+        attempts = self._max_attempts
         renewal: dict[str, Any] | None = None  # after a 401: how to renew the credential, for one request
         renewed = False
         attempt = 0
@@ -196,7 +200,7 @@ class Transport:
                     continue
                 raise Upstream(f"Could not reach {urlsplit(url).hostname} ({type(exc).__name__}).") from None
             except httpx.HTTPError as exc:  # sent, but no complete response
-                if attempt < attempts:
+                if retry and attempt < attempts:
                     await self._sleep(min(2**attempt, 20))
                     continue
                 if not retry:  # a write may have been applied: the caller must check, never resend
@@ -220,7 +224,8 @@ class Transport:
                     attempt -= 1
                     continue
                 raise _sign_in_required(credential, response)
-            if response.status_code in RETRY_STATUSES and attempt < attempts:
+            retryable = RETRY_STATUSES if retry else WRITE_RETRY_STATUSES
+            if response.status_code in retryable and attempt < attempts:
                 await self._sleep(_retry_after(response, attempt))
                 continue
             if response.is_success:
