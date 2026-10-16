@@ -360,7 +360,8 @@ class TranscriptSearchCoverage(Compact):
     recordings: int  # meeting recordings whose transcripts were read
     transcripts_unavailable: int = 0  # recordings whose transcript Teams did not provide
     candidates: int = 0  # meetings mode: video hits from the search
-    not_meetings: int = 0  # meetings mode: hits no meeting chat holds a recording card for
+    not_meetings: int = 0  # meetings mode: every chat that could hold the card was read, and none did
+    unverified: int = 0  # meetings mode: some chat that could hold the card could not be read
     truncated: bool = False  # more hits than ``limit``
     notes: list[str] = Field(default_factory=list)
 

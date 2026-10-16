@@ -301,7 +301,7 @@ def build_server(context: AppContext) -> FastMCP:
         meeting, conversation and recording message (message_id is the id get_messages reads), the speaker,
         the time into the recording, and the utterance. Read coverage: a result in conversations is complete
         unless a transcript could not be read or the limit was reached; a result across meetings is ranked
-        and never complete, and counts videos that are not meetings separately."""
+        and never complete. It counts videos that are not meetings, and those it could not place, apart."""
         return await (await services()).transcript_search.search(
             terms,
             conversation_ids=conversation_ids,

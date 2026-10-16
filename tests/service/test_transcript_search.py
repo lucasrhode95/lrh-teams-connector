@@ -270,4 +270,41 @@ async def test_one_chat_that_refuses_to_be_read_does_not_end_the_search(
 
     assert {h.meeting for h in result.items} == {"Synthetic Standup"}
     assert result.coverage.not_meetings == 0
-    assert any("could not be checked" in note for note in result.coverage.notes)
+    assert result.coverage.unverified == 0  # the video was placed in the chat that could be read
+
+
+async def test_a_limit_equal_to_the_matches_is_complete(services: Services, fake: FakeTeams) -> None:
+    await _meetings(services, fake)
+
+    result = await services.transcript_search.search(["execucao"], conversation_ids=[CHAT], limit=1)
+
+    assert [h.text for h in result.items] == ["Execução do plano is next."]
+    assert result.coverage.truncated is False
+    assert result.coverage.complete is True
+
+
+async def test_a_channel_only_search_is_not_complete(services: Services, fake: FakeTeams) -> None:
+    await services.catalog.refresh()
+
+    result = await services.transcript_search.search(
+        ["deployment"], conversation_ids=["19:general@thread.tacv2"]
+    )
+
+    assert result.coverage.recordings == 0
+    assert result.coverage.complete is False
+
+
+async def test_a_video_without_a_time_is_unverified_not_a_non_meeting(
+    services: Services, fake: FakeTeams
+) -> None:
+    fake.videos.clear()
+    fake.videos.append(
+        {"driveId": DRIVE, "itemId": "01UNDATED", "name": "Undated.mp4", "createdDateTime": None}
+    )
+    await services.catalog.refresh()
+
+    result = await services.transcript_search.search(["deployment"])
+
+    assert result.items == []
+    assert result.coverage.unverified == 1
+    assert result.coverage.not_meetings == 0

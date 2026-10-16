@@ -8,7 +8,8 @@ Two ways in, one result shape (docs/requirements.md §8, docs/roadmap.md P2.2f):
 - **Across meetings** (no conversations): Graph's search finds transcribed videos by their spoken words,
   which ranks them but does not prove they are meetings. Each video is kept only when a meeting chat holds a
   recording card naming that very drive item, which also gives its chat. The result is never complete: it is
-  ranked, its total is approximate, and videos no chat accounts for are counted as not meetings.
+  ranked, its total is approximate, videos whose chats were all read and hold no card are counted as not
+  meetings, and videos whose chats could not all be read are counted as unverified, never as not meetings.
 
 Terms are phrases matched inside one utterance (service/transcript_text.py). Pure matching and rendering
 live in transcript_text; this module reads the chats, the transcripts and the search, and decides what a
@@ -53,8 +54,8 @@ class _Tally:
     unavailable: int = 0  # recordings whose transcript could not be read
     untranscribed: int = 0  # recording cards Teams made no transcript for
     candidates: int = 0  # across meetings: videos checked
-    not_meetings: int = 0  # across meetings: videos no chat holds a recording card for
-    unverified: int = 0  # across meetings: videos whose chats could not all be read
+    not_meetings: int = 0  # across meetings: every chat that could hold the card was read, and none did
+    unverified: int = 0  # across meetings: some chat that could hold the card could not be read
     channels_skipped: int = 0
     notes: list[str] = field(default_factory=list)
 
@@ -123,9 +124,11 @@ class TranscriptSearch:
                         tally.untranscribed += 1
                         continue
                     hits.extend(await self._hits_of(chat, message, recording, words, tally))
-                    if len(hits) >= limit:
-                        return self._result("conversations", hits[:limit], tally, truncated=True)
-        return self._result("conversations", hits, tally, truncated=False)
+                    if len(hits) > limit:  # one match beyond the limit: there is more, so say so
+                        return self._result(
+                            "conversations", hits[:limit], tally, truncated=True, exhaustive=True
+                        )
+        return self._result("conversations", hits, tally, truncated=False, exhaustive=True)
 
     # ------------------------------------------------------------------ across meetings
 
@@ -151,8 +154,7 @@ class TranscriptSearch:
                     return self._across_result(hits, tally, truncated=True)
                 tally.candidates += 1
                 located = await self._recording_card(video, tally)
-                if located is None:
-                    tally.not_meetings += 1
+                if located is None:  # not a meeting, or not placed: already tallied
                     continue
                 chat, message = located
                 recording = _transcribed(message)
@@ -160,7 +162,7 @@ class TranscriptSearch:
                     tally.untranscribed += 1
                     continue
                 hits.extend(await self._hits_of(chat, message, recording, words, tally))
-                if len(hits) >= limit:
+                if len(hits) > limit:
                     return self._across_result(hits[:limit], tally, truncated=True)
             offset += len(page)
             if total is not None and offset >= total:
@@ -174,32 +176,41 @@ class TranscriptSearch:
             "Ranked search over the videos Graph returns: not a complete list of meetings, and the total is "
             "approximate."
         )
-        return self._result("meetings", hits, tally, truncated=truncated, complete=False)
+        return self._result("meetings", hits, tally, truncated=truncated, exhaustive=False)
 
     async def _recording_card(self, video: VideoHit, tally: _Tally) -> tuple[Chat, Message] | None:
-        """The meeting chat and recording message that name this video, or None. Only chats active since the
-        video was created are read, quietest first, so the cost is bounded by the chats that followed it."""
-        if video.created_at is None:
+        """The meeting chat and recording message that name this video, or None. A video counts as not a
+        meeting only when every chat that could hold its card was read to its end and none did; when some
+        could not be read, it counts as unverified and is not listed."""
+        if video.created_at is None:  # no time to bound the chats by
+            tally.unverified += 1
             return None
         since = video.created_at - timedelta(hours=1)
         until = video.created_at + timedelta(days=1)
         chats = await self._catalog.active_since(since, CHAT_KINDS)
-        if len(chats) > MAX_CHATS_PER_VIDEO:
-            tally.unverified += 1
+        exhaustive = len(chats) <= MAX_CHATS_PER_VIDEO
         for chat in chats[:MAX_CHATS_PER_VIDEO]:
             try:
-                message = await self._card_in(chat, video, since, until)
+                message, read_to_end = await self._card_in(chat, video, since, until)
             except AuthenticationRequired:
                 raise
-            except ConnectorError:  # one chat Teams refuses does not end the search; it is counted
-                tally.unverified += 1
+            except ConnectorError:  # one chat Teams refuses does not end the search
+                exhaustive = False
                 continue
             if message is not None:
                 return chat, message
+            exhaustive = exhaustive and read_to_end
+        if exhaustive:
+            tally.not_meetings += 1
+        else:
+            tally.unverified += 1
         return None
 
-    async def _card_in(self, chat: Chat, video: VideoHit, since: datetime, until: datetime) -> Message | None:
-        """The recording message in one chat that names this video's drive item, if there is one."""
+    async def _card_in(
+        self, chat: Chat, video: VideoHit, since: datetime, until: datetime
+    ) -> tuple[Message | None, bool]:
+        """The recording message in one chat that names this video's drive item, and whether the chat was read
+        to its end: False when the page bound stopped the reading first."""
         pages = 0
         async for page in self._history.selection(chat, since=since, until=until):
             pages += 1
@@ -208,12 +219,12 @@ class TranscriptSearch:
                 if (
                     recording is not None
                     and recording.item_id == video.item_id
-                    and (recording.drive_id == video.drive_id)
+                    and recording.drive_id == video.drive_id
                 ):
-                    return message
+                    return message, True
             if pages >= MAX_PAGES_PER_CHAT:
-                break
-        return None
+                return None, False
+        return None, True
 
     # ------------------------------------------------------------------ shared
 
@@ -246,8 +257,10 @@ class TranscriptSearch:
         tally: _Tally,
         *,
         truncated: bool,
-        complete: bool = True,
+        exhaustive: bool,
     ) -> TranscriptSearchResult:
+        """The result. ``exhaustive`` says the search reads everything it claims to cover. A truncated result,
+        one whose transcripts were not all read, or one that skipped a channel is never complete."""
         notes = list(tally.notes)
         if tally.untranscribed:
             notes.append(f"{tally.untranscribed} recording(s) have no transcript in Teams.")
@@ -259,21 +272,24 @@ class TranscriptSearch:
             notes.append("Channel recordings are not searched yet; channel conversations were skipped.")
         if tally.unverified:
             notes.append(
-                f"{tally.unverified} video(s) could not be checked against every chat that might hold them."
+                f"{tally.unverified} video(s) could not be placed in a meeting chat, because some chat that "
+                "might hold them could not be read; they are neither listed nor counted as non-meetings."
             )
         if truncated:
             notes.append(
                 "More matches or videos may exist; narrow the terms, the dates or the conversations."
             )
+        complete = exhaustive and not truncated and tally.unavailable == 0 and tally.channels_skipped == 0
         return TranscriptSearchResult(
             items=hits,
             coverage=TranscriptSearchCoverage(
                 mode=mode,
-                complete=complete and tally.unavailable == 0 and not truncated,
+                complete=complete,
                 recordings=tally.recordings,
                 transcripts_unavailable=tally.unavailable,
                 candidates=tally.candidates,
                 not_meetings=tally.not_meetings,
+                unverified=tally.unverified,
                 truncated=truncated,
                 notes=notes,
             ),
