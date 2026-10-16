@@ -40,15 +40,19 @@ Keep two separate pieces of state:
 Start with nothing selected, no pills and an empty preview prompt. Download is disabled until at
 least one conversation is selected.
 
-Clicking a row toggles its export checkbox once and makes it the preview target; clicking the
-checkbox does the same. A row clicked while checked becomes unchecked and stays the preview target.
+Clicking a row (or Enter or Space on it) only makes it the preview target, so browsing previews never
+changes the download (changed 2026-10-16; rows first toggled the selection too). A small round button at
+the row's right adds or removes the conversation: it shows on hover and keyboard focus, always on touch
+screens, and stays visible as a filled check while the conversation is selected. It does not change the
+preview. Ctrl+click (Cmd+click on macOS) on a row previews it and toggles its selection. Opening the
+chat already previewed keeps its view and scroll.
 
 Each selected conversation has one pill with its name and an accessible remove button. Removing a
-pill unchecks the conversation only: the preview, its contents and the list scroll position stay as
+pill deselects the conversation only: the preview, its contents and the list scroll position stay as
 they are, and no other conversation is selected. Removing the last pill disables Download.
 
 Selected rows use the current hover background; the previewed row uses a slightly stronger one,
-checked or not. Keep a distinct keyboard focus indicator.
+selected or not, and is marked `aria-current`. Keep a distinct keyboard focus indicator.
 
 Filtering the list keeps selections, pills and the preview, even for chats the filter hides. A
 catalog refresh drops conversations that no longer exist; if the previewed one is gone, the
@@ -189,8 +193,8 @@ each:
 
 1. **Layout and theme.** Four-row grid, control sizing, settings menu with switches, footer, narrow
    layout; remove the subtitle; add the theme-change listener.
-2. **Selection and pills.** Separate selection from the preview target; row and checkbox clicks,
-   highlights, pill removal, keyboard access, filter persistence.
+2. **Selection and pills.** Separate selection from the preview target; row clicks preview and
+   the add button selects; highlights, pill removal, keyboard access, filter persistence.
 3. **Preview endpoint.** A text-only export mode in the export pipeline (no binary files), the
    `POST /api/preview` route with `entire_range`, backend-owned caps with coverage, the separate
    preview slot with cancellation, and spool cleanup.
@@ -210,7 +214,8 @@ The UI must also count preview and presence requests as activity for its idle sh
 
 Use synthetic conversations, identities and messages with fake transports only.
 
-- Empty start; row and checkbox toggle once; preview highlight; pill removal keeps the preview;
+- Empty start; a row click previews without selecting; the add button toggles once without
+  previewing; preview highlight; pill removal keeps the preview;
   hidden selections survive filtering; missing chats are dropped on refresh.
 - Row order follows the backend and does not change with presence, selection or preview.
 - Switches slide, work by label and keyboard, expose their state and respect reduced motion; the

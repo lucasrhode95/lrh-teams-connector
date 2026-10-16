@@ -508,21 +508,34 @@ function renderChatStates() {
     const checked = selected.has(id);
     row.classList.toggle("selected", checked);
     row.classList.toggle("previewed", id === previewConversationId);
-    const checkbox = row.querySelector('input[type="checkbox"]');
-    if (checkbox) checkbox.checked = checked;
+    if (id === previewConversationId) row.setAttribute("aria-current", "true");
+    else row.removeAttribute("aria-current");
+    const toggle = row.querySelector(".select-toggle");
+    if (toggle) setSelectToggle(toggle, row.dataset.name, checked);
   }
 }
 
-// Toggling the previewed conversation only changes the selection; its preview, view and scroll stay.
-function setChatSelection(id, checked) {
-  if (checked) selected.add(id);
-  else selected.delete(id);
-  if (id !== previewConversationId) {
-    previewConversationId = id;
-    previewEntireRange = false;
-    previewIsCapped = false;
-    void startPreview({ entireRange: false });
-  }
+function setSelectToggle(toggle, name, checked) {
+  toggle.textContent = checked ? "✓" : "+";
+  toggle.setAttribute("aria-pressed", String(checked));
+  toggle.setAttribute("aria-label", (checked ? "Remove " : "Add ") + name + (checked ? " from" : " to") + " the download");
+  toggle.title = checked ? "Remove from download" : "Add to download";
+}
+
+// Clicking a row previews it; its add button, or Ctrl/Cmd+click, changes the download selection. Opening the chat
+// already previewed keeps its view and scroll.
+function previewChat(id) {
+  if (id === previewConversationId) return;
+  previewConversationId = id;
+  previewEntireRange = false;
+  previewIsCapped = false;
+  void startPreview({ entireRange: false });
+  renderChatStates();
+}
+
+function toggleChatSelection(id) {
+  if (selected.has(id)) selected.delete(id);
+  else selected.add(id);
   renderSelection();
   renderChatStates();
   updateControls();
@@ -547,6 +560,7 @@ function renderChats() {
     row.tabIndex = 0;
     row.setAttribute("role", "group");
     row.dataset.conversationId = chat.id;
+    row.dataset.name = chat.name;
     const tooltipText = chatTypeLabel(chat) + " · " + (chat.last_message_at
       ? new Date(chat.last_message_at).toLocaleString() : "No recent activity shown");
     const tooltip = document.createElement("span");
@@ -557,12 +571,13 @@ function renderChats() {
     row.setAttribute("aria-describedby", tooltip.id);
     row.addEventListener("mouseenter", () => positionChatTooltip(row, tooltip));
     row.addEventListener("focusin", () => positionChatTooltip(row, tooltip));
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.setAttribute("aria-label", "Include " + chat.name + " in download");
-    checkbox.checked = selected.has(chat.id);
-    checkbox.addEventListener("change", () => {
-      setChatSelection(chat.id, checkbox.checked);
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "select-toggle";
+    setSelectToggle(toggle, chat.name, selected.has(chat.id));
+    toggle.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleChatSelection(chat.id);
     });
     const avatarWrap = document.createElement("span");
     avatarWrap.className = "chat-avatar-wrap";
@@ -593,18 +608,19 @@ function renderChats() {
     metadata.hidden = true;
     text.appendChild(name);
     if (personChat) text.appendChild(metadata);
-    row.append(checkbox, avatarWrap, text, tooltip);
+    row.append(avatarWrap, text, toggle, tooltip);
     row.addEventListener("click", (event) => {
-      if (event.target === checkbox) return;
-      setChatSelection(chat.id, !selected.has(chat.id));
+      previewChat(chat.id);
+      if (event.ctrlKey || event.metaKey) toggleChatSelection(chat.id); // Ctrl/Cmd+click also selects
     });
     row.addEventListener("keydown", (event) => {
-      if (event.target === checkbox || (event.key !== "Enter" && event.key !== " ")) return;
+      if (event.target !== row || (event.key !== "Enter" && event.key !== " ")) return;
       event.preventDefault();
-      setChatSelection(chat.id, !selected.has(chat.id));
+      previewChat(chat.id);
     });
     row.classList.toggle("selected", selected.has(chat.id));
     row.classList.toggle("previewed", chat.id === previewConversationId);
+    if (chat.id === previewConversationId) row.setAttribute("aria-current", "true");
     list.appendChild(row);
     if (personChat) {
       if (presenceResults.has(chat.id)) applyPresenceToRow(row, presenceResults.get(chat.id));

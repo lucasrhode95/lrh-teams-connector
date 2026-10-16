@@ -290,7 +290,10 @@ def test_selection_pills_and_preview_target_are_separate() -> None:
     assert 'id="selected-chats"' in page and 'id="preview-content"' in page
     assert "let previewConversationId = null" in script
     assert "event.stopPropagation();\n      selected.delete(id);" in script
-    assert "if (id !== previewConversationId) {\n    previewConversationId = id;" in script
+    # A row click only previews; its add button, or Ctrl/Cmd+click, also changes the selection.
+    assert "if (event.ctrlKey || event.metaKey) toggleChatSelection(chat.id);" in script
+    assert "event.stopPropagation();\n      toggleChatSelection(chat.id);" in script
+    assert 'checkbox.type = "checkbox"' not in script
 
 
 def test_preview_ui_supports_full_range_cancellation_and_page_memory_cache() -> None:
