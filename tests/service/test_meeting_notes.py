@@ -150,9 +150,8 @@ async def test_notes_and_files_share_one_attachment_budget(
 
     assert fake.loop_reads == [LINK]  # the notes took the one item the conversation allows
     assert artifact.chats[0].attachments_downloaded == 1 and artifact.chats[0].attachments_failed == 1
-    with zipfile.ZipFile(artifact.path) as archive:
-        text = next(archive.read(n).decode() for n in archive.namelist() if n.endswith(".txt"))
-    assert "[Attachment unavailable: notes.txt]" in text
+    assert artifact.path.endswith(".txt")  # no file was saved, so nothing to zip
+    assert "[Attachment unavailable: notes.txt]" in Path(artifact.path).read_text(encoding="utf-8")
 
 
 async def test_without_attachments_the_export_reads_no_page(

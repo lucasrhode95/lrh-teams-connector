@@ -120,10 +120,9 @@ downloads. The browser opens only after the server reports ready and prints the 
 The date picker behaves like the Outlook connector's: weeks start on Sunday, future days are
 disabled, two clicks in either order make the range, and the calendar stays open until Done or
 Escape. The × beside the field clears the range.
-One conversation with no selected attachments downloads as a plain file; with attachments, its text
-and available files are placed together in a conversation-named folder inside one ZIP. Multiple
-conversations download as one outer ZIP, with an inner ZIP for each conversation with attachments
-and a plain text file for each without them.
+One conversation with no attachment saved downloads as a plain file. Anything else downloads as one
+ZIP: each conversation's plain file at the top, and its attachments in a folder named after that file.
+There is never a ZIP inside the ZIP.
 
 The local store holds the chat catalog and account metadata, and nothing else. Message content is not
 kept: Teams is the record, and every history read goes to Teams. The store is separated by Microsoft

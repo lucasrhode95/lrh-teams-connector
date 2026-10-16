@@ -66,19 +66,17 @@ async def test_single_chat_export_is_one_txt(services: Services) -> None:
     assert progress[-1].phase == "done" and progress[0].phase == "retrieving"
 
 
-async def test_single_chat_with_attachment_is_a_zip_with_text_and_attachment_together(
+async def test_single_chat_with_attachment_is_a_zip_with_the_text_and_an_attachments_folder(
     services: Services,
 ) -> None:
+    chat = await services.catalog.get(ONE)
+    stem = packaging.filename_stem(chat)
     artifact = await services.exports.export(ExportRequest(conversation_ids=[ONE]))
     assert artifact.filename.endswith(".zip")
     assert artifact.chats[0].attachments_downloaded == 1
     with zipfile.ZipFile(artifact.path) as archive:
-        names = archive.namelist()
-        text_name = next(name for name in names if name.endswith(".txt"))
-        text_folder = text_name.rpartition("/")[0]
-        assert text_folder and f"{text_folder}/notes.txt" in names
-        assert all(name.startswith(f"{text_folder}/") for name in names)
-        text = archive.read(text_name).decode("utf-8")
+        assert sorted(archive.namelist()) == sorted([f"{stem}.txt", f"{stem}/notes.txt"])
+        text = archive.read(f"{stem}.txt").decode("utf-8")
     assert "First hello" in text and "notes.txt" in text
     assert "https://tenant.sharepoint.com/s/notes" not in text
 
@@ -90,18 +88,14 @@ async def test_selected_messages_without_attachments_remain_a_plain_file(service
     assert "Second, about the budget review" in Path(artifact.path).read_text(encoding="utf-8")
 
 
-async def test_unavailable_attachment_keeps_export_and_reports_failure(
+async def test_with_no_attachment_saved_the_export_is_a_plain_file_marking_the_failure(
     services: Services, fake: FakeTeams
 ) -> None:
     fake.files.clear()
     artifact = await services.exports.export(ExportRequest(conversation_ids=[ONE]))
-    assert artifact.filename.endswith(".zip")
+    assert artifact.filename.endswith(".txt")
     assert artifact.chats[0].attachments_failed == 1
-    with zipfile.ZipFile(artifact.path) as archive:
-        text = next(
-            archive.read(name).decode("utf-8") for name in archive.namelist() if name.endswith(".txt")
-        )
-    assert "[Attachment unavailable: notes.txt]" in text
+    assert "[Attachment unavailable: notes.txt]" in Path(artifact.path).read_text(encoding="utf-8")
 
 
 async def test_marker_rewriting_keeps_jsonl_valid_for_special_names(tmp_path: Path) -> None:
@@ -132,12 +126,10 @@ async def test_attachment_name_cannot_overwrite_the_conversation_export(
 
     artifact = await services.exports.export(ExportRequest(conversation_ids=[ONE]))
 
+    stem = packaging.filename_stem(chat)
     with zipfile.ZipFile(artifact.path) as archive:
-        names = archive.namelist()
-        transcript_path = next(name for name in names if name.endswith(f"/{transcript_name}"))
-        asset_path = next(name for name in names if name.endswith(f"/{packaging.filename_stem(chat)}-2.txt"))
-        assert archive.read(transcript_path).startswith(b"Conversation:")
-        assert archive.read(asset_path) == b"attachment"
+        assert archive.read(transcript_name).startswith(b"Conversation:")
+        assert archive.read(f"{stem}/{stem}-2.txt") == b"attachment"
 
 
 async def test_latest_n_and_dates_and_deleted_marker(services: Services, fake: FakeTeams) -> None:
@@ -159,19 +151,16 @@ async def test_latest_n_and_dates_and_deleted_marker(services: Services, fake: F
     )  # Teams keeps no text
 
 
-async def test_several_chats_always_return_outer_zip_and_jsonl(services: Services) -> None:
+async def test_several_chats_return_one_flat_zip_with_attachment_folders_and_jsonl(
+    services: Services,
+) -> None:
     ids = [ONE, CHANNEL]
+    one = packaging.filename_stem(await services.catalog.get(ONE))
+    channel = packaging.filename_stem(await services.catalog.get(CHANNEL))
     zipped = await services.exports.export(ExportRequest(conversation_ids=ids))
+    assert zipped.filename == "teams-conversations.zip"
     with zipfile.ZipFile(zipped.path) as archive:
-        names = archive.namelist()
-        assert len(names) == 2
-        chat_archive_name = next(name for name in names if name.endswith(".zip"))
-        assert any(name.endswith(".txt") for name in names)
-        with zipfile.ZipFile(archive.open(chat_archive_name)) as chat_archive:
-            chat_names = chat_archive.namelist()
-            text_name = next(name for name in chat_names if name.endswith(".txt"))
-            text_folder = text_name.rpartition("/")[0]
-            assert text_folder and f"{text_folder}/notes.txt" in chat_names
+        assert sorted(archive.namelist()) == sorted([f"{one}.txt", f"{one}/notes.txt", f"{channel}.txt"])
     text_only = await services.exports.export(ExportRequest(conversation_ids=ids, include_attachments=False))
     with zipfile.ZipFile(text_only.path) as archive:
         names = archive.namelist()
