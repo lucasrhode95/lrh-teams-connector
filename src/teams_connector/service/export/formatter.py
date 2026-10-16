@@ -36,8 +36,16 @@ def txt_header(chat: Chat, *, messages: int, request: ExportRequest, exported_at
     return "\n".join(lines) + "\n\n"
 
 
+def _sender(message: Message) -> str:
+    """The name a text export shows for a message. Teams' own events and meeting cards have no sender and read
+    Teams; any other message with no name reads Unknown sender."""
+    if message.author:
+        return message.author
+    return "Teams" if message.system_event or message.recording is not None else "Unknown sender"
+
+
 def txt_message(message: Message) -> str:
-    head = f"[{timestamp(message.sent_at)}] {message.author or 'Unknown sender'}"
+    head = f"[{timestamp(message.sent_at)}] {_sender(message)}"
     if message.reply_to_id and message.reply_to_id != message.id:
         head += " (reply)"
     if message.is_deleted:
