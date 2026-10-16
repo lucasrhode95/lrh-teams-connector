@@ -114,19 +114,32 @@ class ChatSearchResult(Compact):
 # ---------------------------------------------------------------------------------------------- messages
 
 
+class RecordingRef(Compact):
+    """A meeting recording a message card names: its OneDrive or SharePoint item, its title, and its
+    transcript when the card has one. Internal: serializers leave it out; search and downloads read it."""
+
+    drive_id: str
+    item_id: str
+    title: str | None = None
+    transcript_id: str | None = None
+
+
 class Attachment(Compact):
     """A file or image a message carries. ``name`` is the marker the text shows. ``source`` says how its bytes
     are fetched; ``None`` means the marker is all there is to show."""
 
     name: str
     kind: Literal["file", "image", "link"] = "file"
-    source: Literal["sharepoint", "ams", "graph", "data", "loop"] | None = None
+    source: Literal["sharepoint", "ams", "graph", "data", "loop", "transcript"] | None = None
     # sharing URL (sharepoint), full-size AMS or Graph hosted-content URL (ams, graph), Loop page link (loop)
     url: str | None = None
     source_id: str | None = None  # AMS object id (ams, graph) or SHA-256 of the decoded bytes (data)
     content_type: str | None = None
     size: int | None = None
     payload: bytes | None = Field(default=None, exclude=True)  # decoded data: image bytes, never serialized
+    recording: RecordingRef | None = Field(
+        default=None, exclude=True
+    )  # transcript: the meeting it belongs to
 
 
 class Message(Compact):
@@ -144,6 +157,7 @@ class Message(Compact):
     is_deleted: bool = False
     deleted_at: datetime | None = None
     attachments: list[Attachment] = Field(default_factory=list)
+    recording: RecordingRef | None = Field(default=None, exclude=True)  # a recording card: its meeting
 
 
 class HistoryCoverage(Compact):
@@ -268,6 +282,7 @@ class ExportRequest(BaseModel):
     message_limit: int | None = Field(default=None, ge=1, le=1_000_000)  # latest N per chat
     format: ExportFormat = "txt"
     include_attachments: bool = True
+    include_transcripts: bool = True
 
 
 class ExportedChat(Compact):
@@ -298,3 +313,58 @@ class ExportProgress(Compact):
     attachments_total: int = 0
     attachments_downloaded: int = 0
     attachments_failed: int = 0
+
+
+# -------------------------------------------------------------------------------------------- transcripts
+
+
+class TranscriptEntry(Compact):
+    """One utterance of a meeting transcript: who said it, when (seconds into the recording), and what."""
+
+    speaker: str | None = None
+    start: float
+    text: str
+
+
+class TranscriptEvent(Compact):
+    """A start or stop of the transcript itself, at a time in the recording."""
+
+    kind: str
+    start: float
+
+
+class Transcript(Compact):
+    language: str | None = None
+    entries: list[TranscriptEntry] = Field(default_factory=list)
+    events: list[TranscriptEvent] = Field(default_factory=list)
+
+
+class TranscriptHit(Compact):
+    """One utterance that matched a search. ``message_id`` is the recording's message, which get_messages
+    reads."""
+
+    meeting: str | None = None  # the recording's title
+    conversation_id: str
+    message_id: str
+    speaker: str | None = None
+    offset: str  # the time into the recording, as the Teams transcript shows it: 0:17 or 1:02:03
+    text: str
+    term: str  # the search term the utterance matched
+
+
+class TranscriptSearchCoverage(Compact):
+    """What a transcript search covered. ``complete`` says every recording in its scope was read."""
+
+    mode: Literal["conversations", "meetings"]
+    complete: bool
+    recordings: int  # meeting recordings whose transcripts were read
+    transcripts_unavailable: int = 0  # recordings whose transcript Teams did not provide
+    candidates: int = 0  # meetings mode: video hits from the search
+    not_meetings: int = 0  # meetings mode: hits no meeting chat holds a recording card for
+    truncated: bool = False  # more hits than ``limit``
+    notes: list[str] = Field(default_factory=list)
+
+
+class TranscriptSearchResult(Compact):
+    items: list[TranscriptHit]
+    coverage: TranscriptSearchCoverage
