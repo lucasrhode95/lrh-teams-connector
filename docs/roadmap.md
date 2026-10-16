@@ -57,12 +57,16 @@ reading a transcript, and searching transcript text. The Teams Web routes are no
   ([research](api-research.md#transcripts)), and
   recording messages carry an `amsTranscript` item ([research](api-research.md#recording-cards)).
 
-**Next:** try the listing route with a SharePoint-audience token from the Teams client on one
-recording you choose. The user named a recurring standup meeting chat whose recordings have
-transcripts (2026-10-15); it is also the chat behind N9's findings. Graph's per-meeting transcript API needs `OnlineMeetingTranscript.Read.All`,
-which requires admin consent
-([research](api-research.md#transcripts)). Respect
-the download restriction the Teams UI showed for one meeting; a reference is not permission.
+**Live, 2026-10-16:** Graph's `media/transcripts` route works with the existing `teams.graph` token, so no
+SharePoint token or admin consent is needed. The listing and VTT content both answered 200 for one recording
+([research](api-research.md#transcripts)).
+
+**Decided 2026-10-16:** the user chose to read transcripts even where the Teams UI disables download for a
+meeting. This overrides the earlier plan to respect that restriction, for the user's own access. Record the
+policy choice in requirements §8 before building.
+
+**Next:** decide the first version's scope (list and read transcripts; search and recaps later) and where
+transcripts appear (separate tools or export), then build against Graph's route with fakes.
 
 ## Validation
 
