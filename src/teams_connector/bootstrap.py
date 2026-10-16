@@ -27,6 +27,7 @@ from teams_connector.remote.graph_teams import (
     GraphPeople,
     GraphWriter,
 )
+from teams_connector.remote.graph_transcripts import GraphTranscripts
 from teams_connector.remote.image_readers import AmsCredential, AmsImages, GraphHostedImages
 from teams_connector.remote.presence import TeamsPresence
 from teams_connector.remote.substrate_search import SubstrateChatSearch, SubstrateSearch
@@ -137,6 +138,7 @@ class AppContext:
             AmsImages(transport, AmsCredential(session)),
             GraphHostedImages(graph),
             shared_files,
+            GraphTranscripts(graph),
         )
         person = Participant(id=account.object_id, name=name)
         return Services(

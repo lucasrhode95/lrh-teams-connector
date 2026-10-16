@@ -18,9 +18,22 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from teams_connector.domain.errors import AuthenticationRequired, ConnectorError, InvalidRequest, NotFound
-from teams_connector.domain.models import Attachment, DownloadedFiles, SavedFile, UnavailableFile
-from teams_connector.remote.ports import FileReader, ImageReader, MeetingNotesReader, People, RemoteFile
-from teams_connector.service import localfiles
+from teams_connector.domain.models import (
+    Attachment,
+    DownloadedFiles,
+    RecordingRef,
+    SavedFile,
+    UnavailableFile,
+)
+from teams_connector.remote.ports import (
+    FileReader,
+    ImageReader,
+    MeetingNotesReader,
+    People,
+    RemoteFile,
+    TranscriptReader,
+)
+from teams_connector.service import localfiles, transcript_text
 from teams_connector.service.history import History
 
 PHOTO_TTL_SECONDS = 3600
@@ -43,12 +56,14 @@ class Files:
         ams: ImageReader,
         hosted: ImageReader,
         notes: MeetingNotesReader,
+        transcripts: TranscriptReader,
     ) -> None:
         self._history = history
         self._sharepoint = sharepoint
         self._ams = ams
         self._hosted = hosted
         self._notes = notes
+        self._transcripts = transcripts
 
     async def download_attachments(
         self,
@@ -132,6 +147,14 @@ class Files:
             target = _cache_folder("loop", _digest(attachment.url)) / name
             await _fetch(target, lambda partial: _write_payload(partial, document.encode("utf-8")))
             return _saved(target, "text/plain; charset=utf-8")
+        if attachment.source == "transcript" and attachment.recording is not None:
+            recording = attachment.recording
+            key = _digest(recording.drive_id, recording.item_id, recording.transcript_id or "")
+            target = _cache_folder("transcript", key) / f"{name}.txt"
+            if not target.is_file():
+                text = await self.transcript_text(recording.title or attachment.name, recording)
+                await _fetch(target, lambda partial: _write_payload(partial, text.encode("utf-8")))
+            return _saved(target, "text/plain; charset=utf-8")
         raise InvalidRequest("This attachment cannot be downloaded.")
 
     async def meeting_notes(self, url: str) -> str:
@@ -144,6 +167,14 @@ class Files:
             "later edits are not included)"
         )
         return f"{head}\n\n{notes.text}" if notes.text else head
+
+    async def transcript_text(self, title: str, recording: RecordingRef) -> str:
+        """A meeting's transcript as text, read now. Having no transcript is not found; a refused read raises
+        the service's error, which the caller reports as unavailable."""
+        transcript = await self._transcripts.default(recording)
+        if transcript is None:
+            raise NotFound("Teams has no transcript for this recording.")
+        return transcript_text.render(title, transcript, read_at=datetime.now(UTC))
 
 
 class Photos:
