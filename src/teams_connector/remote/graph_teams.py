@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
-import html
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +28,7 @@ from teams_connector.remote import graph_mapping
 from teams_connector.remote.graph import Graph, relative, segment, sub_failure
 from teams_connector.remote.ports import (
     HistoryPage,
+    HostedImage,
     RemoteFile,
     SendReceipt,
     SharedFile,
@@ -252,23 +252,22 @@ class GraphPeople:
         return content, kind
 
 
-def _paragraph(text: str) -> str:
-    """Plain text as one paragraph: escaped, with each line break kept as ``<br>``."""
-    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    return "<p>" + "<br>".join(html.escape(line, quote=False) for line in lines) + "</p>"
-
-
 class GraphWriter:
     """ChatWriter over Graph: chats via /chats/{id}/messages, channel posts via the team channel. Files go
-    as ``reference`` attachments, each matched by an ``<attachment>`` tag in the body."""
+    as ``reference`` attachments, each matched by an ``<attachment>`` tag in the body; inline images as
+    ``hostedContents``, numbered from 1 in order (live, 2026-10-15)."""
 
     def __init__(self, graph: Graph) -> None:
         self._graph = graph
 
     async def send(
-        self, chat: Chat, content: str, *, as_html: bool, attachments: Sequence[UploadedFile] = ()
+        self,
+        chat: Chat,
+        body: str,
+        *,
+        attachments: Sequence[UploadedFile] = (),
+        images: Sequence[HostedImage] = (),
     ) -> SendReceipt:
-        body = content if as_html or not content else _paragraph(content)
         body += "".join(f'<attachment id="{file.attachment_id}"></attachment>' for file in attachments)
         if chat.kind == "channel":
             if not chat.team_id:
@@ -281,6 +280,15 @@ class GraphWriter:
             payload["attachments"] = [
                 {"id": f.attachment_id, "contentType": "reference", "contentUrl": f.web_url, "name": f.name}
                 for f in attachments
+            ]
+        if images:
+            payload["hostedContents"] = [
+                {
+                    "@microsoft.graph.temporaryId": str(number),
+                    "contentBytes": base64.b64encode(image.data).decode("ascii"),
+                    "contentType": image.content_type,
+                }
+                for number, image in enumerate(images, start=1)
             ]
         with operation("sending the message"):
             data, _ = await self._graph.post(path, payload, idempotent=False)

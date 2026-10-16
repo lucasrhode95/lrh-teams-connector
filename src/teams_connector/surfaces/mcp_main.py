@@ -76,8 +76,9 @@ ambiguous, ask and wait. One authorization is not ongoing consent. Search, summa
 never imply permission to send. A send is attempted once: if its outcome is unknown, check the chat \
 before trying again.
 - Pass text (plain, escaped) or html (sent as written: bold, lists, links, code) to send_message, never \
-both. Active HTML (scripts, forms, event handlers, javascript: links), images and other embedded media, \
-declarations and unfinished markup are refused.
+both. Active HTML (scripts, forms, event handlers, javascript: links), embedded media, declarations and \
+unfinished markup are refused. To show pictures, pass PNG or JPEG paths in images: in html, \
+<img src="file name"> places one; images not placed follow the text. Larger or other images go in files.
 - If a tool says sign-in is required, ask the user to run the quoted `teams-connector auth` command in \
 a terminal; never attempt to sign in yourself. "Access denied" errors are about that item, not the \
 sign-in.
@@ -362,30 +363,40 @@ def build_server(context: AppContext) -> FastMCP:
             str | None,
             Field(
                 description="HTML, up to 10,000 characters, sent as written (bold, lists, links, code). "
-                "Active content, images and unfinished markup are refused. Pass exactly one of text or html "
-                "(with files, both may be omitted)."
+                'Active content and unfinished markup are refused; <img src="file name"> places one of '
+                "images, any other image is refused. Pass exactly one of text or html (with files or images, "
+                "both may be omitted)."
             ),
         ] = None,
         files: Annotated[
             list[str] | None,
             Field(
-                description="Absolute paths of local files to attach, one-on-one and group chats only: up to "
-                "10, each up to 2 GiB (config.MAX_SEND_FILE_BYTES). They are uploaded to your OneDrive and "
-                "shared with the chat's other members before the message is posted."
+                description="Absolute paths of local files to attach, in one-on-one and group chats and the "
+                "self chat: up to 10, each up to 2 GiB (config.MAX_SEND_FILE_BYTES). They are uploaded to "
+                "your OneDrive and shared with the chat's other members before the message is posted."
+            ),
+        ] = None,
+        images: Annotated[
+            list[str] | None,
+            Field(
+                description="Absolute paths of PNG or JPEG images to show inline, up to 10 with distinct "
+                'file names, about 3 MB in total. In html, <img src="file name"> places one; the others '
+                "follow the text. Other formats or larger images are refused: send them in files."
             ),
         ] = None,
     ) -> SendResult:
         """Send one message to a chat or channel, as plain text or as HTML sent as written, optionally with
-        files. External side effect: only with the user's explicit authorization for this recipient, the
-        content and every file. Attempted once, never retried; only a large file's failed upload parts are
-        resent, a few times at most. If an upload, share or the post fails, files already uploaded are named
-        in the error and left in your OneDrive."""
+        files and inline images. External side effect: only with the user's explicit authorization for this
+        recipient, the content, every file and every image. Attempted once, never retried; only a large
+        file's failed upload parts are resent, a few times at most. If an upload, share or the post fails,
+        files already uploaded are named in the error and left in your OneDrive."""
         return await (await services()).sender.send(
             conversation_id,
             expected_chat_name=expected_chat_name,
             text=text,
             html=html,
             files=files,
+            images=images,
         )
 
     return mcp

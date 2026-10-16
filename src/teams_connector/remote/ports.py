@@ -67,6 +67,20 @@ class UploadedFile:
 
 
 @dataclass(frozen=True)
+class HostedImage:
+    """An image sent inline with a message (PNG or JPEG). The body names the n-th image of the message
+    (1-based) as ``<img src="../hostedContents/n/$value">``."""
+
+    data: bytes
+    content_type: str
+
+
+def hosted_image_src(number: int) -> str:
+    """How a message body names its ``number``-th inline image (1-based)."""
+    return f"../hostedContents/{number}/$value"
+
+
+@dataclass(frozen=True)
 class RemoteFile:
     name: str | None
     content_type: str | None
@@ -184,10 +198,15 @@ class PresenceReader(Protocol):
 
 class ChatWriter(Protocol):
     async def send(
-        self, chat: Chat, content: str, *, as_html: bool, attachments: Sequence[UploadedFile] = ()
+        self,
+        chat: Chat,
+        body: str,
+        *,
+        attachments: Sequence[UploadedFile] = (),
+        images: Sequence[HostedImage] = (),
     ) -> SendReceipt:
-        """Send once: ``content`` as plain text, or as HTML sent as written when ``as_html``, referencing
-        ``attachments`` (``content`` may then be empty). Never retried: an ambiguous outcome raises
+        """Send once: the HTML ``body``, which names every one of ``images`` (``hosted_image_src``), with
+        ``attachments`` after it (``body`` may then be empty). Never retried: an ambiguous outcome raises
         WriteOutcomeUnknown."""
         ...
 

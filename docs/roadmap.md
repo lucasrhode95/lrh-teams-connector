@@ -24,20 +24,12 @@ None open.
 
 ### P1.5 — Send host files as attachments
 
-What files on `send_message` cannot do yet. One-on-one and group chats work, including files of
-250 MiB or more through upload sessions ([architecture](architecture.md#send-a-message),
-[research](api-research.md#sending-files)).
+Files and inline images work in one-on-one and group chats and the self chat, including files of 250 MiB
+or more through upload sessions ([architecture](architecture.md#send-a-message),
+[research](api-research.md#sending-files)). Still open:
 
-- **Inline images:** proposed shape is an `images` list of local paths, with `<img src="name">` in `html`
-  naming an entry. The connector swaps in `../hostedContents/N/$value` and adds the bytes. An `<img>` that
-  names no entry is still refused, so remote images stay blocked.
-  - Only PNG and JPEG: refuse others before sending.
-  - The whole request is capped at about 4 MiB, so images total under about 3 MB per message.
-  - Images and files can share a message.
-- **Self chat:** files (no share step) and inline images worked there live, so the self chat can be
-  allowed.
 - **Channels and meeting chats:** channels store files in the team's SharePoint folder instead. Meeting
-  chats are untried.
+  chats are untried. Inline images there are untried too.
 
 ### P1.7 — Delete the user's own messages
 
