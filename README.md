@@ -121,10 +121,10 @@ ready and prints the selected URL.
 The page lists conversations on the left and previews one on the right. Clicking a row previews it. The
 round button that appears on the row's right when you hover adds it to the download or removes it;
 Ctrl+click (Cmd+click on a Mac) previews the row and does the same. Selected conversations keep a check
-on their row and appear as pills under the list. Above them are an inclusive date range in the browser's
-time zone, a per-chat message limit, and a settings menu (the cog) with switches for AI meeting
-summaries (which also govern the meeting's Loop notes), transcripts and attachments. Every setting
-applies to both the download and the preview.
+on their row and appear as pills under the list, where **Clear all** deselects them. Above them are an
+inclusive date range in the browser's time zone, a per-chat message limit, and a settings menu (the cog)
+with switches for AI meeting summaries (which also govern the meeting's Loop notes), transcripts and
+attachments. Every setting applies to both the download and the preview.
 
 The preview is the export text itself, opened at its newest messages. It shows the latest 200
 messages (at most 1 MiB of text) of the chosen range; **View entire range** shows all of it. A

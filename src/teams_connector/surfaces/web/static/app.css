@@ -166,8 +166,6 @@ input[type="checkbox"] { accent-color: var(--teams-purple); }
 .content-row { display: grid; min-width: 0; min-height: 0; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
 .conversation-pane, .preview-pane { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; }
 .conversation-pane { border: 1px solid var(--surface-border); border-radius: 5px; }
-.list-heading { display: flex; min-height: 38px; align-items: center; justify-content: flex-end; padding: 4px 12px; }
-.count { color: var(--muted); white-space: nowrap; font-size: .9rem; }
 .chat-list { min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; }
 .chat-row { display: grid; min-width: 0; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; gap: 11px; padding: 10px 13px; border-bottom: 1px solid var(--line); cursor: pointer; }
 .chat-row:last-child { border-bottom: 0; }
@@ -212,11 +210,14 @@ input[type="checkbox"] { accent-color: var(--teams-purple); }
 .footer-row { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: center; }
 .selected-chats { display: flex; max-height: 76px; min-width: 0; flex-wrap: wrap; gap: 5px; overflow: auto; align-content: center; }
 .selected-pill { display: inline-flex; max-width: 100%; min-height: 26px; align-items: center; gap: 3px; padding: 2px 4px 2px 8px; border: 1px solid var(--teams-purple); border-radius: 6px; color: var(--teams-purple-dark); background: var(--teams-purple-light); font-size: .78rem; }
+.clear-selection { min-height: 26px; padding: 2px 8px; color: var(--teams-purple-dark); background: transparent; font-size: .78rem; text-decoration: underline; text-underline-offset: 2px; }
+.clear-selection:hover { background: var(--hover); }
 .selected-pill-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pill-remove { display: grid; width: 20px; min-height: 20px; flex: none; place-items: center; padding: 0; color: inherit; background: transparent; font-size: 1rem; }
 .pill-remove:hover { color: var(--text); background: transparent; }
 .footer-actions { display: flex; min-width: 0; align-items: center; justify-content: flex-end; gap: 12px; }
-.action-buttons { display: flex; align-items: center; gap: 8px; }
+.action-buttons { display: flex; flex: none; align-items: center; gap: 8px; }
+.action-buttons button { white-space: nowrap; }  /* a long status wraps; the buttons never do */
 button { min-height: 40px; border: 0; border-radius: 4px; padding: 9px 15px; font: inherit; font-weight: 650; cursor: pointer; }
 button.primary { color: white; background: var(--teams-purple); }
 button.primary:hover:not(:disabled) { background: var(--teams-purple-dark); }

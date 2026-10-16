@@ -18,7 +18,6 @@ const $ = (id) => document.getElementById(id);
 const list = $("chat-list");
 const search = $("chat-search");
 const messageLimitInput = $("message-limit");
-const count = $("selection-count");
 const downloadButton = $("download");
 const cancelButton = $("cancel-export");
 const includeAttachmentsInput = $("include-attachments");
@@ -472,7 +471,6 @@ function chatTypeLabel(chat) {
 
 function updateControls() {
   const busy = downloadButton.dataset.busy === "true";
-  count.textContent = selected.size + " selected";
   downloadButton.disabled = selected.size === 0 || busy;
   cancelButton.hidden = !busy;
   cancelButton.disabled = !activeExportId;
@@ -502,6 +500,20 @@ function renderSelection() {
     });
     pill.append(name, remove);
     selectedChats.appendChild(pill);
+  }
+  if (selected.size) {
+    const clear = document.createElement("button");
+    clear.className = "clear-selection";
+    clear.type = "button";
+    clear.textContent = "Clear all";
+    clear.setAttribute("aria-label", "Remove all " + selected.size + " conversations from download selection");
+    clear.addEventListener("click", () => {
+      selected.clear();
+      renderSelection();
+      updateControls();
+      renderChatStates();
+    });
+    selectedChats.appendChild(clear);
   }
 }
 

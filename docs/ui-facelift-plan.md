@@ -19,7 +19,7 @@ Use four rows, with equal-width left and right columns aligned across rows two t
 | Header | Teams connector eyebrow above Download conversations | Signed-in account, avatar and presence at the far right |
 | Controls | Conversation filter, growing to fill the space before a naturally sized Refresh chats button | Equal-width date range and message limit fields, then a fixed-size settings (cog) button |
 | Content | Independently scrolling conversation list | Independently scrolling plain-text preview |
-| Footer | Selected conversation pills | Status, export cancellation when applicable, and Download |
+| Footer | Selected conversation pills and Clear all | Status, export cancellation when applicable, and Download |
 
 The header and footer stay visible while the panes scroll. Use grid/flex sizing with
 `min-width: 0` and `min-height: 0` so long content cannot stretch the panel. The preview wraps
@@ -50,6 +50,9 @@ chat already previewed keeps its view and scroll.
 Each selected conversation has one pill with its name and an accessible remove button. Removing a
 pill deselects the conversation only: the preview, its contents and the list scroll position stay as
 they are, and no other conversation is selected. Removing the last pill disables Download.
+**Clear all**, after the pills while anything is selected, deselects every conversation the same way.
+There is no separate "N selected" label: the pills show the selection, and the list keeps every row
+for conversations (decided 2026-10-16). Footer buttons never wrap; a long export status wraps instead.
 
 Selected rows use the current hover background; the previewed row uses a slightly stronger one,
 selected or not, and is marked `aria-current`. Keep a distinct keyboard focus indicator.

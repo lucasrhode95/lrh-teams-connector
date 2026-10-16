@@ -294,6 +294,7 @@ def test_selection_pills_and_preview_target_are_separate() -> None:
     assert "if (event.ctrlKey || event.metaKey) toggleChatSelection(chat.id);" in script
     assert "event.stopPropagation();\n      toggleChatSelection(chat.id);" in script
     assert 'checkbox.type = "checkbox"' not in script
+    assert 'clear.textContent = "Clear all"' in script and 'id="selection-count"' not in page
 
 
 def test_preview_ui_supports_full_range_cancellation_and_page_memory_cache() -> None:
