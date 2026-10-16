@@ -40,6 +40,19 @@ async def test_excerpt_is_the_latest_200_messages_and_entire_range_removes_only_
     assert complete.text.index("Message 0") < complete.text.index("Message 209")
 
 
+async def test_excerpt_enforces_the_text_budget_without_splitting_utf8(
+    services: Services, fake: FakeTeams
+) -> None:
+    fake.chats[CHAT].messages = [cs_message("long", "2026-06-01T10:00:00.000Z", "🙂漢字" * 300_000)]
+    await services.catalog.refresh()
+
+    preview = await services.exports.preview(_request())
+
+    assert preview.capped
+    assert len(preview.text.encode("utf-8")) <= 1024 * 1024
+    assert "[Earlier text in this message omitted]" in preview.text
+
+
 async def test_preview_includes_text_enrichment_without_fetching_transcript_files(
     services: Services, fake: FakeTeams
 ) -> None:

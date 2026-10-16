@@ -1,6 +1,6 @@
 # UI facelift implementation plan
 
-Date: 2026-10-16. Status: implementation in progress; stages 1–5 are committed, with review and fixes underway.
+Date: 2026-10-16. Status: implementation and final review complete; branch ready for PR.
 
 This plan turns the agreed layout and interactions for the local Teams export UI into incremental
 work. Contributors should be able to implement it from this document alone. Compare the result with
@@ -196,7 +196,7 @@ each:
    states; the View entire range button; chunked rendering; request generations; the memory cache.
 5. **Presence and metadata.** Own and peer presence routes, visible-row loading, badges, last-seen
    subtitles and tooltips (complete).
-6. **Review and fixes.** Review the whole diff and workflow, remove duplication, finish docs.
+6. **Review and fixes.** Review the whole diff and workflow, remove duplication, finish docs (complete).
 
 Run all four repository checks (`uv run ruff check .`, `uv run ruff format --check .`,
 `uv run pyright`, `uv run pytest`) before every commit, and fix failures without weakening them.

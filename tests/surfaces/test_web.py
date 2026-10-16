@@ -163,6 +163,30 @@ async def test_unexpected_job_errors_become_sanitized_terminal_failures(
     assert "synthetic internal details" not in status.text
 
 
+async def test_ui_can_cancel_a_running_preview_job(
+    web_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def wait_for_cancel(*args: object, **kwargs: object) -> None:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(Exports, "preview", wait_for_cancel)
+    headers = {"x-session-token": SESSION}
+    await web_client.get("/api/chats?refresh=1", headers=headers)
+    started = await web_client.post(
+        "/api/preview",
+        headers=headers,
+        json={"conversation_ids": ["19:one@unq.gbl.spaces"]},
+    )
+    job_id = started.json()["id"]
+    await asyncio.sleep(0)
+
+    cancelled = await web_client.post(f"/api/preview/{job_id}/cancel", headers=headers)
+    status = await web_client.get(f"/api/preview/{job_id}", headers=headers)
+
+    assert cancelled.status_code == 202 and cancelled.json()["status"] == "cancelled"
+    assert status.status_code == 200 and status.json()["status"] == "cancelled"
+
+
 async def test_ui_rejects_invalid_preview_request(web_client: httpx.AsyncClient) -> None:
     headers = {"x-session-token": SESSION}
     multiple = await web_client.post(
@@ -243,6 +267,7 @@ def test_web_page_uses_full_panel_layout_and_tracks_system_theme_changes() -> No
     script = (static / "app.js").read_text(encoding="utf-8")
     assert "Choose conversations and filters" not in page
     assert 'class="content-row"' in page and 'class="footer-row"' in page
+    assert page.index('id="auth-help"') < page.index("</header>")
     assert "height: 100%;" in styles and 'themePreference.addEventListener("change", applyTheme)' in script
 
 
@@ -281,7 +306,7 @@ def test_presence_is_lazy_accessible_and_never_confuses_unknown_with_offline() -
     assert 'chat.photo_user_id.startsWith("28:")' in script
     assert '"Last seen: " + lastActive.toLocaleString()' in script
     assert '"Presence unavailable"' in script and 'value === "offline"' in script
-    assert ".presence-unknown::after" in styles and ".chat-row:focus" in styles
+    assert ".presence-unknown::after" in styles and ".chat-row:focus-visible" in styles
 
 
 def test_date_picker_weeks_start_on_sunday_like_outlook() -> None:

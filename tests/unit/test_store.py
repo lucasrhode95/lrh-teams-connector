@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -22,3 +23,26 @@ def test_store_is_bound_to_its_account(tmp_path: Path, monkeypatch: pytest.Monke
     assert reopened.chat("chat-one") is not None
     with pytest.raises(AccountMismatch, match="different Microsoft account"):
         Store(first_path, "account-two")
+
+
+def test_store_lists_chats_by_latest_activity_with_unknown_activity_last(tmp_path: Path) -> None:
+    store = Store(tmp_path / "catalog.sqlite3", "synthetic-account")
+    store.save_catalog(
+        [
+            Chat(
+                id="older",
+                name="Older",
+                kind="group",
+                last_message_at=datetime(2026, 1, 1, tzinfo=UTC),
+            ),
+            Chat(
+                id="latest",
+                name="Latest",
+                kind="group",
+                last_message_at=datetime(2026, 1, 2, tzinfo=UTC),
+            ),
+            Chat(id="unknown", name="Unknown", kind="group"),
+        ]
+    )
+
+    assert [chat.id for chat in store.chats()] == ["latest", "older", "unknown"]

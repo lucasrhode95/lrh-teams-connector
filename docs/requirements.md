@@ -104,7 +104,7 @@ broad heterogeneous search, and AMS media.
 - The catalog answers from the local store for up to ten minutes; an explicit refresh waits for
   Teams.
 
-## 6. Local data (decided 2026-10-14)
+## 6. Local data (decided 2026-10-14; preview cache added 2026-10-16)
 
 **Teams is the record.** The connector keeps no durable local copy of message content. The local UI
 may keep up to ten completed conversation previews in browser memory for 60 seconds after each
@@ -153,6 +153,11 @@ unverified; message search alone never counts as broad Microsoft 365 search. Tra
   Attachments are included by default, up to 200 references per conversation, 100 MiB per file and
   250 MiB per conversation. A failed download keeps the text and marks the attachment unavailable.
   TXT is for reading and keeps a lean header; JSONL is for code and keeps every field.
+- **Local UI preview** (decided 2026-10-16): selecting a conversation shows its plain-text export
+  output beside the list, without fetching binary attachment or transcript files. The initial view
+  covers the newest 200 messages and at most 1 MiB of text within the selected date range and message
+  limit; **View entire range** removes only these preview caps. It runs in a cancellable job separate
+  from downloads, and Refresh chats reloads the active preview.
 - **Attachments by name** (decided and implemented 2026-10-15): one text extraction serves
   `get_messages`, exports and downloads. Files and pasted images appear in the text as markers with
   names derived from the message; `download_attachment` fetches the named files of one message, at

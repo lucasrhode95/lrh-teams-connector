@@ -318,8 +318,9 @@ function applyPresenceToRow(row, result) {
 function isRowVisible(row) {
   const rowRect = row.getBoundingClientRect();
   const listRect = list.getBoundingClientRect();
-  return rowRect.width > 0 && rowRect.height > 0 && rowRect.bottom > listRect.top && rowRect.top < listRect.bottom &&
-    rowRect.right > listRect.left && rowRect.left < listRect.right;
+  return rowRect.width > 0 && rowRect.height > 0 && rowRect.bottom > Math.max(listRect.top, 0) &&
+    rowRect.top < Math.min(listRect.bottom, window.innerHeight) && rowRect.right > Math.max(listRect.left, 0) &&
+    rowRect.left < Math.min(listRect.right, window.innerWidth);
 }
 
 function pumpPresence() {
@@ -357,7 +358,7 @@ function pumpPresence() {
       })
       .then((result) => {
         if (generation !== presenceGeneration) return;
-        presenceResults.set(conversationId, result);
+        if (result.presence) presenceResults.set(conversationId, result);
         for (const current of list.querySelectorAll(".chat-row")) {
           if (current.dataset.conversationId === conversationId) applyPresenceToRow(current, result);
         }
@@ -438,6 +439,15 @@ const presenceObserver = new IntersectionObserver((entries) => {
     }
   }
 }, { root: list, rootMargin: "0px" });
+
+function repositionChatTooltip() {
+  const row = list.querySelector(".chat-row:hover, .chat-row:focus-within");
+  const tooltip = row?.querySelector(".chat-tooltip");
+  if (row && tooltip) positionChatTooltip(row, tooltip);
+}
+
+list.addEventListener("scroll", repositionChatTooltip);
+window.addEventListener("resize", repositionChatTooltip);
 
 // ------------------------------------------------------------------ list
 
@@ -752,7 +762,7 @@ async function startPreview({ entireRange = false, forceRefresh = false, keepCur
   }
   const payload = previewPayload(conversationId, entireRange);
   if (!payload) {
-    setPreviewToolbar({ view: previewIsCapped && !previewEntireRange, status: "Enter a positive whole number for the message limit, or leave it blank.", error: true, retry: true });
+    setPreviewToolbar({ view: previewIsCapped && !previewEntireRange, status: "Enter a positive whole number for the message limit, or leave it blank.", error: true });
     return;
   }
 
@@ -1077,8 +1087,7 @@ search.addEventListener("input", renderChats);
 messageLimitInput.addEventListener("input", () => {
   const valid = getMessageLimit().valid;
   messageLimitInput.setCustomValidity(valid ? "" : "Enter a positive whole number, or leave the field blank for unlimited.");
-  window.clearTimeout(previewDebounce);
-  if (valid) reloadPreviewForSettings();
+  reloadPreviewForSettings();
 });
 rangeToggle.addEventListener("click", () => setCalendarOpen(calendar.hidden));
 $("previous-month").addEventListener("click", () => changeCalendarMonth(-1));

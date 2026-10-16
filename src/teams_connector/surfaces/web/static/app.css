@@ -171,6 +171,7 @@ input[type="checkbox"] { accent-color: var(--teams-purple); }
 .chat-row:last-child { border-bottom: 0; }
 .chat-row:hover, .chat-row.selected { background: var(--hover); }
 .chat-row.previewed { background: var(--selection); }
+.chat-row:focus-visible { outline: 3px solid var(--focus); outline-offset: -3px; }
 .chat-row input { margin: 4px 0 0; }
 .chat-avatar-wrap { position: relative; display: inline-flex; width: 36px; height: 36px; }
 .chat-avatar { width: 36px; height: 36px; border: 1px solid var(--surface-border); border-radius: 50%; object-fit: cover; background: var(--avatar-bg); }
@@ -219,7 +220,11 @@ button:disabled { opacity: .52; cursor: not-allowed; }
 code { font-family: ui-monospace, Consolas, monospace; }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; } }
-@media (forced-colors: active) { .switch input { width: auto; height: auto; appearance: auto; background: none; } .switch input::after { content: none; } }
+@media (forced-colors: active) {
+  .switch input { width: auto; height: auto; appearance: auto; background: none; }
+  .switch input::after { content: none; }
+  .chat-row:focus-visible { outline-color: Highlight; }
+}
 @media (max-width: 760px) {
   main { height: auto; min-height: 100%; grid-template-rows: auto auto minmax(45vh, 1fr) auto; gap: 12px; padding: 16px; overflow: auto; }
   .control-row, .content-row, .footer-row { grid-template-columns: minmax(0, 1fr); }

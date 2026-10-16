@@ -110,6 +110,8 @@ The MCP server is a stdio process scoped to one client session. It performs no n
 tool needs them. The UI runs only while explicitly started, binds to loopback, and closes on exit,
 Ctrl+C, or its idle timeout. There is no recurring sync task, watcher, remote listener, or background
 refresh process.
+Each authenticated UI API request, including presence reads and preview-status polling, counts as
+activity for the idle timeout.
 
 The chat catalog may be reused for up to ten minutes. Explicit refresh waits for the remote read.
 The local store holds the chat and channel catalog (names, kinds, last activity, photo ids, and the
@@ -289,6 +291,14 @@ result contains a local path; use the MCP client's local file-reading capability
 An export reads each conversation from Teams page by page, newest first, and spools the pages to a temporary
 file; the text is then written oldest first from those pages. The temporary folder is removed when the export
 ends, so a failed export publishes nothing.
+
+The local UI's `/api/preview` uses a separate cancellable job slot and the same text formatter. It reads no
+binary attachments or transcript files; meeting summaries and Loop notes are text enrichment. An initial
+preview reads at most the newest 200 messages and 1 MiB of text, reports when the excerpt may be incomplete,
+and keeps chronological order. **View entire range** removes only those preview caps; the selected date
+range and message limit still apply. Preview spools are temporary and removed on success, failure or
+cancellation. The browser keeps at most ten completed results in memory for 60 seconds; no message text is
+stored in the catalog database or browser storage.
 
 `download_attachment` saves the files a message names: its shared files and its pasted images. Pass exactly
 one of `message_id`, or `sent_at` (the time exactly as the TXT export prints it). `names` selects files by
