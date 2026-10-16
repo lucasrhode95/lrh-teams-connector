@@ -399,9 +399,20 @@ The capture strips credentials, so the upload's auth isn't shown; Source points 
 - Answers one row per MRI: `mri`, `etag`, `etagMatch`, `status`, and `presence` with `availability`,
   `activity`, `deviceType`, `lastActiveTime`, `calendarData`, `workLocation`, `forcedAvailability`,
   `capabilities` and `sourceNetwork`. The connector keeps the first four.
-- `lastActiveTime` is not always present (2026-10-16, observed in the local UI, not a dedicated probe): one
-  peer read Away came with a time, and the same peer read Available minutes later came without one. This
-  matches Teams showing "last seen" only for people who are not active; the exact rule is unverified.
+- Which fields come back depends on the person's state. Probe of 60 one-on-one peers and the account in one
+  request, 2026-10-16, cross-checked with Capture and Source:
+  - `deviceType` is absent for every peer whose availability and activity are both `Offline` (11 of 11): no
+    client is signed in to report one. An `Offline` peer whose activity is `OffWork` still reported
+    `Mobile`. Values seen: `Desktop`, `Mobile`, `ExternalApp`, and `Web` for the account itself (Capture).
+  - `lastActiveTime` is absent for `Available` people (4 peers and the account, also in Capture) and present
+    for Away, Busy, In a call, Out of office and Offline. Teams Web's persona card shows "last seen" only
+    for away, be right back, offline and out of office, and only within a year (Source).
+  - The row `status` is `20000` for a real reading. Six peers answered `40401` with a placeholder `Offline`
+    and `sourceNetwork` `Unknown`; Teams Web names that code `UserNotFound`, beside `20200` Pending, `40300`
+    Forbidden, `40400` NotFound, `40402` NoData and `5000x` failures (Source). The connector treats any
+    status other than `20000` as no presence, so these do not show as offline.
+  - Other fields seen and not kept: `calendarData.isOutOfOffice` (with an `outOfOfficeNote`), a status
+    `note`, `capabilities`, and `forcedAvailability` for the account.
 - The global host (`unifiedPresence`) answers 301 to the regional one; the Skype token gets 401 on both.
 - Teams Web takes its base from `regionGtm("unifiedPresence")` (or an AFD route) and also subscribes at
   `v1/pubsub/subscriptions/` (Source; Capture of `/ups/{region}/…`, where a global `/ups/global/` alias

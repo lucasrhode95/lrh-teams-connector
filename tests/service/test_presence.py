@@ -71,3 +71,13 @@ async def test_presence_is_read_where_authz_names_the_service(services: Services
     assert any(
         call.startswith("POST teams.microsoft.com/ups/emea/v1/presence/getpresence") for call in fake.calls
     )
+
+
+async def test_a_user_the_service_does_not_know_has_no_presence_rather_than_offline(
+    services: Services, fake: FakeTeams
+) -> None:
+    fake.presence_unknown = True
+
+    result = await services.presence.for_chat(ONE)
+
+    assert result.presence is None and result.reason == "Teams reports no presence for this person."

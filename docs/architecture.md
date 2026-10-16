@@ -222,8 +222,9 @@ one-to-one rows for peer badges and last-seen subtitles. The UI routes resolve i
 the own-presence route takes the active account id, and the peer route takes a conversation id checked by
 `Catalog`; the page cannot ask for an arbitrary person's presence. Reads use Unified Presence where AuthZ
 names it for the account (`presenceUPS`, a `teams.microsoft.com/ups/<region>` route, as Teams Web does) with
-the `teams.spaces` bearer, and share a one-minute process cache. A failed read returns no presence and a
-reason. Other fields Teams returns (calendar, work location, capabilities) are not reported.
+the `teams.spaces` bearer, and share a one-minute process cache. A failed read, or a row whose status is not
+`20000` (Teams answers `40401` with a placeholder Offline for a user it does not know), returns no presence
+and a reason. Teams omits the device for offline people and the last-active time for available ones. Other fields Teams returns (calendar, work location, capabilities) are not reported.
 
 ### Message search
 
