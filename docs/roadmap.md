@@ -59,7 +59,15 @@ works with the existing `teams.graph` token, with no SharePoint token or admin c
 - **Access (decided 2026-10-16):** the connector serves a person who already has access to the meeting, so
   it reads transcripts even where the Teams UI disables Download. Record this in requirements §8 when
   building.
-- **Later:** recaps (AI summary, mentions, tasks; an internal service) and transcript search.
+- **Search:** a `search_transcripts(terms, conversation_ids?, since?, until?)` tool with two paths and one
+  result shape: meeting, conversation, recording, speaker, offset, line. Its coverage says which path ran.
+  - *Scoped* (conversations given): read those chats' recording messages, fetch each JSON transcript, and
+    match in memory. The result is complete within the scope. If long chats make this slow, run the
+    unscoped search first and keep only the scope's recordings.
+  - *Unscoped:* Graph `POST /search/query` over `driveItem` with `filetype:mp4` and the terms finds
+    recordings by their spoken words across all meetings, ranked, with approximate totals. Then fetch each
+    hit's JSON transcript to find the speaker and offset, and to drop title-only hits.
+- **Later:** recaps (AI summary, mentions, tasks; an internal service).
 
 ## Validation
 

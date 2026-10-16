@@ -723,6 +723,24 @@ Not used by the connector; the starting point for roadmap P2.2f.
   - `events[]`: `id`, `eventType`, `userId`, `userDisplayName`, `startOffset`.
   - So speaker names come from the service, not from the client. `?format=docx` answered 400.
 
+**Searching transcript text** (2026-10-16):
+- **Search v2:** `EntityType: Transcript` with `ContentSources: ["Teams"]` answered 200 with no result set
+  (live). Teams Web sends the same entity with `Scenario: TranscriptFQ`, query `*`, `Fields`, `HitHighlight`
+  and `SupportedResultSourceFormats`, and got `Total: 0` (Capture). `Message` with a `Transcripts` source is
+  refused with 400.
+- **The recap's transcript search box is client-side** (Capture): typing a term sent no request. The tab
+  loads the transcript once from `{site}/_api_cached/v2.1/drives/{drive}/items/{item}/cdnmedia/transcripts`
+  (keys `cTag`, `P1`–`P4`, `isformatjson`, `transcriptkey`, `applyhighlights`, `applymediaedits`, `kid`;
+  the body is encoded).
+- **Graph search finds recordings by spoken words** (live, `teams.graph` token, no admin consent):
+  `POST /v1.0/search/query` with `entityTypes: ["driveItem"]` and `filetype:mp4` plus the terms.
+  - An exact phrase from one transcript returned exactly that recording.
+  - A single common word returned 1,375 recordings.
+  - Each hit has `resource` (the recording `driveItem`) and `summary`, a snippet of about 140 characters with
+    `<c0>` highlights but no speaker or offset.
+  - A hit may match the file name instead of the speech.
+  - This matches Microsoft's description of Microsoft Search indexing transcribed recordings by what was said.
+
 ### Recaps and meeting resources
 
 Capture, 2026-10-10 (Recaps app); all HTTP 200:
