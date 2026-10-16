@@ -510,7 +510,7 @@ class GraphFiles:
             page = await self._graph.download_bytes(
                 f"/shares/{share}/driveItem/content?format=html",
                 max_bytes=MAX_NOTES_BYTES,
-                redirect_hosts=config.NOTES_MEDIA_HOSTS,
+                redirect_hosts=config.notes_media_hosts(),
             )
         return loop_notes.meeting_notes(page.decode("utf-8", errors="replace"))
 

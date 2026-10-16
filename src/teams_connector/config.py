@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Literal
+
+from teams_connector.domain.errors import ConfigurationError
 
 APP_NAME = "lrh-teams-connector"
 CLI_NAME = "teams-connector"
@@ -27,8 +30,10 @@ CSA_UPDATES_URL = "https://teams.microsoft.com/api/csa/api/v1/teams/users/me/upd
 # Loop meeting notes: only these senders' messages are read for notes. Facilitator is the meeting's bot app.
 # Its id is Chat Service's sender id for the app, a Microsoft first-party id (a baseline setting).
 NOTES_SENDER_IDS = frozenset({"28:8e55a7b1-6766-4f0a-8610-ecacfe3d569a"})
-# The media host a converted Loop page redirects to. The region prefix varies by tenant: add others here.
-NOTES_MEDIA_HOSTS = frozenset({"francecentral1-mediap.svc.ms"})
+# The media host a converted Loop page may redirect to. The region prefix varies by tenant, so this is this
+# deployment's default; TEAMS_CONNECTOR_NOTES_MEDIA_HOSTS replaces it (see notes_media_hosts).
+DEFAULT_NOTES_MEDIA_HOSTS = ("francecentral1-mediap.svc.ms",)
+_HOST_NAME = re.compile(r"[a-z0-9-]+(?:\.[a-z0-9-]+)+")
 
 # Files sent with a message go to this folder of the sender's OneDrive, as Teams Web does. Teams may
 # use a localized name in other tenants.
@@ -53,3 +58,18 @@ def data_dir() -> Path:
         root = os.environ.get("XDG_DATA_HOME")
         base = Path(root) if root else Path.home() / ".local" / "share"
     return base / APP_NAME
+
+
+def notes_media_hosts() -> frozenset[str]:
+    """The media hosts a Loop page's converted HTML may redirect to, read on each call.
+
+    ``TEAMS_CONNECTOR_NOTES_MEDIA_HOSTS`` (comma-separated) replaces the default for this deployment.
+    A value that is not a host name is refused, so only the hosts named here are ever followed.
+    """
+    raw = os.environ.get("TEAMS_CONNECTOR_NOTES_MEDIA_HOSTS", "")
+    hosts = {part.strip().lower() for part in raw.split(",") if part.strip()}
+    if not hosts:
+        return frozenset(DEFAULT_NOTES_MEDIA_HOSTS)
+    if not all(_HOST_NAME.fullmatch(host) for host in hosts):
+        raise ConfigurationError("TEAMS_CONNECTOR_NOTES_MEDIA_HOSTS must be comma-separated host names.")
+    return frozenset(hosts)
