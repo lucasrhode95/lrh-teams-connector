@@ -95,9 +95,10 @@ files. File markers name the files as the download would. No disclaimer is shown
 
 Add a dedicated preview job route, separate from the export job routes. `POST /api/preview` takes
 one conversation, the same settings as an export, and `entire_range` (default `false`), then returns
-a job id. `GET /api/preview/{job_id}` returns status, progress, errors, and the result; the terminal
-result is released from the server slot when read. `POST /api/preview/{job_id}/cancel` cancels a
-running preview. This job shape supports cancellation and progress when viewing the entire range.
+a job id. `GET /api/preview/{job_id}` returns status, progress, errors, the result, and its UTC
+completion time; the terminal result is released from the server slot when read. `POST
+/api/preview/{job_id}/cancel` cancels a running preview. This job shape supports cancellation and
+progress when viewing the entire range.
 The result includes the text and coverage:
 
 - `entire_range=false`: the backend returns a capped excerpt, the latest part of the selected range,

@@ -719,9 +719,13 @@ function getCachedPreview(key) {
   return entry.result;
 }
 
-function cachePreview(key, result) {
+function cachePreview(key, result, completedAt) {
+  const completedAtMs = Date.parse(completedAt);
+  if (!Number.isFinite(completedAtMs)) return;
+  const expiresAt = completedAtMs + PREVIEW_CACHE_MS;
   previewCache.delete(key);
-  previewCache.set(key, { result, expiresAt: Date.now() + PREVIEW_CACHE_MS });
+  if (expiresAt <= Date.now()) return;
+  previewCache.set(key, { result, expiresAt });
   while (previewCache.size > PREVIEW_CACHE_LIMIT) previewCache.delete(previewCache.keys().next().value);
 }
 
@@ -832,7 +836,7 @@ async function startPreview({ entireRange = false, forceRefresh = false, keepCur
       }
       activePreviewJobId = null;
       if (job.status === "complete" && job.result) {
-        cachePreview(key, job.result);
+        cachePreview(key, job.result, job.completed_at);
         renderPreviewText(job.result);
         setPreviewToolbar({
           view: job.result.capped && !entireRange,

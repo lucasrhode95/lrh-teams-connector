@@ -18,7 +18,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 from datetime import time as day_time
 from importlib import resources
 from typing import Any
@@ -79,6 +79,7 @@ class PreviewJob:
     status: str = "running"  # running, complete, cancelled, failed
     progress: ExportProgress = field(default_factory=lambda: ExportProgress(phase="retrieving"))
     result: PreviewOutput | None = None
+    completed_at: datetime | None = None
     error: dict[str, str] | None = None
     task: asyncio.Task[None] | None = None
 
@@ -321,6 +322,7 @@ def create_app(context: AppContext, *, session_token: str, port: int, activity: 
                 job.result = await services.exports.preview(
                     export, entire_range=entire_range, progress=report
                 )
+                job.completed_at = datetime.now(UTC)
                 job.status = "complete"
             except asyncio.CancelledError:
                 job.status = "cancelled"
@@ -349,6 +351,7 @@ def create_app(context: AppContext, *, session_token: str, port: int, activity: 
             "progress": job.progress.model_dump(mode="json"),
             "error": job.error,
             "result": job.result.model_dump(mode="json") if job.result else None,
+            "completed_at": job.completed_at.isoformat() if job.completed_at else None,
         }
         if job.status != "running":
             preview_job = None

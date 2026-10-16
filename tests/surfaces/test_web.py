@@ -4,6 +4,7 @@ import asyncio
 import io
 import re
 import zipfile
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -121,6 +122,8 @@ async def test_ui_runs_a_preview_job_and_returns_text_with_coverage(
     assert "First hello" in result.json()["result"]["text"]
     assert result.json()["result"]["messages"] > 0
     assert result.json()["result"]["capped"] is False
+    completed_at = datetime.fromisoformat(result.json()["completed_at"])
+    assert completed_at.tzinfo == UTC
     assert (await web_client.get(f"/api/preview/{job_id}", headers=headers)).status_code == 404
 
 
@@ -290,6 +293,9 @@ def test_preview_ui_supports_full_range_cancellation_and_page_memory_cache() -> 
     assert 'id="preview-toolbar"' in page
     assert "const PREVIEW_CACHE_MS = 60_000" in script
     assert "const PREVIEW_CACHE_LIMIT = 10" in script
+    assert "function cachePreview(key, result, completedAt)" in script
+    assert "Date.parse(completedAt)" in script
+    assert "cachePreview(key, job.result, job.completed_at)" in script
     assert "previewCache.keys().next().value" in script
     assert "entire_range: entireRange" in script
     assert "overflow-x: hidden; overflow-y: auto" in styles
