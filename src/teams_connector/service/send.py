@@ -1,4 +1,4 @@
-"""Sending a message: validated against the live catalog, attempted exactly once.
+"""Sending a message: validated against the live catalog, never resent after an uncertain outcome.
 
 The caller (MCP client) is responsible for the user's explicit authorization of the recipient, the
 content and any files. The send checks the recipient: ``expected_chat_name`` must match the chat's
@@ -8,8 +8,10 @@ The body is either plain text, escaped and sent as paragraphs, or HTML, checked 
 markup and sent as written. Inline images (PNG or JPEG) go in the same request: an ``<img src="name">`` in
 the HTML names one by file name, and images the body does not name follow it. Files (one-on-one and group
 chats, and the self chat) are uploaded to the sender's OneDrive and shared with the chat's other members
-first; the message is posted only when every file was uploaded and shared. Files uploaded before a failure
-are reported, never deleted, and nothing is retried.
+first; the message is posted only when every file was uploaded and shared. When the send fails, the files
+it uploaded are deleted again (to the OneDrive recycle bin), unless the message may have been posted with
+them; anything that could not be deleted, or whose upload outcome is unknown, is reported. Each request is
+retried by the transport only when the failure proves nothing was applied.
 """
 
 from __future__ import annotations
@@ -120,10 +122,17 @@ class Sender:
             receipt = await self._writer.send(
                 chat, body, attachments=uploaded, images=[image for _, image in inline]
             )
+        except WriteOutcomeUnknown as exc:
+            if not uploaded:
+                raise
+            # The message may have been posted with these files: they stay.
+            kept = [(f, "the message may have been posted with it") for f in uploaded]
+            raise _report(exc, action="The message may not have been posted", kept=kept) from exc
         except ConnectorError as exc:
             if not uploaded:
                 raise
-            raise _with_uploads(exc, uploaded, shared=True, action="The message was not posted") from exc
+            deleted, kept = await self._discard(uploaded)
+            raise _report(exc, action="The message was not posted", deleted=deleted, kept=kept) from exc
         return SendResult(
             conversation_id=chat.id,
             chat_name=chat.name,
@@ -156,8 +165,8 @@ class Sender:
         return people
 
     async def _upload_and_share(self, paths: list[Path], recipients: list[str]) -> list[UploadedFile]:
-        """Upload every file, then share each (unless nobody else is in the chat). Each call is made once; on
-        a failure the files uploaded so far are named in the error and left in place."""
+        """Upload every file, then share each (unless nobody else is in the chat). On a failure nothing is
+        posted, and the files uploaded so far are deleted again."""
         uploaded: list[UploadedFile] = []
         for path in paths:
             try:
@@ -165,21 +174,38 @@ class Sender:
             except ConnectorError as exc:
                 if not uploaded and not isinstance(exc, WriteOutcomeUnknown):
                     raise
-                raise _with_uploads(
+                deleted, kept = await self._discard(uploaded)
+                raise _report(
                     exc,
-                    uploaded,
-                    shared=False,
                     action=f"Uploading {path.name} failed; nothing was posted",
+                    deleted=deleted,
+                    kept=kept,
                     uncertain=path.name if isinstance(exc, WriteOutcomeUnknown) else None,
                 ) from exc
         for file in uploaded if recipients else []:
             try:
                 await self._sharer.share(file, recipients)
             except ConnectorError as exc:
-                raise _with_uploads(
-                    exc, uploaded, shared=False, action=f"Sharing {file.name} failed; nothing was posted"
+                deleted, kept = await self._discard(uploaded)
+                raise _report(
+                    exc, action=f"Sharing {file.name} failed; nothing was posted", deleted=deleted, kept=kept
                 ) from exc
         return uploaded
+
+    async def _discard(
+        self, files: list[UploadedFile]
+    ) -> tuple[list[UploadedFile], list[tuple[UploadedFile, str]]]:
+        """Delete the files a failed send uploaded. Returns the deleted files and those left, with why."""
+        deleted: list[UploadedFile] = []
+        kept: list[tuple[UploadedFile, str]] = []
+        for file in files:
+            try:
+                await self._sharer.delete(file)
+            except ConnectorError as exc:
+                kept.append((file, f"deleting it failed: {exc}"))
+            else:
+                deleted.append(file)
+        return deleted, kept
 
 
 def _check_files(files: Sequence[str]) -> list[Path]:
@@ -276,23 +302,28 @@ def _size(value: int) -> str:
     return f"{value / 1024**3:g} GiB" if value >= 1024**3 else f"{value / 1024**2:g} MiB"
 
 
-def _with_uploads(
+def _report(
     exc: ConnectorError,
-    uploaded: list[UploadedFile],
     *,
-    shared: bool,
     action: str,
+    deleted: Sequence[UploadedFile] = (),
+    kept: Sequence[tuple[UploadedFile, str]] = (),
     uncertain: str | None = None,
 ) -> ConnectorError:
-    """The failure, naming the files already in the sender's OneDrive so the user can decide about them.
-    An unknown outcome stays WriteOutcomeUnknown; anything else is reported as an upstream failure."""
-    state = "uploaded and shared" if shared else "uploaded"
-    listed = "; ".join(f"{f.name} ({f.web_url})" for f in uploaded)
+    """The failure, saying which uploaded files were deleted again and which are still in the sender's
+    OneDrive (and why), so the user can decide about them. An unknown outcome stays WriteOutcomeUnknown;
+    anything else is reported as an upstream failure."""
     message = f"{action}: {exc}"
-    if listed:
-        message += f" Already {state} to your OneDrive and not deleted: {listed}."
+    if deleted:
+        message += (
+            " Deleted again from your OneDrive (recycle bin): " + ", ".join(f.name for f in deleted) + "."
+        )
+    if kept:
+        message += (
+            " Still in your OneDrive: " + "; ".join(f"{f.name} ({f.web_url}), {why}" for f, why in kept) + "."
+        )
     if uncertain:
-        message += f" {uncertain} may also have been uploaded."
+        message += f" {uncertain} may also have been uploaded; check your {config.CHAT_FILES_FOLDER} folder."
     if isinstance(exc, WriteOutcomeUnknown):
         return WriteOutcomeUnknown(message)
     return Upstream(message)

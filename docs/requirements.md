@@ -60,7 +60,13 @@ endpoint does not change who owns a resource.
   finished when representative output matches the old path (ids, ordering, metadata, paging,
   formatting-relevant fields and errors), regression tests cover it, the private path is removed and
   reconstructable local state is reset.
-- **A failed or ambiguous send is never retried**, through the same backend or another one.
+- **Writes retry only what provably did not happen** (decided 2026-10-16; it replaces "make each write
+  once"). A write is retried automatically, a few times and honoring `Retry-After`, only when the failure
+  proves it was not applied: the request was never sent, or the service answered 429 or 503. A write
+  whose outcome is uncertain (sent without a complete answer, or answered 504) is never resent, through
+  the same backend or another one; it is reported so it can be checked. When a multi-step write fails,
+  the steps it already completed are undone where that is safe, and anything that could not be undone
+  is reported. A partial upload may be resumed from the ranges the service reports missing.
 - **Grants are per tenant.** The current split rests on one account's grants; reassess it before
   choosing a backend elsewhere.
 
@@ -157,8 +163,8 @@ counts as broad Microsoft 365 search.
   user's unread state in Teams stays as it was. Checked 2026-10-15 on unread meeting chats: after history reads, a download and an export, they were still unread.
 - **Sending** needs the user's explicit authorization for the recipient and the exact content, files
   and images. The current conversation name must match `expected_chat_name`. Text is escaped, HTML
-  (`html`, decided 2026-10-15) is sent as written after the passive check, and the message is sent once;
-  the server message id is returned. Verified live for the self chat, one-on-one and group chats
+  (`html`, decided 2026-10-15) is sent as written after the passive check, and the server message id is
+  returned. Verified live for the self chat, one-on-one and group chats
   (2026-10-14); channels and meeting chats are roadmap S3.
 - **Images and files** (decided and implemented 2026-10-15) go to one-on-one and group chats and the
   self chat; channels and meeting chats are roadmap P1.5. Images and files may share a message.
@@ -168,16 +174,16 @@ counts as broad Microsoft 365 search.
     a suggestion to send them as files. Any other `<img>` is refused.
   - Files, like Teams, go to the sender's OneDrive, are shared with the chat's other members at the
     tenant-default access without an email, and are referenced by the message, which is posted only
-    after every upload and share has succeeded. Files uploaded before a failure are reported, never
-    deleted. A file may be up to `config.MAX_SEND_FILE_BYTES` (2 GiB by default); from 250 MiB it goes up
-    in parts.
-  - **Exception to making each write once, approved by the user:** when a part of a large upload fails,
-    the connector asks which ranges are still missing and resends only those, a few times at most; then
-    it cancels the upload and fails the send.
+    after every upload and share has succeeded. When the send fails, the files it uploaded are deleted
+    again (to the OneDrive recycle bin), unless the message may have been posted with them; files that
+    could not be deleted, or whose upload outcome is unknown, are reported (decided 2026-10-16). A file
+    may be up to `config.MAX_SEND_FILE_BYTES` (2 GiB by default); from 250 MiB it goes up in parts, and
+    when a part fails the connector resends only the ranges still missing, a few times at most, then
+    cancels the upload and fails the send.
 - **Deleting the user's own messages** (decided and implemented 2026-10-15) is the second write path.
   `delete_messages` soft-deletes a set of the user's own messages in one chat (not a channel), as Teams'
   Delete does. The agent lists the set (chat, count, first and last message) and gets one explicit yes
   for it; the connector cannot verify that, so it is a rule in the tool description and the MCP
-  instructions. Anyone else's message is skipped. Each delete is attempted once, and the result reports
-  each message as deleted, skipped or uncertain. Files a deleted message shared are reported, not
+  instructions. Anyone else's message is skipped. A delete with an uncertain outcome is never resent, and
+  the result reports each message as deleted, skipped or uncertain. Files a deleted message shared are reported, not
   removed or unshared.

@@ -131,8 +131,8 @@ class ChatService:
         return [message for message in messages if message.sent_at == sent_at]
 
     async def delete(self, chat: Chat, message_id: str) -> None:
-        """Soft-delete one message (``?behavior=softDelete``, as Teams Web does; it can be undone). Sent once
-        with the Skype token (live, 2026-10-15). The caller has checked that the user wrote it."""
+        """Soft-delete one message (``?behavior=softDelete``, as Teams Web does; it can be undone), with the
+        Skype token (live, 2026-10-15). The caller has checked that the user wrote it."""
         url = f"{await self._messages_url(chat.id)}/{quote(message_id, safe='')}?behavior=softDelete"
         with operation("deleting a message"):
             await self._transport.request("DELETE", url, credential=self._credential, retry=False)

@@ -24,7 +24,7 @@ Run every check documented for this repository before each commit and fix failur
 
 ### Private data, external effects, and stored formats
 
-Never log or commit credentials, tokens, session cookies, private user content, or real identifiers. Use this repository's documented secure storage for authentication state. Do not perform external writes without the user's explicit request. Make each external write once; do not retry automatically, and report uncertain outcomes. The one exception, approved by the user, is resending the missing ranges of a failed large-file upload part a bounded number of times (`docs/requirements.md` §8).
+Never log or commit credentials, tokens, session cookies, private user content, or real identifiers. Use this repository's documented secure storage for authentication state. Do not perform external writes without the user's explicit request. Retry a write automatically, a bounded number of times and honoring `Retry-After`, only when the failure proves it was not applied: the request was never sent, or the service answered 429 or 503. Never resend a write whose outcome is uncertain (sent without a complete answer, or answered 504); report it so it can be checked. When a multi-step write fails, undo the steps it already completed where that is safe, and report what could not be undone. Resuming a partial upload from the ranges the service reports missing is allowed (`docs/requirements.md` §4).
 
 Treat persisted data as the current format. Do not add backward-compatibility shims, old-format readers, automatic migrations, schema-version frameworks, or fallback behavior for previous application versions unless asked. Keep safeguards that protect current user data and account ownership.
 
@@ -83,7 +83,7 @@ explicit private config file rather than embedding fallback settings in code.
 
 ## Teams-specific safety and authentication
 
-- Sending a Teams message and deleting the user's own chat messages are the only write paths. A send requires explicit authorization for both destination and content; a delete requires one explicit confirmation of the listed set of messages. Make each send and each delete once; do not retry automatically after an uncertain result.
+- Sending a Teams message and deleting the user's own chat messages are the only write paths. A send requires explicit authorization for both destination and content; a delete requires one explicit confirmation of the listed set of messages. Sends and deletes follow the write-retry rule above: never resend one whose outcome is uncertain.
 - Keep logs limited to operational timings, statuses, and counts. Do not log message bodies, search terms, chat names, identifiers, tokens, or authorization headers. Keep MCP protocol stdout free of diagnostics.
 - Normal UI, MCP, and sign-in use the shared encrypted cache provided by `lrh-m365-auth`. Do not fall back to plaintext if encrypted storage is unavailable.
 - For an explicitly authorized local development probe only, pass `--unsecure` to a supported `teams-connector` command and set `M365_AUTH_HOME` to an isolated local path. This selects a separate plaintext cache containing reusable tokens. Never print it, copy it into logs, commit it, or share it; remove it when the probe is complete. Do not enable plaintext mode implicitly.

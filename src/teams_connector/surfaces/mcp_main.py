@@ -75,7 +75,7 @@ deleted in Teams, and Teams keeps no text for them; edited ones show their newes
 - Sending: never call send_message unless the user explicitly authorized sending that content to that \
 chat, in the current request or by confirming after you asked. If authorization is missing or \
 ambiguous, ask and wait. One authorization is not ongoing consent. Search, summaries and exports \
-never imply permission to send. A send is attempted once: if its outcome is unknown, check the chat \
+never imply permission to send. A send whose outcome is unknown is never resent: check the chat \
 before trying again.
 - Pass text (plain, escaped) or html (sent as written: bold, lists, links, code) to send_message, never \
 both. Active HTML (scripts, forms, event handlers, javascript: links), embedded media, declarations and \
@@ -85,8 +85,9 @@ unfinished markup are refused. To show pictures, pass PNG or JPEG paths in image
 are skipped). Before calling it, list what will be deleted (the chat, how many messages, the first and \
 last with their time and text) and get the user's explicit yes for that whole set; one yes covers the set, \
 not later deletes. Never delete without that confirmation, even when asked to tidy up or undo a send. \
-Each delete is attempted once: check uncertain ones with get_messages (a deleted message shows \
-is_deleted) before trying again. Files the messages shared stay in the user's OneDrive and stay shared.
+A delete whose outcome is unknown is never resent: check uncertain ones with get_messages (a deleted \
+message shows is_deleted) before trying again. Files the messages shared stay in the user's OneDrive \
+and stay shared.
 - If a tool says sign-in is required, ask the user to run the quoted `teams-connector auth` command in \
 a terminal; never attempt to sign in yourself. "Access denied" errors are about that item, not the \
 sign-in.
@@ -396,9 +397,9 @@ def build_server(context: AppContext) -> FastMCP:
     ) -> SendResult:
         """Send one message to a chat or channel, as plain text or as HTML sent as written, optionally with
         files and inline images. External side effect: only with the user's explicit authorization for this
-        recipient, the content, every file and every image. Attempted once, never retried; only a large
-        file's failed upload parts are resent, a few times at most. If an upload, share or the post fails,
-        files already uploaded are named in the error and left in your OneDrive."""
+        recipient, the content, every file and every image. Never resent after an uncertain outcome. If an
+        upload, share or the post fails, the files already uploaded are deleted again (unless the message
+        may have been posted), and the error says what was deleted and what is left."""
         return await (await services()).sender.send(
             conversation_id,
             expected_chat_name=expected_chat_name,
@@ -424,7 +425,7 @@ def build_server(context: AppContext) -> FastMCP:
         External side effect: call only after listing the set to the user (chat, count, first and last
         message) and getting one explicit confirmation for it; this tool cannot check that confirmation.
         Each message is read again first: anyone else's message, a system event or an already deleted one
-        is skipped. Each delete is attempted once, never retried. The result lists deleted, skipped and
+        is skipped. A delete is never resent after an uncertain outcome. The result lists deleted, skipped and
         uncertain messages; files they shared are named and stay in your OneDrive, still shared."""
         return await (await services()).deleter.delete(
             conversation_id, expected_chat_name=expected_chat_name, message_ids=message_ids

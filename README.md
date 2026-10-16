@@ -96,7 +96,7 @@ The MCP server exposes the tools below. Each one's inputs, results and caveats a
 | `download_attachment` | [`service/files.py`](src/teams_connector/service/files.py) | Save the files a message names (shared files and pasted images), by message id or by its arrival time; lists those it could not fetch |
 | `get_presence` | [`service/presence.py`](src/teams_connector/service/presence.py) | Availability, activity, device and last-active time of the other person in a one-on-one chat; nothing richer |
 | `send_message` | [`service/send.py`](src/teams_connector/service/send.py) | Send one message (plain text, or HTML sent as written), optionally with inline PNG/JPEG images and local files uploaded to your OneDrive and shared with the chat, after explicit authorization; a write tool |
-| `delete_messages` | [`service/delete.py`](src/teams_connector/service/delete.py) | Delete a set of your own messages in one chat after one explicit confirmation of the set; each delete is attempted once, and the result lists what was deleted, skipped and uncertain; a write tool |
+| `delete_messages` | [`service/delete.py`](src/teams_connector/service/delete.py) | Delete a set of your own messages in one chat after one explicit confirmation of the set; a delete with an uncertain outcome is never resent, and the result lists what was deleted, skipped and uncertain; a write tool |
 
 Message timestamps are returned in UTC.
 

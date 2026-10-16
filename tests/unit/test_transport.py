@@ -47,35 +47,53 @@ async def test_get_retries_transient_failures_and_honors_retry_after() -> None:
     assert delays == [7]
 
 
-async def test_write_failure_is_not_retried_and_ambiguous_gateway_timeout_is_reported() -> None:
-    attempts = 0
+async def test_writes_retry_only_failures_that_prove_nothing_was_applied() -> None:
+    attempts: list[str] = []
+    delays: list[float] = []
+    statuses: list[int] = []
 
     async def handle(request: httpx.Request) -> httpx.Response:
-        nonlocal attempts
-        attempts += 1
-        return httpx.Response(int(request.headers["x-status"]), json={"error": "synthetic"})
+        attempts.append(request.method)
+        if request.headers.get("x-mode") == "connect" and len(attempts) == 1:
+            raise httpx.ConnectError("refused", request=request)  # never sent
+        if request.headers.get("x-mode") == "lost":
+            raise httpx.ReadError("reset", request=request)  # sent, no answer
+        return httpx.Response(statuses.pop(0), json={"error": "synthetic"})
+
+    async def sleep(seconds: float) -> None:
+        delays.append(seconds)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
-    transport = Transport(client=client)
-    try:
-        with pytest.raises(Upstream):
-            await transport.request(
-                "POST",
-                "https://graph.microsoft.com/v1.0/me/messages",
-                credential=Credential(),
-                headers={"x-status": "503"},
-                json_body={"body": "synthetic"},
-            )
-        assert attempts == 1
+    transport = Transport(client=client, sleep=sleep)
+    url = "https://graph.microsoft.com/v1.0/me/messages"
 
+    async def write(mode: str = "status") -> httpx.Response:
+        return await transport.request("POST", url, credential=Credential(), headers={"x-mode": mode})
+
+    try:
+        statuses[:] = [429, 503, 201]  # throttled, unavailable: nothing was processed, so retried
+        assert (await write()).status_code == 201 and len(attempts) == 3
+
+        attempts.clear()
+        statuses[:] = [500]  # a server error may have applied the write: sent once
+        with pytest.raises(Upstream):
+            await write()
+        assert len(attempts) == 1
+
+        attempts.clear()
+        statuses[:] = [504]
         with pytest.raises(WriteOutcomeUnknown, match="may or may not"):
-            await transport.request(
-                "POST",
-                "https://graph.microsoft.com/v1.0/me/messages",
-                credential=Credential(),
-                headers={"x-status": "504"},
-            )
-        assert attempts == 2
+            await write()
+        assert len(attempts) == 1
+
+        attempts.clear()
+        with pytest.raises(WriteOutcomeUnknown, match="may or may not"):
+            await write("lost")
+        assert len(attempts) == 1
+
+        attempts.clear()
+        statuses[:] = [201]
+        assert (await write("connect")).status_code == 201 and len(attempts) == 2
     finally:
         await transport.aclose()
 

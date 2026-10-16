@@ -316,7 +316,9 @@ class GraphFileSharer:
 
     async def upload(self, path: Path) -> UploadedFile:
         """One file into the chat-files folder: a single PUT below 250 MiB (Graph's limit for one request),
-        an upload session from there on. A name clash is renamed."""
+        an upload session from there on. A name clash is renamed. When Graph stores the file but does not
+        describe it well enough to reference or delete it, the upload's outcome is reported as unknown, so
+        the caller names it as possibly left behind."""
         target = f"/me/drive/root:/{segment(self._folder)}/{segment(path.name)}:"
         with operation("uploading a file"):
             if path.stat().st_size < SINGLE_UPLOAD_BYTES:
@@ -325,7 +327,12 @@ class GraphFileSharer:
                 )
             else:
                 item = await self._upload_in_chunks(path, target)
-        return _uploaded(item)
+        try:
+            return _uploaded(item)
+        except Upstream as exc:
+            raise WriteOutcomeUnknown(
+                f"{exc} The file may be in your OneDrive, and cannot be referenced or deleted automatically."
+            ) from None
 
     async def share(self, file: UploadedFile, recipients: Sequence[str]) -> None:
         """One invite for every recipient. A partial success (HTTP 207, with an ``error`` entry for some
@@ -355,14 +362,18 @@ class GraphFileSharer:
                 + (f" ({code})." if isinstance(code, str) and code else ".")
             )
 
+    async def delete(self, file: UploadedFile) -> None:
+        """Delete an uploaded file (Graph moves it to the OneDrive recycle bin)."""
+        with operation("deleting an uploaded file"):
+            await self._graph.delete(f"/drives/{segment(file.drive_id)}/items/{segment(file.item_id)}")
+
     async def _upload_in_chunks(self, path: Path, target: str) -> dict[str, Any]:
         """An upload session: chunks read from disk one at a time and PUT, without the Graph token, to the
         session's pre-authenticated ``uploadUrl``. The last chunk's answer is the drive item.
 
-        Each chunk is sent once. After a failed chunk the session's status names the ranges still missing
-        and only those are sent again, at most ``UPLOAD_RESUMES`` times per file (an exception to sending
-        each write once, approved by the user on 2026-10-15). Then the session is cancelled and the upload
-        fails.
+        A chunk the transport could not deliver is resumed: the session's status names the ranges still
+        missing and only those are sent again, at most ``UPLOAD_RESUMES`` times per file (approved by the
+        user on 2026-10-15). Then the session is cancelled and the upload fails.
         """
         session, _ = await self._graph.post(
             f"{target}/createUploadSession",

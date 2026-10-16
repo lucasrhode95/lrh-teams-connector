@@ -3,7 +3,7 @@
 The caller (MCP client) is responsible for the user's explicit confirmation of the whole set: it lists what
 will be deleted and gets one yes. The connector cannot verify that confirmation. It checks the chat by its
 current name, as a send does, and re-reads every message before its delete: only the user's own messages
-qualify, so anything else in the set is skipped. Each delete is attempted once and never retried; an
+qualify, so anything else in the set is skipped. A delete with an uncertain outcome is never resent; an
 ambiguous outcome is reported per message. Files a deleted message shared are reported, not removed.
 """
 

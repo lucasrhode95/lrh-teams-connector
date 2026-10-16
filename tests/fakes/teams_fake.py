@@ -159,12 +159,16 @@ class FakeTeams:
     expired_tokens: set[str] = field(default_factory=set)
     sent: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     calls: list[str] = field(default_factory=list)
-    fail_sends: str | None = None  # "network" or "504"
+    fail_sends: str | None = None  # "network", "504" or "403"
     uploads: list[tuple[str, str, bytes]] = field(default_factory=list)  # (folder, stored name, bytes)
     # (item id, invite body, Prefer header)
     invites: list[tuple[str, dict[str, Any], str | None]] = field(default_factory=list)
     fail_upload_names: set[str] = field(default_factory=set)  # file names whose upload answers 500
     fail_invites: bool = False
+    throttled_uploads: int = 0  # the next N single uploads answer 429 (nothing stored)
+    undescribed_uploads: set[str] = field(default_factory=set)  # stored, but answered without an eTag
+    deleted_items: list[str] = field(default_factory=list)  # drive items deleted again
+    fail_item_deletes: bool = False
     # Upload sessions: id -> {"folder", "name", "size", "data", "received" (byte offsets)}
     upload_sessions: dict[str, dict[str, Any]] = field(default_factory=dict)
     # Chunk failures, each used once: (chunk start, "500" answers 500 and keeps nothing, "lost" keeps the
@@ -390,7 +394,15 @@ class FakeTeams:
         folder, name = path.removeprefix("/me/drive/root:/").removesuffix(":/content").rsplit("/", 1)
         if name in self.fail_upload_names:
             return httpx.Response(500, json={"error": {"code": "generalException", "message": "failed"}})
-        return httpx.Response(201, json=self._store_upload(folder, name, request.content))
+        if self.throttled_uploads:
+            self.throttled_uploads -= 1
+            return httpx.Response(
+                429, headers={"Retry-After": "0"}, json={"error": {"code": "tooManyRequests"}}
+            )
+        item = self._store_upload(folder, name, request.content)
+        if name in self.undescribed_uploads:
+            item.pop("eTag")
+        return httpx.Response(201, json=item)
 
     def _create_upload_session(self, request: httpx.Request, path: str) -> httpx.Response:
         body = json.loads(request.content)
@@ -492,6 +504,11 @@ class FakeTeams:
             and path.endswith(":/createUploadSession")
         ):
             return self._create_upload_session(request, path)
+        if request.method == "DELETE" and len(parts) == 4 and parts[0] == "drives" and parts[2] == "items":
+            if self.fail_item_deletes:
+                return httpx.Response(403, json={"error": {"code": "accessDenied", "message": "synthetic"}})
+            self.deleted_items.append(parts[3])
+            return httpx.Response(204)
         if request.method == "POST" and len(parts) == 5 and parts[0] == "drives" and parts[4] == "invite":
             return self._invite(request, parts[3])
         if len(parts) in (9, 11) and parts[-3] == "hostedContents" and parts[-1] == "$value":
@@ -512,6 +529,8 @@ class FakeTeams:
                 raise httpx.ReadError("connection reset", request=request)
             if self.fail_sends == "504":
                 return httpx.Response(504, json={"error": {"code": "GatewayTimeout"}})
+            if self.fail_sends == "403":
+                return httpx.Response(403, json={"error": {"code": "Forbidden", "message": "synthetic"}})
             body = json.loads(request.content)
             self.sent.append((path, body))
             return httpx.Response(

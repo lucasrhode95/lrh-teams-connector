@@ -296,7 +296,7 @@ async def test_an_unreadable_status_mid_file_cancels_and_reports_the_chunk_failu
     assert fake.cancelled_uploads == ["1"] and fake.uploads == [] and fake.sent == []
 
 
-async def test_a_failed_upload_posts_nothing_and_names_the_uploaded_files(
+async def test_a_failed_upload_posts_nothing_and_deletes_the_files_already_uploaded(
     services: Services, fake: FakeTeams, notes: Path, plan: Path
 ) -> None:
     fake.fail_upload_names = {"plan.pdf"}
@@ -304,16 +304,66 @@ async def test_a_failed_upload_posts_nothing_and_names_the_uploaded_files(
     with pytest.raises(Upstream) as raised:
         await services.sender.send(ONE, expected_chat_name="Pat Peer", files=[str(notes), str(plan)])
 
-    assert "Uploading plan.pdf failed" in str(raised.value) and "notes.txt (https://" in str(raised.value)
+    assert "Uploading plan.pdf failed" in str(raised.value)
+    assert "Deleted again from your OneDrive (recycle bin): notes.txt." in str(raised.value)
+    assert fake.deleted_items == ["ITEM1"]
     assert fake.invites == [] and fake.sent == []
 
 
-async def test_a_failed_share_posts_nothing(services: Services, fake: FakeTeams, notes: Path) -> None:
+async def test_a_failed_share_posts_nothing_and_deletes_the_upload(
+    services: Services, fake: FakeTeams, notes: Path
+) -> None:
     fake.fail_invites = True
 
-    with pytest.raises(Upstream, match="Sharing notes.txt failed"):
+    with pytest.raises(Upstream, match="Sharing notes.txt failed.*Deleted again"):
         await services.sender.send(ONE, expected_chat_name="Pat Peer", files=[str(notes)])
-    assert fake.sent == []
+    assert fake.sent == [] and fake.deleted_items == ["ITEM1"]
+
+
+async def test_a_definitely_failed_post_deletes_the_shared_files(
+    services: Services, fake: FakeTeams, notes: Path
+) -> None:
+    fake.fail_sends = "403"
+
+    with pytest.raises(Upstream, match="The message was not posted.*Deleted again.*notes.txt"):
+        await services.sender.send(ONE, expected_chat_name="Pat Peer", text="Notes.", files=[str(notes)])
+    assert fake.deleted_items == ["ITEM1"]
+
+
+async def test_a_file_that_cannot_be_deleted_is_reported_as_left_behind(
+    services: Services, fake: FakeTeams, notes: Path
+) -> None:
+    fake.fail_invites = True
+    fake.fail_item_deletes = True
+
+    with pytest.raises(Upstream, match=r"Still in your OneDrive: notes.txt \(https://.*deleting it failed"):
+        await services.sender.send(ONE, expected_chat_name="Pat Peer", files=[str(notes)])
+
+
+async def test_an_upload_graph_stores_but_does_not_describe_is_reported_as_possibly_left(
+    services: Services, fake: FakeTeams, notes: Path, plan: Path
+) -> None:
+    fake.undescribed_uploads = {"plan.pdf"}
+
+    with pytest.raises(WriteOutcomeUnknown) as raised:
+        await services.sender.send(ONE, expected_chat_name="Pat Peer", files=[str(notes), str(plan)])
+
+    message = str(raised.value)
+    assert "Deleted again from your OneDrive (recycle bin): notes.txt." in message
+    assert "plan.pdf may also have been uploaded" in message
+    assert fake.deleted_items == ["ITEM1"] and fake.sent == []
+
+
+async def test_a_throttled_upload_is_retried_and_the_send_succeeds(
+    services: Services, fake: FakeTeams, notes: Path
+) -> None:
+    fake.throttled_uploads = 2  # 429 twice: nothing stored, so the upload is sent again
+
+    result = await services.sender.send(ONE, expected_chat_name="Pat Peer", files=[str(notes)])
+
+    assert [f.name for f in result.files] == ["notes.txt"]
+    assert [stored for _, stored, _ in fake.uploads] == ["notes.txt"]  # one file, no duplicate
+    assert len(fake.sent) == 1
 
 
 async def test_a_partly_failed_share_posts_nothing(services: Services, fake: FakeTeams, notes: Path) -> None:
@@ -336,15 +386,15 @@ async def test_a_member_without_an_id_refuses_the_send_before_any_upload(
     assert fake.uploads == [] and fake.sent == []
 
 
-async def test_an_unconfirmed_post_reports_the_shared_files_and_is_not_retried(
+async def test_an_unconfirmed_post_keeps_the_shared_files_and_is_not_retried(
     services: Services, fake: FakeTeams, notes: Path
 ) -> None:
     fake.fail_sends = "504"
 
-    with pytest.raises(WriteOutcomeUnknown, match="uploaded and shared") as raised:
+    with pytest.raises(WriteOutcomeUnknown, match="may have been posted with it") as raised:
         await services.sender.send(ONE, expected_chat_name="Pat Peer", text="Notes.", files=[str(notes)])
 
     assert "notes.txt" in str(raised.value)
     assert len(fake.uploads) == 1 and len(fake.invites) == 1
     posts = [call for call in fake.calls if call.startswith("POST graph.microsoft.com/v1.0/chats/")]
-    assert len(posts) == 1
+    assert len(posts) == 1 and fake.deleted_items == []

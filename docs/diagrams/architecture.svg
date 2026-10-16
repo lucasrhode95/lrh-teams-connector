@@ -189,7 +189,7 @@
 
   <rect x="915" y="1286" width="755" height="64" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
   <text class="section-title code" x="927" y="1310" style="font-size:20px">transport.py</text>
-  <text class="detail" x="927" y="1336" style="font-size:18px">one HTTP client · host allowlist · bounded read retries · writes sent once</text>
+  <text class="detail" x="927" y="1336" style="font-size:18px">one HTTP client · host allowlist · bounded retries · writes never resent if uncertain</text>
 
   <!-- Sign-in command. -->
   <rect x="80" y="1430" width="520" height="220" rx="14" fill="#f7f9fc" stroke="#c7d5e2" stroke-width="1.5"/>
