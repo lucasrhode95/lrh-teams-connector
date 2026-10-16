@@ -9,8 +9,8 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
-from teams_connector.domain.models import Attachment, Message
-from teams_connector.remote import chat_events, inline_images, loop_notes, teams_html
+from teams_connector.domain.models import Attachment, Message, RecordingRef
+from teams_connector.remote import chat_events, inline_images, loop_notes, recording_cards, teams_html
 
 _MRI = re.compile(
     r"(?i)(?<![a-z0-9])((?:8:orgid:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})|"
@@ -166,8 +166,16 @@ def to_message(raw: dict[str, Any], conversation_id: str) -> Message:
     notes = _meeting_notes(content, author_id, props, {item.name.casefold() for item in [*inline, *files]})
     if notes:  # the bot's sentence is replaced by the notes marker
         text, inline = "", []
+    recording = recording_cards.recording(content) if kind.casefold().startswith("richtext") else None
+    transcripts = _transcripts(
+        content, recording, {item.name.casefold() for item in [*inline, *files, *notes]}
+    )
     if system_event is None:
-        markers = [*file_markers(files), *(f"[Meeting notes] {item.url}" for item in notes)]
+        markers = [
+            *file_markers(files),
+            *(f"[Meeting notes] {item.url}" for item in notes),
+            *(f"[Transcript: {item.name}]" for item in transcripts),
+        ]
         text = "\n\n".join(part for part in (text, "\n".join(markers)) if part)
     sent_at = message_datetime(raw)
     author = _first_string(raw, "imdisplayname", "imDisplayName", "fromDisplayNameInToken", "displayName")
@@ -189,8 +197,9 @@ def to_message(raw: dict[str, Any], conversation_id: str) -> Message:
         edited_at=parse_time(props.get("edittime") or raw.get("edittime")),
         is_deleted=is_deleted,
         deleted_at=deleted_at,
-        attachments=[*inline, *files, *notes],
+        attachments=[*inline, *files, *notes, *transcripts],
         reply_to_id=str(root) if root and str(root) != str(message_id) else None,
+        recording=recording,
     )
 
 
@@ -251,6 +260,22 @@ def _meeting_notes(
     return [
         Attachment(name=inline_images.unique_name("Meeting notes.txt", used), source="loop", url=link)
         for link in loop_notes.notes_links(content)
+    ]
+
+
+def _transcripts(content: str, recording: RecordingRef | None, used: set[str]) -> list[Attachment]:
+    """The transcript a recording card says Teams made, named by the recording's title. Nothing is fetched
+    here: exports and downloads read it from Graph, by the recording's item (docs/api-research.md)."""
+    if recording is None or not recording_cards.has_transcript(content):
+        return []
+    name = recording.title or "Meeting transcript"
+    return [
+        Attachment(
+            name=inline_images.unique_name(name, used),
+            source="transcript",
+            source_id=recording.transcript_id or recording.item_id,
+            recording=recording,
+        )
     ]
 
 
