@@ -426,3 +426,37 @@ as uncertain and never resent. If sign-in fails after some deletes, the rest are
 attempted, so the result still shows what happened. The result lists `deleted` (each message's time and
 the names of the files it shared, which stay in the sender's OneDrive, still shared with the chat),
 `skipped` and `uncertain`. `get_messages` then shows a deleted message as `is_deleted` with no text.
+
+## Local export UI
+
+`uv run teams-connector ui` serves the page on a loopback URL, normally `http://127.0.0.1:8765`, and
+stops after 30 idle minutes (`--port`, `--no-browser` and `--idle-minutes` change that). A busy port is
+replaced by another free loopback port; the browser opens only after the server reports ready and
+prints the URL it chose. Every API call carries a per-run session token and a loopback Host.
+
+The page lists conversations on the left and previews one on the right. Clicking a row previews it. The
+round button that appears on the row's right when you hover adds it to the download or removes it;
+Ctrl+click (Cmd+click on a Mac) previews the row and does the same. Selected conversations keep a check
+on their row and appear as pills under the list, where **Clear all** deselects them. Above them are an
+inclusive date range in the browser's time zone, a per-chat message limit, and a settings menu (the cog)
+with switches for AI meeting summaries (which also govern the meeting's Loop notes), transcripts and
+attachments. Every setting applies to both the download and the preview.
+
+The preview is the export text itself, opened at its newest messages. It shows the latest 200
+messages (at most 1 MiB of text) of the chosen range; **View entire range** shows all of it. A
+preview never downloads attachment or transcript files, but their markers read as in the download.
+The page keeps up to ten previews in memory for 60 seconds after each one finishes. Refresh chats
+reloads the list and the open preview.
+
+The signed-in avatar and visible one-to-one rows show Teams presence. A one-to-one row also shows the
+person's device and, as in Teams, when they were last seen if they are away, out of office or offline;
+each part appears only when Teams reports it. Hovering or focusing a row shows its kind and last
+activity. Presence that cannot be read, or a person Teams does not know, shows as unknown, never as
+offline.
+
+The date picker behaves like the Outlook connector's: weeks start on Sunday, future days are
+disabled, two clicks in either order make the range, and the calendar stays open until Done or
+Escape. The × beside the field clears the range.
+One conversation with no attachment saved downloads as a plain file. Anything else downloads as one
+ZIP: each conversation's plain file at the top, and its attachments in a folder named after that file.
+There is never a ZIP inside the ZIP.
