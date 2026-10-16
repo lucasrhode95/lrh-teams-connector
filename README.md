@@ -35,7 +35,7 @@ Run the `auth` command above and it logs you in. All `lrh-*` Microsoft 365 conne
 
 The Teams store and local output files are stored under `%LOCALAPPDATA%\lrh-teams-connector` on
 Windows, or `~/.local/share/lrh-teams-connector` on other systems. Set `TEAMS_CONNECTOR_HOME` to
-override the Teams data directory.
+override the Teams data directory. If your tenant's region differs from the default, set `TEAMS_CONNECTOR_NOTES_MEDIA_HOSTS` to its Loop media host (comma-separated), so Loop meeting notes can be read.
 
 ### Configure a local MCP client
 

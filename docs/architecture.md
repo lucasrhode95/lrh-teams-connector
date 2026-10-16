@@ -302,7 +302,7 @@ SharePoint discovery belongs to the SharePoint connector. Email attachments belo
 page ([research](api-research.md#loop-pages-and-meeting-notes)). A message from an allowlisted sender (`config.NOTES_SENDER_IDS`, the meeting's Facilitator app)
 and whose HTML has a `FluidAutoEmbedLink` anchor to a `/:fl:/` link
 reads as `[Meeting notes] <link>` instead of the app's sentence, and carries a `loop` attachment named
-`Meeting notes.txt`; reading fetches nothing. The page is read only for such messages, through Graph's HTML conversion, which may redirect once to a regional media host (`config.NOTES_MEDIA_HOSTS`), followed without credentials. Any other message with such a link keeps its text. The `include_summaries` flag governs these notes too: without it, the message keeps its own text, no attachment is made, and no page is read.
+`Meeting notes.txt`; reading fetches nothing. The page is read only for such messages, through Graph's HTML conversion, which may redirect once to a regional media host (`config.notes_media_hosts()`, set per deployment by `TEAMS_CONNECTOR_NOTES_MEDIA_HOSTS`), followed without credentials. Any other message with such a link keeps its text. The `include_summaries` flag governs these notes too: without it, the message keeps its own text, no attachment is made, and no page is read.
 
 Exports (with attachments) and `download_attachment` read the page with one Graph
 `GET /shares/{share}/driveItem/content?format=html`, and `remote/loop_notes.py` keeps the agenda and goal,
