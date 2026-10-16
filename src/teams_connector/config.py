@@ -24,6 +24,12 @@ MEETING_SUMMARY_URL = (
 AUTHZ_URL = "https://authsvc.teams.microsoft.com/v1.0/authz"
 CSA_UPDATES_URL = "https://teams.microsoft.com/api/csa/api/v1/teams/users/me/updates"
 
+# Loop meeting notes: only these senders' messages are read for notes. Facilitator is the meeting's bot app.
+# Its id is Chat Service's sender id for the app, a Microsoft first-party id (a baseline setting).
+NOTES_SENDER_IDS = frozenset({"28:8e55a7b1-6766-4f0a-8610-ecacfe3d569a"})
+# The media host a converted Loop page redirects to. The region prefix varies by tenant: add others here.
+NOTES_MEDIA_HOSTS = frozenset({"francecentral1-mediap.svc.ms"})
+
 # Files sent with a message go to this folder of the sender's OneDrive, as Teams Web does. Teams may
 # use a localized name in other tenants.
 CHAT_FILES_FOLDER = "Microsoft Teams Chat Files"

@@ -1,9 +1,10 @@
 """The one HTTP client for Microsoft calls: credentials, host allowlist, retries, error mapping.
 
 - One ``httpx.AsyncClient`` per process (keep-alive within a call).
-- No redirects, and only allowlisted hosts. A download may follow one redirect to a pre-authenticated
-  SharePoint URL, without credentials. A Graph upload session's ``uploadUrl`` (also pre-authenticated, on
-  SharePoint) is called through ``upload_session``, without credentials.
+- No redirects, and only allowlisted hosts. A download may follow one redirect, without credentials, to a
+  pre-authenticated SharePoint URL or to a media host the caller names. A Graph upload session's
+  ``uploadUrl`` (also pre-authenticated, on SharePoint) is called through ``upload_session``, without
+  credentials.
 - Credentials are pluggable: a bearer token profile (Graph, CSA) or the Teams Skype token
   (Chat Service). A rejected credential (401) is renewed once.
 - Reads (GETs by default, or a request the caller marks idempotent) retry transient failures,
@@ -266,11 +267,12 @@ class Transport:
         credential: Credential,
         headers: Mapping[str, str] | None = None,
         max_bytes: int,
+        redirect_hosts: frozenset[str] = frozenset(),
     ) -> tuple[str | None, int]:
         """Stream a GET response body into ``dest``. Returns (content type, size).
 
-        A redirect is followed once, without credentials, and only to a pre-authenticated
-        SharePoint download host.
+        A redirect is followed once, without credentials, and only to a pre-authenticated SharePoint download
+        host or to one of ``redirect_hosts``: the media host a caller expects (Loop pages).
         """
         _check_host(url)
         renewal: dict[str, Any] | None = None
@@ -288,14 +290,18 @@ class Transport:
                 if response.status_code in (301, 302, 303, 307, 308):
                     target = response.headers.get("location", "")
                     await response.aread()
-                    return await self._download_redirect(target, dest, max_bytes=max_bytes)
+                    return await self._download_redirect(
+                        target, dest, max_bytes=max_bytes, redirect_hosts=redirect_hosts
+                    )
                 if not response.is_success:
                     await response.aread()
                     raise _error_for(response)
                 return await _stream_into(response, dest, max_bytes)
 
-    async def _download_redirect(self, url: str, dest: BinaryIO, *, max_bytes: int) -> tuple[str | None, int]:
-        _check_sharepoint_host(url, "a download redirect")
+    async def _download_redirect(
+        self, url: str, dest: BinaryIO, *, max_bytes: int, redirect_hosts: frozenset[str]
+    ) -> tuple[str | None, int]:
+        _check_sharepoint_host(url, "a download redirect", redirect_hosts)
         async with self._limit, self._client.stream("GET", url) as response:
             if not response.is_success:
                 await response.aread()
@@ -321,11 +327,12 @@ def _check_host(url: str) -> None:
         raise InvalidRequest(f"Refusing to call a non-allowlisted URL host: {parts.hostname}")
 
 
-def _check_sharepoint_host(url: str, what: str) -> None:
-    """A pre-authenticated SharePoint URL, called without credentials: HTTPS on ``*.sharepoint.com`` only."""
+def _check_sharepoint_host(url: str, what: str, extra_hosts: frozenset[str] = frozenset()) -> None:
+    """A pre-authenticated URL, called without credentials: HTTPS on ``*.sharepoint.com``, or on one of
+    ``extra_hosts`` that a caller names (a media host). Nothing else."""
     parts = urlsplit(url)
     host = (parts.hostname or "").lower()
-    if parts.scheme != "https" or not host.endswith(DOWNLOAD_HOST_SUFFIXES):
+    if parts.scheme != "https" or not (host.endswith(DOWNLOAD_HOST_SUFFIXES) or host in extra_hosts):
         raise Upstream(f"Refusing {what} to a non-allowlisted host: {host or '(none)'}")
 
 

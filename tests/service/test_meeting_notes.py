@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from teams_connector import config
 from teams_connector.bootstrap import Services
 from teams_connector.domain.errors import Upstream
 from teams_connector.domain.models import ExportRequest
@@ -19,6 +20,8 @@ from teams_connector.service.export import orchestrator
 from tests.fakes.teams_fake import FakeTeams, cs_message
 
 MEETING = "19:meeting_abc@thread.v2"
+FACILITATOR = "28:facilitator-app"  # the synthetic sender id that is allowlisted for notes
+OTHER_APP = "28:other-app"
 LINK = "https://tenant-my.sharepoint.com/:fl:/g/personal/organizer/sample-page?e=abc"
 EMBED = (
     f'Everyone, that is a wrap. <a href="{LINK}" itemtype="http://schema.skype.com/FluidAutoEmbedLink" '
@@ -27,13 +30,22 @@ EMBED = (
 PAGE = (Path(__file__).parents[1] / "fixtures" / "loop_meeting_notes.html").read_text(encoding="utf-8")
 
 
-def bot_message(message_id: str, when: str, *, meeting_ended: bool = True) -> dict[str, Any]:
-    """The Facilitator app's message; Chat Service sends its bot metadata as JSON inside strings."""
-    record = cs_message(message_id, when, EMBED, author="28:facilitator-app", name="Facilitator")
+def bot_message(
+    message_id: str, when: str, *, author: str = FACILITATOR, meeting_ended: bool = True
+) -> dict[str, Any]:
+    """An app's message; Chat Service sends its bot metadata as JSON inside strings."""
+    name = "Facilitator" if author == FACILITATOR else "Another app"
+    record = cs_message(message_id, when, EMBED, author=author, name=name)
     if meeting_ended:
         skill = json.dumps({"eventType": "TM_MeetingEnded", "callId": "synthetic-call"})
         record["properties"]["botMetadata"] = json.dumps({"aiMetadata": {"botAiSkill": skill}})
     return record
+
+
+@pytest.fixture(autouse=True)
+def allowlisted_sender(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The synthetic Facilitator id is the one allowlisted sender for notes."""
+    monkeypatch.setattr(config, "NOTES_SENDER_IDS", frozenset({FACILITATOR}))
 
 
 @pytest.fixture
@@ -56,7 +68,7 @@ async def test_reading_shows_a_marker_and_fetches_nothing(
 async def test_other_loop_links_keep_their_text(services: Services, fake: FakeTeams) -> None:
     fake.chats[MEETING].messages += [
         cs_message("3003", "2026-07-01T11:00:00.000Z", f"See {EMBED}"),  # a person's
-        bot_message("3005", "2026-07-01T11:30:00.000Z", meeting_ended=False),  # an app's, not at meeting end
+        bot_message("3005", "2026-07-01T11:30:00.000Z", author=OTHER_APP),  # another app's: not allowlisted
     ]
 
     page = await services.history.get_messages(MEETING)
@@ -64,6 +76,19 @@ async def test_other_loop_links_keep_their_text(services: Services, fake: FakeTe
     for message_id in ("3003", "3005"):
         message = next(m for m in page.items if m.id == message_id)
         assert "Everyone, that is a wrap." in message.text and message.attachments == []
+
+
+async def test_an_allowlisted_senders_page_is_notes_without_a_meeting_end_record(
+    services: Services, fake: FakeTeams
+) -> None:
+    fake.chats[MEETING].messages.append(bot_message("3006", "2026-07-01T12:00:00.000Z", meeting_ended=False))
+    fake.loop_pages[LINK] = PAGE
+
+    page = await services.history.get_messages(MEETING)
+
+    message = next(m for m in page.items if m.id == "3006")
+    assert message.text == f"[Meeting notes] {LINK}"
+    assert [(a.name, a.source) for a in message.attachments] == [("Meeting notes.txt", "loop")]
 
 
 async def test_download_saves_the_notes_as_text_read_now(
