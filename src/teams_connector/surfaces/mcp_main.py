@@ -280,6 +280,13 @@ def build_server(context: AppContext) -> FastMCP:
             bool,
             Field(description="Include selected message files and images beside the conversation export."),
         ] = True,
+        include_transcripts: Annotated[
+            bool,
+            Field(
+                description="Include the meeting transcripts of selected recordings, as text in the "
+                "transcripts folder of the export."
+            ),
+        ] = True,
         format: Annotated[
             ExportFormat, Field(description="txt (for people) or jsonl (one JSON record per message).")
         ] = "txt",
@@ -297,6 +304,7 @@ def build_server(context: AppContext) -> FastMCP:
             message_limit=message_limit,
             format=format,
             include_attachments=include_attachments,
+            include_transcripts=include_transcripts,
         )
         loop = asyncio.get_running_loop()
         pending: set[asyncio.Task[None]] = set()
