@@ -333,7 +333,7 @@ counts videos it cannot place. The result is never complete across meetings.
 **AI summaries.** Three reads use `include_summaries` (on by default): exports, `get_messages` and
 `search_transcripts`. Each reads Teams' AI summary through `service/summaries.py` and the adapter in
 `remote/substrate_summaries.py` (`MeetingSummaryReader`), labeled as AI-generated and possibly inaccurate. The request
-names the meeting by an entity id built from the recording's drive id (api-research, "Meeting summary"). A read happens
+names the meeting by an entity id built from the recording's drive id (api-research, "Meeting summary"). Teams sends the summary as a JSON document of topics, which `readable_summary` turns into text. A read happens
 only for a meeting the call returns, once per meeting, and nothing is cached. An export puts the summary after the
 transcript's marker; with `include_transcripts=false`, the marker reads `[Transcript not included: title]` so the
 summary stays in the text. `get_messages` does the same after the marker, counts the summary toward `max_chars` and

@@ -334,7 +334,9 @@ The type name carries no `Html`, so the card is plain text to a reader that keys
 recording's `driveId` and `driveItemId`. The `onedriveForBusinessTranscript` item carries the same drive and
 item ids and the transcript's `id`, which equals the id of the default transcript that `media/transcripts`
 lists. The card's `amsTranscript` item has no drive ids. Transcripts
-also appear as `RichText/Media_CallTranscript` messages.
+also appear as `RichText/Media_CallTranscript` messages. Such a message is a notice: its content is a JSON document of
+  identifiers and storage flags (`scopeId`, `storageId`, `callId`, `isExportedToOdsp`, and others). The connector
+  renders it as `[Transcript saved]` and never shows the document (2026-10-16).
 
 ## AMS (Async Media Service)
 
@@ -768,9 +770,11 @@ sign-in (the summary text is not kept):
   [{"entityType": "MeetingCatchUp"}]}], "scenario": {"name": "MeetingCatchup"}}`. Teams Web's capture of the same
   call has this shape. Its captured request carried no `X-AnchorMailbox`; the connector sends one, as its other
   substrate calls do, and the answer matched the capture.
-- The summary is `EntitySets[0].ResultSets[0].Results[0].Source.MeetingSummary`: one line of plain text, about
-  2,300 characters for the probed meeting. The same name under `InsightProcessingStates` is a processing state,
-  not the text.
+- The summary is `EntitySets[0].ResultSets[0].Results[0].Source.MeetingSummary`, a JSON document, not plain text
+  (corrected 2026-10-16; an earlier note said plain text). Its `KeyTopics` list holds, per topic, a `Headline`, a
+  `Summary` and `DetailedSummaries` (`topic` and `text` pairs), with `Citations` (utterance ids) and model fields
+  alongside. About 2,300 characters for the probed meeting. The same name under `InsightProcessingStates` is a
+  processing state (`ProcessedSuccessfully`), not the text.
 - The entity id is `SPO_` + the base64url of the site, web and library GUIDs as comma-joined text + `_` + the
   recording's drive item id. The GUIDs come from the drive id: `b!` + the base64url of three 16-byte blocks in
   little-endian GUID byte order, in the order site, web, library. The id built from the card's `driveId` and
