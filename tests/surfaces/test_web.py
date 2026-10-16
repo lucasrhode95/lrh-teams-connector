@@ -12,6 +12,8 @@ import pytest
 from httpx import ASGITransport
 
 from teams_connector.bootstrap import AppContext
+from teams_connector.domain.models import Chat
+from teams_connector.service.catalog import Catalog
 from teams_connector.service.export.orchestrator import Exports
 from teams_connector.surfaces.web import routes
 from teams_connector.surfaces.web.routes import Activity, create_app, export_request, preview_request
@@ -188,6 +190,42 @@ async def test_ui_can_cancel_a_running_preview_job(
 
     assert cancelled.status_code == 202 and cancelled.json()["status"] == "cancelled"
     assert status.status_code == 200 and status.json()["status"] == "cancelled"
+
+
+async def test_an_older_preview_start_cannot_replace_a_newer_one(
+    web_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def wait_for_cancel(*args: object, **kwargs: object) -> None:
+        await asyncio.Event().wait()
+
+    original_get = Catalog.get
+    release_first = asyncio.Event()
+    calls = 0
+
+    async def slow_first_get(self: Catalog, conversation_id: str) -> Chat:
+        nonlocal calls
+        calls += 1
+        if calls == 1:  # the older request stalls in its catalog check
+            await release_first.wait()
+        return await original_get(self, conversation_id)
+
+    headers = {"x-session-token": SESSION}
+    await web_client.get("/api/chats?refresh=1", headers=headers)
+    monkeypatch.setattr(Exports, "preview", wait_for_cancel)
+    monkeypatch.setattr(Catalog, "get", slow_first_get)
+    body = {"conversation_ids": ["19:one@unq.gbl.spaces"]}
+
+    older = asyncio.create_task(web_client.post("/api/preview", headers=headers, json=body))
+    while calls < 1:
+        await asyncio.sleep(0)
+    newer = await web_client.post("/api/preview", headers=headers, json=body)
+    release_first.set()
+    stale = await older
+
+    assert newer.status_code == 202
+    assert stale.status_code == 409 and stale.json()["kind"] == "Superseded"
+    status = await web_client.get(f"/api/preview/{newer.json()['id']}", headers=headers)
+    assert status.status_code == 200 and status.json()["status"] == "running"
 
 
 async def test_ui_rejects_invalid_preview_request(web_client: httpx.AsyncClient) -> None:

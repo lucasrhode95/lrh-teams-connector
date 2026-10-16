@@ -114,6 +114,12 @@ def _error(exc: Exception) -> JSONResponse:
     return JSONResponse({"error": str(exc), "kind": type(exc).__name__}, status_code=status)
 
 
+def _superseded() -> JSONResponse:
+    return JSONResponse(
+        {"error": "A newer preview request replaced this one.", "kind": "Superseded"}, status_code=409
+    )
+
+
 def local_day(value: Any, *, end: bool, offset_minutes: Any, name: str) -> datetime | None:
     """A calendar date picked in the browser, as the start or end of that day in the browser's zone."""
     if value in (None, ""):
@@ -195,6 +201,7 @@ def create_app(context: AppContext, *, session_token: str, port: int, activity: 
     )
     jobs: dict[str, ExportJob] = {}
     preview_job: PreviewJob | None = None
+    preview_starts = 0  # preview start requests received, in arrival order
 
     def api(handler: Callable[[Request], Awaitable[Response]]) -> Callable[[Request], Awaitable[Response]]:
         async def wrapped(request: Request) -> Response:
@@ -306,12 +313,20 @@ def create_app(context: AppContext, *, session_token: str, port: int, activity: 
             await preview_job.task
 
     async def start_preview(request: Request) -> Response:
-        nonlocal preview_job
+        """Start a preview in the single slot. Starts are ordered by arrival, before any await, so an older
+        request that resumes after a newer one is refused instead of replacing the newer job."""
+        nonlocal preview_job, preview_starts
+        preview_starts += 1
+        order = preview_starts
         export, entire_range = preview_request(await request.json())
         services = await context.services()
         chat_id = export.conversation_ids[0]
         await services.catalog.get(chat_id)
+        if order != preview_starts:
+            return _superseded()
         await cancel_active_preview()
+        if order != preview_starts:
+            return _superseded()
         job = PreviewJob(id=uuid.uuid4().hex)
 
         def report(progress: ExportProgress) -> None:

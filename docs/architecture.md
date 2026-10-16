@@ -293,13 +293,14 @@ An export reads each conversation from Teams page by page, newest first, and spo
 file; the text is then written oldest first from those pages. The temporary folder is removed when the export
 ends, so a failed export publishes nothing.
 
-The local UI's `/api/preview` uses a separate cancellable job slot and the same text formatter. It reads no
-binary attachments or transcript files; meeting summaries and Loop notes are text enrichment. An initial
-preview reads at most the newest 200 messages and 1 MiB of text, reports when the excerpt may be incomplete,
-and keeps chronological order. **View entire range** removes only those preview caps; the selected date
-range and message limit still apply. Preview spools are temporary and removed on success, failure or
-cancellation. The status route reports the UTC completion time; the browser keeps at most ten
-completed results in memory until 60 seconds after that time, even if the tab is suspended before
+The local UI's `/api/preview` uses a separate cancellable job slot and the same text formatter. Starts are
+ordered by arrival: a start that a newer one overtook while it waited is refused with 409, so it never
+replaces the newer job. It reads no binary attachments or transcript files; meeting summaries and Loop notes
+are text enrichment. An initial preview reads at most the newest 200 messages and 1 MiB of text, reports when
+the excerpt may be incomplete, and keeps chronological order. **View entire range** removes only those preview
+caps; the selected date range and message limit still apply. Preview spools are temporary and removed on
+success, failure or cancellation. The status route reports the UTC completion time; the browser keeps at most
+ten completed results in memory until 60 seconds after that time, even if the tab is suspended before
 retrieving the result. No message text is stored in the catalog database or browser storage.
 
 `download_attachment` saves the files a message names: its shared files and its pasted images. Pass exactly
