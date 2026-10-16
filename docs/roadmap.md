@@ -49,11 +49,14 @@ Treat a meeting's transcript like an attachment of its recording message. Graph'
 works with the existing `teams.graph` token, with no SharePoint token or admin consent
 ([research](api-research.md#transcripts)).
 
-- **Marker:** in `get_messages` and exports, a recording message gets a transcript marker like its file
-  markers, for example `[Transcript: <meeting>, 2026-10-14 11:00–11:30, 4 speakers]`. Reading fetches nothing.
+- **Marker:** in `get_messages` and exports, a recording message whose card references a transcript gets a
+  marker like its file markers, built only from the card: `[Transcript: <recording title>]`. Reading fetches
+  nothing, so the marker carries no speaker count or duration.
 - **Download:** exports and `download_attachment` fetch the default transcript (`isDefault`) with
-  `?format=json`. They write it as text, grouping consecutive entries by `speakerDisplayName` with the start
-  offset (`Name  0:17` and then the lines), into a `transcripts/` folder next to the attachments folder.
+  `?format=json`. They write it as text into a `transcripts/` folder next to the attachments folder:
+  - a header with the meeting, the speakers and the duration, which only the fetched transcript provides;
+  - then consecutive entries grouped by `speakerDisplayName` with the start offset (`Name  0:17` and then
+    the lines).
 - **Flag:** `include_transcripts`, on by default in MCP and the UI, like `include_attachments`.
 - **Failures:** a missing or unreadable transcript is reported like an unavailable attachment.
 - **Access (decided 2026-10-16):** the connector serves a person who already has access to the meeting, so
