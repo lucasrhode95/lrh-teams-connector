@@ -7,7 +7,8 @@ Adapters (wired in bootstrap.py):
 - HistoryReader: remote/chat_service.py for chats (ChatHistoryReader), remote/graph_teams.py for channels
   (ChannelHistoryReader).
 - MemberReader: remote/chat_service.py for chats, remote/graph_teams.py for channels.
-- People, ChatWriter, FileSharer, FileReader, MeetingNotesReader: remote/graph_teams.py. ImageReader:
+- People, ChatWriter, FileSharer, FileReader, MeetingNotesReader: remote/graph_teams.py.
+- TranscriptReader, VideoSearch: remote/graph_transcripts.py. ImageReader:
   remote/image_readers.py.
 - MessageDeleter: remote/chat_service.py.
 - PresenceReader: remote/presence.py.
@@ -23,7 +24,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
-from teams_connector.domain.models import Chat, Message, MessageHit, Participant, Presence
+from teams_connector.domain.models import (
+    Chat,
+    Message,
+    MessageHit,
+    Participant,
+    Presence,
+    RecordingRef,
+    Transcript,
+)
 
 
 @dataclass
@@ -224,6 +233,29 @@ class ChatWriter(Protocol):
 class MeetingNotesReader(Protocol):
     async def meeting_notes(self, url: str) -> MeetingNotes:
         """The content of the Loop page a meeting-notes link names, read now, in one request."""
+        ...
+
+
+@dataclass(frozen=True)
+class VideoHit:
+    """A video a search returned: its OneDrive or SharePoint item, its name, and when it was created."""
+
+    drive_id: str
+    item_id: str
+    name: str | None
+    created_at: datetime | None
+
+
+class TranscriptReader(Protocol):
+    async def default(self, recording: RecordingRef) -> Transcript | None:
+        """The default transcript of a recording, read now: None when Teams has none for it. A read Teams
+        refuses raises the service's error, which callers report as the transcript being unavailable."""
+        ...
+
+
+class VideoSearch(Protocol):
+    async def videos(self, query: str, *, offset: int, size: int) -> tuple[list[VideoHit], int | None]:
+        """One page of videos matching a query, and the total Graph reports (approximate)."""
         ...
 
 
