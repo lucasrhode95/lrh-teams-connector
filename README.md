@@ -1,4 +1,4 @@
-![Local MCP clients and the Teams connector, with a screenshot of the browser UI using synthetic Teams data.](docs/connector-overview.svg)
+![Local MCP clients and the Teams connector, with a screenshot of the browser UI using synthetic Teams data.](https://raw.githubusercontent.com/lucasrhode95/lrh-teams-connector/main/docs/connector-overview.svg)
 
 A local MCP server and browser UI for one user's Microsoft Teams chats, channels and meetings.
 
@@ -83,7 +83,7 @@ The UI opens in your browser and stops after 30 minutes without activity:
 uv run teams-connector ui
 ```
 
-![125 percent screenshot of the local Teams connector UI inside a macOS-style browser window. People, chats and messages are synthetic.](docs/ui-preview.svg)
+![125 percent screenshot of the local Teams connector UI inside a macOS-style browser window. People, chats and messages are synthetic.](https://raw.githubusercontent.com/lucasrhode95/lrh-teams-connector/main/docs/ui-preview.svg)
 
 > The web UI is for manual exports. Its preview is the export's own plain text, built with the same
 > settings as the download; how the page behaves is in [architecture](docs/architecture.md#local-export-ui).
