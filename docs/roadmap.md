@@ -43,30 +43,23 @@ text ([architecture](architecture.md#exports)). Still open:
   reading the page?
 - Decided 2026-10-16: the downloaded file is text, not the PDF (`?format=pdf`).
 
-### P2.2f — Meeting recaps and transcripts
+### P2.2f — Meeting transcripts
 
-Four separate capabilities, none implemented: finding recaps, listing a meeting's transcripts,
-reading a transcript, and searching transcript text. The Teams Web routes are now known
-([research](api-research.md#transcripts)):
-
-- list a recording's transcripts: `{site}/_api/v2.0/drives/{drive}/items/{item}/media/transcripts`,
-  taking the one flagged `isDefault`;
-- read one: `…/media/transcripts/{id}/content` (`?format=docx`, or `?is=1` for VTT), or
-  `{site}/_api/v2.1/drives/{drive}/items/{item}/versions/current/media/transcripts/{id}/streamContent`;
-- meeting chats already carry a reference to that last route
-  ([research](api-research.md#transcripts)), and
-  recording messages carry an `amsTranscript` item ([research](api-research.md#recording-cards)).
-
-**Live, 2026-10-16:** Graph's `media/transcripts` route works with the existing `teams.graph` token, so no
-SharePoint token or admin consent is needed. The listing and VTT content both answered 200 for one recording
+Treat a meeting's transcript like an attachment of its recording message. Graph's `media/transcripts` route
+works with the existing `teams.graph` token, with no SharePoint token or admin consent
 ([research](api-research.md#transcripts)).
 
-**Decided 2026-10-16:** the user chose to read transcripts even where the Teams UI disables download for a
-meeting. This overrides the earlier plan to respect that restriction, for the user's own access. Record the
-policy choice in requirements §8 before building.
-
-**Next:** decide the first version's scope (list and read transcripts; search and recaps later) and where
-transcripts appear (separate tools or export), then build against Graph's route with fakes.
+- **Marker:** in `get_messages` and exports, a recording message gets a transcript marker like its file
+  markers, for example `[Transcript: <meeting>, 2026-10-14 11:00–11:30, 4 speakers]`. Reading fetches nothing.
+- **Download:** exports and `download_attachment` fetch the default transcript (`isDefault`) with
+  `?format=json`. They write it as text, grouping consecutive entries by `speakerDisplayName` with the start
+  offset (`Name  0:17` and then the lines), into a `transcripts/` folder next to the attachments folder.
+- **Flag:** `include_transcripts`, on by default in MCP and the UI, like `include_attachments`.
+- **Failures:** a missing or unreadable transcript is reported like an unavailable attachment.
+- **Access (decided 2026-10-16):** the connector serves a person who already has access to the meeting, so
+  it reads transcripts even where the Teams UI disables Download. Record this in requirements §8 when
+  building.
+- **Later:** recaps (AI summary, mentions, tasks; an internal service) and transcript search.
 
 ## Validation
 
