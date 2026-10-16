@@ -82,6 +82,7 @@ The current split ([research](api-research.md#microsoft-graph-with-the-teams-cli
 | Downloading files linked from messages | Graph shares | |
 | Downloading pasted images | AMS, private (full-size views); Graph hosted copies for channel images | AMS holds them and the Skype token reads them ([research](api-research.md#ams-async-media-service)); a channel's Graph copy is read with the Graph token |
 | Meeting transcripts (download and search) | Graph `media/transcripts`, JSON content | Verified on one account and tenant (2026-10-16); the route is not in Graph's documentation, and a fresh account is untested (roadmap A1). The recording card names the recording, so no lookup is needed. |
+| Meeting AI summary (exports) | Search recommendations route, `MeetingCatchUp` entity, `m365.search` sign-in | Verified on one meeting (2026-10-16); the route is private and not in Graph's documentation. The entity id is built from the recording's drive id, so no lookup is needed (roadmap A1). |
 | Online message discovery | Search v2 (`m365.search`) | Graph `chatMessage` search is denied to the tested client |
 | Presence of one-on-one peers | Teams Unified Presence, private, at the route AuthZ names (`presenceUPS`) | Graph presence needs `Presence.Read`, which the client lacks; the AuthZ route answers the `teams.spaces` bearer ([research](api-research.md#unified-presence)) |
 
@@ -163,6 +164,10 @@ unverified; message search alone never counts as broad Microsoft 365 search. Tra
   connector reads transcripts even where Teams disables Download for a meeting: it serves a person who
   already has access to the meeting, and the user decided this for their own access. Reading a transcript
   changes nothing in Teams.
+- **Meeting AI summaries** (decided 2026-10-16, implemented): an export puts Teams' AI summary of each transcribed
+  meeting after its marker (`include_summaries`, on by default). It is read at export time only, labeled as
+  AI-generated and possibly inaccurate, and `get_messages` reads none. Whether transcripts download by default is
+  left open until the summaries have been used.
 - **Meeting and membership events** read as one short line each, never as their raw markup. The
   line keeps what Teams shows (a meeting's subject, duration and participants, members who joined or
   left, a new topic) and drops identifiers and flags.
