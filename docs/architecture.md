@@ -58,6 +58,7 @@ and the adapters behind them. The split of backends (which private or public ser
 | MCP | `search_chats` | `Catalog.search` (with `refresh`, after a catalog refresh as `list_chats`) | `ChatMemberSearch` (named chats and people), and the refresh's ports | `SubstrateChatSearch`, and the refresh's adapters |
 | MCP | `get_messages` | `History.get_messages` | `HistoryReader` (chats and channels) | `ChatService`, `GraphChannels` |
 | MCP | `search_messages` | `Search.search_messages` | `MessageSearchReader` | `SubstrateSearch` |
+| MCP | `search_transcripts` | `TranscriptSearch.search` | `HistoryReader` (recording messages), `TranscriptReader`, `VideoSearch` (across meetings), `Catalog.active_since` | `ChatService`, `GraphTranscripts`, `GraphVideoSearch` |
 | MCP | `export_chats` | `Exports.export` | `HistoryReader` (`History.selection`), `FileReader` and `ImageReader` (`Files.save`) | `ChatService`, `GraphChannels`, `GraphFiles`, `AmsImages`, `GraphHostedImages` |
 | MCP | `download_attachment` | `Files.download_attachments` (`History.resolve`) | `ChatHistoryReader` (finds the message, and a channel reply's thread), `ChannelHistoryReader`, `FileReader`, `ImageReader` | `ChatService`, `GraphChannels`, `GraphFiles`, `AmsImages`, `GraphHostedImages` |
 | MCP | `send_message` | `Sender.send` (and `Catalog.recipient`) | `ChatWriter`, `ChatCatalog` (chats), `ChannelDirectory` (channels), `MemberReader` and `FileSharer` (files) | `GraphWriter`, `CsaCatalog`, `GraphChannels`, `ChatService`, `GraphFileSharer` |
@@ -313,6 +314,19 @@ reported as an unavailable attachment, and the message text stays. Teams Web als
 `opStream/capabilities` (`canExport`, `canExtract`); the connector does not, by design
 ([requirements](requirements.md#8-history-exports-sending-and-deleting)): what the user can read in Teams
 they can export.
+
+**Meeting transcripts.** A recording's message card names the recording's drive item and, when Teams made a
+transcript, the transcript (`remote/recording_cards.py`; no request is made to read the card). Its marker is
+`[Transcript: title]`, and it carries a `transcript` attachment named by the title, with the recording it
+belongs to kept out of serialization. Exports and `download_attachment` fetch the default transcript with
+`GET …/media/transcripts/{id}/content?format=json` (`remote/graph_transcripts.py`, parsed by
+`remote/transcript_json.py`) and write it as text (`service/transcript_text.py`): a header, then utterances grouped
+by speaker with their times. An export writes it into the `transcripts/` folder beside the conversation's file.
+`search_transcripts` (`service/transcripts.py`) has two paths. With conversation ids it reads their recording
+messages and searches each transcript. Without them it runs Graph's `driveItem` search for the terms over
+`filetype:mp4`, then keeps a video only when a meeting chat holds a recording card naming its drive item: it
+reads the chats active from an hour before the video's creation, quietest first, at most 25 per video, and
+counts videos it cannot place. The result is never complete across meetings.
 
 ### Send a message
 

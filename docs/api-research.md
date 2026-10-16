@@ -328,7 +328,12 @@ A meeting recording is a `RichText/Media_CallRecording` message whose content is
 - `RecordingContent` items `amsVideo`, `amsTranscript`, `rosterevents` and thumbnails on the AMS v2 host,
   and `onedriveForBusinessVideo` and `onedriveForBusinessTranscript` on SharePoint.
 
-The type name carries no `Html`, so the card is plain text to a reader that keys on the type. Transcripts
+The type name carries no `Html`, so the card is plain text to a reader that keys on the type.
+
+**Transcript identifiers in the card** (live, 2026-10-16): the `onedriveForBusinessVideo` item carries the
+recording's `driveId` and `driveItemId`. The `onedriveForBusinessTranscript` item carries the same drive and
+item ids and the transcript's `id`, which equals the id of the default transcript that `media/transcripts`
+lists. The card's `amsTranscript` item has no drive ids. Transcripts
 also appear as `RichText/Media_CallTranscript` messages.
 
 ## AMS (Async Media Service)
@@ -722,6 +727,18 @@ Not used by the connector; the starting point for roadmap P2.2f.
     from 4 distinct speakers, matching the speaker count on the Teams recap card.
   - `events[]`: `id`, `eventType`, `userId`, `userDisplayName`, `startOffset`.
   - So speaker names come from the service, not from the client. `?format=docx` answered 400.
+
+**Finding the meeting behind a video** (live, 2026-10-16, one account):
+- A search hit's `createdDateTime` is the recording's start: 14:00:21 UTC for the standup, and its recording
+  card was sent six minutes later, at 14:06:23.
+- `createdBy.application.displayName` is `Messaging Async Media` for some recordings and absent for others,
+  so it does not identify meetings.
+- `media/transcripts` answers with a transcript for videos that are not meetings too, so a transcript does
+  not identify one either.
+- Search v2's Message index does not find a recording card by its file name, nor by the word "Recording". A
+  meeting's title matches 87 messages across many meetings, so it cannot locate one card.
+- The connector therefore verifies a video by reading the chats active from an hour before its creation,
+  quietest first, for a recording card naming its drive item, at most 25 chats per video.
 
 **Searching transcript text** (2026-10-16):
 - **Search v2:** `EntityType: Transcript` with `ContentSources: ["Teams"]` answered 200 with no result set

@@ -43,40 +43,21 @@ text ([architecture](architecture.md#exports)). Still open:
   reading the page?
 - Decided 2026-10-16: the downloaded file is text, not the PDF (`?format=pdf`).
 
-### P2.2f — Meeting transcripts
+### P2.2f — Meeting recaps, and transcripts beyond the first version
 
-Treat a meeting's transcript like an attachment of its recording message. On one account and tenant (live,
-2026-10-16), Graph's undocumented `media/transcripts` route worked with the existing `teams.graph` token,
-with no SharePoint token or admin consent ([research](api-research.md#transcripts)). Grants differ between
-deployments (see A1): reassess this before relying on it elsewhere, and report transcripts as unavailable
-when the route is denied, rather than failing the read or export.
+Transcripts are implemented: the `[Transcript: title]` marker, exports and downloads, and
+`search_transcripts` (architecture, "Meeting transcripts"; [research](api-research.md#transcripts)).
+Still open:
 
-- **Marker:** in `get_messages` and exports, a recording message whose card references a transcript gets a
-  marker like its file markers, built only from the card: `[Transcript: <recording title>]`. Reading fetches
-  nothing, so the marker carries no speaker count or duration.
-- **Download:** exports and `download_attachment` fetch the default transcript (`isDefault`) with
-  `?format=json`. They write it as text into a `transcripts/` folder next to the attachments folder:
-  - a header with the meeting, the speakers and the duration, which only the fetched transcript provides;
-  - then consecutive entries grouped by `speakerDisplayName` with the start offset (`Name  0:17` and then
-    the lines).
-- **Flag:** `include_transcripts`, on by default in MCP and the UI, like `include_attachments`.
-- **Failures:** a missing or unreadable transcript is reported like an unavailable attachment.
-- **Access (decided 2026-10-16):** the connector serves a person who already has access to the meeting, so
-  it reads transcripts even where the Teams UI disables Download. Record this in requirements §8 when
-  building.
-- **Search:** a `search_transcripts(terms, conversation_ids?, since?, until?)` tool with two paths and one
-  result shape: meeting, conversation, recording, speaker, offset, line. Its coverage says which path ran.
-  - *Scoped* (conversations given): read those chats' recording messages, fetch each JSON transcript, and
-    match in memory. The result is complete within the scope. If long chats make this slow, run the
-    unscoped search first and keep only the scope's recordings.
-  - *Unscoped:* Graph `POST /search/query` over `driveItem` with `filetype:mp4` and the terms finds
-    transcribed videos by their spoken words, ranked, with approximate totals. Not every hit is a Teams
-    meeting: the search covers any OneDrive or SharePoint video the user can open, and the response has no
-    conversation. Keep a hit only when it resolves to a meeting recording, such as a recording card in a
-    meeting chat that links to that item, which also supplies the conversation. List the rest as non-meeting
-    videos or drop them. Then fetch each kept hit's JSON transcript to find the speaker and offset, and to drop
-    title-only hits. How to resolve a recording to its chat cheaply is open; probe it before building.
-- **Later:** recaps (AI summary, mentions, tasks; an internal service).
+- **Recaps:** the AI summary, mentions and tasks come from an internal service. The route is known from the
+  Recaps app capture (2026-10-10); not built.
+- **Channel recordings:** their transcripts are untested. Search skips channel conversations with a note.
+- **Across meetings:** each video costs a few chat reads (at most 25 chats, 20 pages each), so a video old
+  enough that many chats were active since is reported as unverified. Measure on a busy tenant before raising
+  the bound.
+- **Group chats and calls:** a recording posted in a group chat or a one-on-one call is verified the same
+  way, but no such recording has been checked live.
+- **Other tenants:** the transcript route is verified on one account. Reassess it per deployment (A1).
 
 ## Validation
 
