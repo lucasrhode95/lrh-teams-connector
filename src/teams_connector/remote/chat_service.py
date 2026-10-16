@@ -1,4 +1,5 @@
-"""Teams Chat Service (private): chat history, chat members, and the paginated conversation listing.
+"""Teams Chat Service (private): chat history, chat members, the paginated conversation listing, and
+deleting the user's own chat messages.
 
 Graph cannot read chats for the Teams client (no Chat.Read), so one-on-one, group, meeting and
 self-chat history and members come from here. Continuation links are opaque and must stay on the
@@ -23,7 +24,8 @@ LISTING_PAGE_SIZE = 500
 
 
 class ChatService:
-    """HistoryReader + MemberReader for chats, plus the conversation listing CSA falls back to."""
+    """HistoryReader + MemberReader + MessageDeleter for chats, plus the conversation listing CSA falls
+    back to."""
 
     def __init__(self, transport: Transport, session: TeamsSession, people: People) -> None:
         self._transport = transport
@@ -127,6 +129,13 @@ class ChatService:
             raise Upstream("Unexpected Teams messages response.")
         messages = [mapping.to_message(row, chat.id) for row in rows]
         return [message for message in messages if message.sent_at == sent_at]
+
+    async def delete(self, chat: Chat, message_id: str) -> None:
+        """Soft-delete one message (``?behavior=softDelete``, as Teams Web does; it can be undone). Sent once
+        with the Skype token (live, 2026-10-15). The caller has checked that the user wrote it."""
+        url = f"{await self._messages_url(chat.id)}/{quote(message_id, safe='')}?behavior=softDelete"
+        with operation("deleting a message"):
+            await self._transport.request("DELETE", url, credential=self._credential, retry=False)
 
     async def members(self, chat: Chat) -> list[Participant]:
         """The members of a chat, with names from the member list or the directory."""

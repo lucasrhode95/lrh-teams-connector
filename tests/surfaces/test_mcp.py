@@ -32,12 +32,15 @@ async def test_mcp_exposes_current_contract_and_reads_synthetic_chats(context: A
             "download_attachment",
             "get_presence",
             "send_message",
+            "delete_messages",
         }
         assert all(isinstance(tool.inputSchema, dict) for tool in tools.values())
         assert tools["list_chats"].inputSchema["properties"]
         assert all(tool.outputSchema is not None for tool in tools.values())
         assert tools["send_message"].annotations.readOnlyHint is False
         assert tools["send_message"].annotations.destructiveHint is True
+        assert tools["delete_messages"].annotations.destructiveHint is True
+        assert "explicit confirmation" in (tools["delete_messages"].description or "")
         assert "files" in tools["send_message"].inputSchema["properties"]
         assert tools["search_messages"].annotations.readOnlyHint is True
 

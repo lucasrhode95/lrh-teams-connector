@@ -31,33 +31,6 @@ or more through upload sessions ([architecture](architecture.md#send-a-message),
 - **Channels and meeting chats:** channels store files in the team's SharePoint folder instead. Meeting
   chats are untried. Inline images there are untried too.
 
-### P1.7 — Delete the user's own messages
-
-Requested 2026-10-15, to clear test sends from a chat. Example: "delete my messages from 'P1.5 capture 1,
-please ignore' onwards in John Doe's chat."
-
-Not implemented: deletes are out of scope today ([requirements §3](requirements.md#3-non-goals)), and
-sending is the only write path. Adding this makes deleting a second write path, so the requirements and
-the agent instructions change first.
-
-- **Shape:** one tool call deletes a set of the user's own messages in one conversation. The agent selects
-  them first: a starting message found by its text, then every later message of the user's, up to an
-  optional end. Each id is checked again before the delete. Only the user's own messages (`is_self`)
-  qualify, and other people's messages in the range are left alone.
-- **Confirmation:** the agent lists what will be deleted (chat, count, first and last message) and gets
-  the user's explicit yes. One yes covers the whole set. The connector cannot verify that confirmation,
-  so it is a rule in the tool description and MCP instructions, not something the code enforces.
-- **Writes:** each delete is attempted once and never retried. An uncertain outcome is reported per
-  message, and the result lists what was deleted, skipped and uncertain.
-- **Route:** Chat Service `DELETE …/messages/{messageId}?behavior=softDelete` with the Skype token. It
-  worked live on 2026-10-15 and has an undo ([research](api-research.md#writes-not-used-by-the-connector)).
-  Graph's `softDelete` needs `Chat.ReadWrite`, which the Teams client's Graph token lacks: editing a
-  message was refused ([research](api-research.md#grants-2026-10-01)).
-- **Shared files:** deleting a message leaves its files in `config.CHAT_FILES_FOLDER`, still shared with
-  the chat. Decide whether to also remove the file, revoke its sharing, or report it.
-- **Result:** confirm with `get_messages`, which shows a deleted message as `is_deleted` with no text
-  ([research](api-research.md#edits-and-deletes)).
-
 ### N9 — Meeting notes from Loop pages
 
 When a meeting ends, a "Facilitator" bot posts a link to the meeting's Loop notes page: agenda and goal,

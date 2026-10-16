@@ -1,7 +1,7 @@
 """MCP server over stdio: thin tools over the shared service (architecture, "MCP tools").
 
 One process per agent session. Nothing touches the network until the first tool call. Every tool is
-read-only except send_message.
+read-only except send_message and delete_messages.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from teams_connector.domain.models import (
     ChatKind,
     ChatPage,
     ChatSearchResult,
+    DeleteResult,
     DownloadedFiles,
     ExportArtifact,
     ExportFormat,
@@ -79,6 +80,12 @@ before trying again.
 both. Active HTML (scripts, forms, event handlers, javascript: links), embedded media, declarations and \
 unfinished markup are refused. To show pictures, pass PNG or JPEG paths in images: in html, \
 <img src="file name"> places one; images not placed follow the text. Larger or other images go in files.
+- Deleting: delete_messages soft-deletes the user's own messages in one chat (never anyone else's; those \
+are skipped). Before calling it, list what will be deleted (the chat, how many messages, the first and \
+last with their time and text) and get the user's explicit yes for that whole set; one yes covers the set, \
+not later deletes. Never delete without that confirmation, even when asked to tidy up or undo a send. \
+Each delete is attempted once: check uncertain ones with get_messages (a deleted message shows \
+is_deleted) before trying again. Files the messages shared stay in the user's OneDrive and stay shared.
 - If a tool says sign-in is required, ask the user to run the quoted `teams-connector auth` command in \
 a terminal; never attempt to sign in yourself. "Access denied" errors are about that item, not the \
 sign-in.
@@ -397,6 +404,28 @@ def build_server(context: AppContext) -> FastMCP:
             html=html,
             files=files,
             images=images,
+        )
+
+    @mcp.tool(annotations=SEND)
+    @_logged
+    async def delete_messages(
+        conversation_id: ConversationId,
+        expected_chat_name: Annotated[
+            str, Field(description="The chat's exact current name from list_chats; checked before deleting.")
+        ],
+        message_ids: Annotated[
+            list[str],
+            Field(description="Ids from get_messages of the user's own messages to delete, up to 100."),
+        ],
+    ) -> DeleteResult:
+        """Delete a set of the user's own messages in one chat (not channels), as Teams' Delete does.
+        External side effect: call only after listing the set to the user (chat, count, first and last
+        message) and getting one explicit confirmation for it; this tool cannot check that confirmation.
+        Each message is read again first: anyone else's message, a system event or an already deleted one
+        is skipped. Each delete is attempted once, never retried. The result lists deleted, skipped and
+        uncertain messages; files they shared are named and stay in your OneDrive, still shared."""
+        return await (await services()).deleter.delete(
+            conversation_id, expected_chat_name=expected_chat_name, message_ids=message_ids
         )
 
     return mcp

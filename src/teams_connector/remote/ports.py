@@ -8,6 +8,7 @@ Adapters (wired in bootstrap.py):
   (ChannelHistoryReader).
 - MemberReader: remote/chat_service.py for chats, remote/graph_teams.py for channels.
 - People, ChatWriter, FileSharer, FileReader: remote/graph_teams.py. ImageReader: remote/image_readers.py.
+- MessageDeleter: remote/chat_service.py.
 - PresenceReader: remote/presence.py.
 
 Swapping an adapter (another tenant, a policy change) must not change anything above this file.
@@ -208,6 +209,13 @@ class ChatWriter(Protocol):
         """Send once: the HTML ``body``, which names every one of ``images`` (``hosted_image_src``), with
         ``attachments`` after it (``body`` may then be empty). Never retried: an ambiguous outcome raises
         WriteOutcomeUnknown."""
+        ...
+
+
+class MessageDeleter(Protocol):
+    async def delete(self, chat: Chat, message_id: str) -> None:
+        """Soft-delete one of the user's own messages in a chat, once. Never retried: an ambiguous outcome
+        raises WriteOutcomeUnknown."""
         ...
 
 

@@ -97,7 +97,7 @@ class Sender:
         if not expected_chat_name or not expected_chat_name.strip():
             raise InvalidRequest("expected_chat_name must be the chat's current name from list_chats.")
         chat = await self._catalog.recipient(conversation_id)  # the live name of this recipient only
-        if _normalized_name(chat.name) != _normalized_name(expected_chat_name):
+        if normalized_name(chat.name) != normalized_name(expected_chat_name):
             raise InvalidRequest(
                 "expected_chat_name does not match the chat's current name; "
                 "check the recipient with list_chats."
@@ -289,7 +289,8 @@ def _is_object_id(value: str) -> bool:
     return len(value) == 36 and set(value) <= _GUID_CHARS
 
 
-def _normalized_name(value: str) -> str:
+def normalized_name(value: str) -> str:
+    """A chat name compared case-insensitively, with runs of whitespace as one space."""
     return " ".join(value.split()).casefold()
 
 

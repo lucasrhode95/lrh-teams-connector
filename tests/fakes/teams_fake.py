@@ -173,6 +173,8 @@ class FakeTeams:
     fail_upload_status: bool = False  # reading an upload session's status answers 503
     upload_session_auth: list[str | None] = field(default_factory=list)  # Authorization on uploadUrl calls
     cancelled_uploads: list[str] = field(default_factory=list)
+    deletes: list[tuple[str, str]] = field(default_factory=list)  # (conversation id, message id)
+    fail_deletes: dict[str, str] = field(default_factory=dict)  # message id -> "network" or "403"
     partial_invites: bool = False  # invites answer 207 with an error for the last recipient
     token_counter: int = 0
 
@@ -283,6 +285,8 @@ class FakeTeams:
             rows = [m for m in self._cs_records(parts[4]) or [] if m["id"] == parts[6]]
             if not rows:
                 return httpx.Response(403, json={"errorCode": "Forbidden"})
+            if request.method == "DELETE":
+                return self._delete(request, parts[4], rows[0], query)
             return httpx.Response(200, json=rows[0])
         if parts[:2] == ["v1", "threads"] and parts[-1] == "members":
             chat = self.chats.get(parts[2])
@@ -291,6 +295,26 @@ class FakeTeams:
             members = [{"id": f"8:orgid:{oid}", "userDisplayName": name or ""} for oid, name in chat.members]
             return httpx.Response(200, json={"members": members})
         return httpx.Response(404, json={"errorCode": "NotFound"})
+
+    def _delete(
+        self,
+        request: httpx.Request,
+        conversation_id: str,
+        record: dict[str, Any],
+        query: dict[str, list[str]],
+    ) -> httpx.Response:
+        """Soft delete, as Teams Web does it: the content is emptied and ``deletetime`` set."""
+        if query.get("behavior") != ["softDelete"]:
+            return httpx.Response(400, json={"errorCode": "BadArgument"})
+        self.deletes.append((conversation_id, record["id"]))
+        failure = self.fail_deletes.get(record["id"])
+        if failure == "403":
+            return httpx.Response(403, json={"errorCode": "Forbidden", "message": "synthetic"})
+        record["content"] = ""
+        record["properties"]["deletetime"] = "1790000000000"
+        if failure == "network":
+            raise httpx.ReadError("connection reset", request=request)
+        return httpx.Response(200)
 
     def _cs_records(self, conversation_id: str) -> list[dict[str, Any]] | None:
         """Chat Service records of a chat, or of a channel's posts and replies (a reply names its root)."""

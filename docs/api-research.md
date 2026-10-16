@@ -232,7 +232,8 @@ the same id ([msgvault](https://pkg.go.dev/go.kenn.io/msgvault%40v0.20.0/interna
 
 ### Writes (not used by the connector)
 
-The connector sends through Graph, which returns the new id in its body. Chat Service writes, for later work:
+The connector sends through Graph, which returns the new id in its body. Chat Service writes, for later work
+(except the soft delete, which `delete_messages` uses since 2026-10-15):
 
 | Route | Shape | Evidence |
 |---|---|---|
