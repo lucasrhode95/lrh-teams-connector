@@ -367,6 +367,22 @@ class TranscriptSearchCoverage(Compact):
     notes: list[str] = Field(default_factory=list)
 
 
+class MeetingSummaryEntry(Compact):
+    """Teams' AI summary of a meeting that a transcript search matched, once per meeting.
+
+    It is AI-generated and can be wrong; the matches are the record.
+    ``message_id`` is the recording's message, as the matches name it.
+    """
+
+    meeting: str | None = None  # the recording's title
+    conversation_id: str
+    message_id: str
+    summary: str | None = None  # None when Teams has none for the meeting
+    unavailable: bool = False  # the summary could not be read
+
+
 class TranscriptSearchResult(Compact):
     items: list[TranscriptHit]
     coverage: TranscriptSearchCoverage
+    # with include_summaries: one entry per matched meeting
+    summaries: list[MeetingSummaryEntry] = Field(default_factory=list)

@@ -8,6 +8,7 @@ from teams_connector.bootstrap import Services
 from teams_connector.domain.errors import InvalidRequest, Upstream
 from teams_connector.remote.ports import HistoryPage
 from teams_connector.service.history import History
+from teams_connector.service.summaries import MeetingSummaries
 from tests.fakes.teams_fake import FakeTeams, cs_message, graph_message
 
 ONE = "19:one@unq.gbl.spaces"
@@ -174,9 +175,22 @@ class _RepeatingReader:
         return HistoryPage(messages=[], next_link="https://emea.ng.msg.teams.microsoft.com/same", scanned=0)
 
 
+class _NoSummary:
+    """A summary reader for a history with no meeting summaries to read."""
+
+    async def summary(self, recording: object) -> None:
+        return None
+
+
 async def test_an_export_stops_when_teams_repeats_a_continuation(services: Services) -> None:
     chat = await services.catalog.get(ONE)
-    history = History(services.catalog, _RepeatingReader(), _RepeatingReader(), "me")  # type: ignore[arg-type]
+    history = History(
+        services.catalog,
+        _RepeatingReader(),  # type: ignore[arg-type]
+        _RepeatingReader(),  # type: ignore[arg-type]
+        "me",
+        MeetingSummaries(_NoSummary()),
+    )
     with pytest.raises(Upstream):
         async for _ in history.selection(chat, since=None, until=None):
             pass

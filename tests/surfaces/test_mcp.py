@@ -45,6 +45,8 @@ async def test_mcp_exposes_current_contract_and_reads_synthetic_chats(context: A
         assert "files" in tools["send_message"].inputSchema["properties"]
         assert "include_transcripts" in tools["export_chats"].inputSchema["properties"]
         assert "include_summaries" in tools["export_chats"].inputSchema["properties"]
+        assert "include_summaries" in tools["get_messages"].inputSchema["properties"]
+        assert "include_summaries" in tools["search_transcripts"].inputSchema["properties"]
         assert tools["search_transcripts"].annotations.readOnlyHint is True
         assert tools["search_messages"].annotations.readOnlyHint is True
 
