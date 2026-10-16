@@ -3,7 +3,8 @@
 Only attachments of messages Teams returns can be downloaded: no arbitrary URL is ever fetched. A download
 reads its message from Teams again, by id or by its arrival time, and saves the files it names under
 ``<data directory>/downloads/<source>/<key>/``. The disk is the cache: a file already there is returned
-without fetching its content. Files are removed after a week.
+without fetching its content. Files are removed after a week. Meeting notes are the exception: a Loop page
+is live, so it is read again every time and saved as text that says when it was read.
 """
 
 from __future__ import annotations
@@ -13,12 +14,12 @@ import os
 import re
 import time
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from teams_connector.domain.errors import AuthenticationRequired, ConnectorError, InvalidRequest, NotFound
 from teams_connector.domain.models import Attachment, DownloadedFiles, SavedFile, UnavailableFile
-from teams_connector.remote.ports import FileReader, ImageReader, People, RemoteFile
+from teams_connector.remote.ports import FileReader, ImageReader, MeetingNotesReader, People, RemoteFile
 from teams_connector.service import localfiles
 from teams_connector.service.history import History
 
@@ -36,12 +37,18 @@ class Files:
     """A message's attachments, each fetched from its own source and kept in the download cache."""
 
     def __init__(
-        self, history: History, sharepoint: FileReader, ams: ImageReader, hosted: ImageReader
+        self,
+        history: History,
+        sharepoint: FileReader,
+        ams: ImageReader,
+        hosted: ImageReader,
+        notes: MeetingNotesReader,
     ) -> None:
         self._history = history
         self._sharepoint = sharepoint
         self._ams = ams
         self._hosted = hosted
+        self._notes = notes
 
     async def download_attachments(
         self,
@@ -120,7 +127,23 @@ class Files:
                 target, lambda partial: self._hosted.download(url, partial, max_bytes=max_bytes)
             )
             return _saved(target, remote.content_type)
+        if attachment.source == "loop" and attachment.url:
+            document = await self.meeting_notes(attachment.url)
+            target = _cache_folder("loop", _digest(attachment.url)) / name
+            await _fetch(target, lambda partial: _write_payload(partial, document.encode("utf-8")))
+            return _saved(target, "text/plain; charset=utf-8")
         raise InvalidRequest("This attachment cannot be downloaded.")
+
+    async def meeting_notes(self, url: str) -> str:
+        """A Loop meeting-notes page as text, read now, under a line naming the page and the time it was
+        read: the page is live, so later edits are not included."""
+        notes = await self._notes.meeting_notes(url)
+        read_at = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+        head = (
+            f"Meeting notes: {notes.title or 'untitled page'} (read from the live Loop page at {read_at}; "
+            "later edits are not included)"
+        )
+        return f"{head}\n\n{notes.text}" if notes.text else head
 
 
 class Photos:

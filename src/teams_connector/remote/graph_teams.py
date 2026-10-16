@@ -24,11 +24,12 @@ from teams_connector.domain.errors import (
     WriteOutcomeUnknown,
 )
 from teams_connector.domain.models import Chat, Message, Participant
-from teams_connector.remote import graph_mapping
+from teams_connector.remote import graph_mapping, loop_notes
 from teams_connector.remote.graph import Graph, relative, segment, sub_failure
 from teams_connector.remote.ports import (
     HistoryPage,
     HostedImage,
+    MeetingNotes,
     RemoteFile,
     SendReceipt,
     SharedFile,
@@ -39,6 +40,7 @@ from teams_connector.remote.transport import operation
 CHANNEL_PAGE = 50  # threads per page (Graph maximum for channel messages)
 PHOTO_SIZE = "64x64"
 MAX_PHOTO_BYTES = 2_000_000
+MAX_NOTES_BYTES = 5 * 1024 * 1024  # a converted notes page was about 12 KB (2026-10-15)
 _GUID_CHARS = set("0123456789abcdef-")
 SINGLE_UPLOAD_BYTES = 250 * 1024 * 1024  # this size and larger need an upload session (live, 2026-10-15)
 UPLOAD_CHUNK_BYTES = 10 * 1024 * 1024  # Graph requires multiples of 320 KiB
@@ -447,7 +449,8 @@ def _uploaded(item: dict[str, Any]) -> UploadedFile:
 
 
 class GraphFiles:
-    """FileReader over Graph shares: any SharePoint/OneDrive sharing or web URL the user can open."""
+    """FileReader and MeetingNotesReader over Graph shares: any SharePoint/OneDrive sharing or web URL the
+    user can open."""
 
     def __init__(self, graph: Graph) -> None:
         self._graph = graph
@@ -478,6 +481,17 @@ class GraphFiles:
                 f"/shares/{share}/driveItem/content", dest, max_bytes=max_bytes
             )
         return RemoteFile(name=None, content_type=content_type, size=size)
+
+    async def meeting_notes(self, url: str) -> MeetingNotes:
+        """A Loop page through Graph's HTML conversion (``content?format=html``, one request, live
+        2026-10-15), cleaned to its content. A page Graph will not convert (no access, deleted, a conversion
+        error, or an export restriction Graph enforces) raises the service's error."""
+        share = _share_id(url)
+        with operation("reading meeting notes"):
+            page = await self._graph.download_bytes(
+                f"/shares/{share}/driveItem/content?format=html", max_bytes=MAX_NOTES_BYTES
+            )
+        return loop_notes.meeting_notes(page.decode("utf-8", errors="replace"))
 
 
 def _share_id(url: str) -> str:

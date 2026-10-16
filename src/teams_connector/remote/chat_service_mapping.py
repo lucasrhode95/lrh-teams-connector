@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from teams_connector.domain.models import Attachment, Message
-from teams_connector.remote import chat_events, inline_images, teams_html
+from teams_connector.remote import chat_events, inline_images, loop_notes, teams_html
 
 _MRI = re.compile(
     r"(?i)(?<![a-z0-9])((?:8:orgid:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})|"
@@ -162,8 +162,13 @@ def to_message(raw: dict[str, Any], conversation_id: str) -> Message:
         rendered = teams_html.render_message(content, is_html=is_html)
         inline, text = rendered.images, rendered.text
     files = _files(raw, props, {item.name.casefold() for item in inline})
+    author_id = message_author_id(raw)
+    notes = _meeting_notes(content, author_id, {item.name.casefold() for item in [*inline, *files]})
+    if notes:  # the bot's sentence is replaced by the notes marker
+        text, inline = "", []
     if system_event is None:
-        text = "\n\n".join(part for part in (text, "\n".join(file_markers(files))) if part)
+        markers = [*file_markers(files), *(f"[Meeting notes] {item.url}" for item in notes)]
+        text = "\n\n".join(part for part in (text, "\n".join(markers)) if part)
     sent_at = message_datetime(raw)
     author = _first_string(raw, "imdisplayname", "imDisplayName", "fromDisplayNameInToken", "displayName")
     message_id = raw.get("id")
@@ -176,7 +181,7 @@ def to_message(raw: dict[str, Any], conversation_id: str) -> Message:
         id=str(message_id),
         conversation_id=conversation_id,
         author=author.strip() if author and author.strip() else None,
-        author_id=message_author_id(raw),
+        author_id=author_id,
         sent_at=sent_at,
         text=text,
         system_event=system_event,
@@ -184,7 +189,7 @@ def to_message(raw: dict[str, Any], conversation_id: str) -> Message:
         edited_at=parse_time(props.get("edittime") or raw.get("edittime")),
         is_deleted=is_deleted,
         deleted_at=deleted_at,
-        attachments=[*inline, *files],
+        attachments=[*inline, *files, *notes],
         reply_to_id=str(root) if root and str(root) != str(message_id) else None,
     )
 
@@ -227,6 +232,18 @@ def _files(raw: dict[str, Any], props: dict[str, Any], used: set[str]) -> list[A
             shared_file(str(name) if name else "file", link, used, file_type if "/" in file_type else None)
         )
     return out
+
+
+def _meeting_notes(content: str, author_id: str | None, used: set[str]) -> list[Attachment]:
+    """The Loop meeting-notes pages an app (the meeting's "Facilitator" bot) links to. Nothing is fetched:
+    exports and downloads read the page. People's messages keep their text; pasted Loop components are not
+    handled yet."""
+    if not author_id or not author_id.startswith("28:") or "fluidautoembedlink" not in content.casefold():
+        return []
+    return [
+        Attachment(name=inline_images.unique_name("Meeting notes.txt", used), source="loop", url=link)
+        for link in loop_notes.notes_links(content)
+    ]
 
 
 def _is_site_page(name: str, link: str) -> bool:

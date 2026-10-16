@@ -589,7 +589,8 @@ access to the organizer's file, which an attendee had in this case.
 3. loads the page as a live Fluid document: `opStream/snapshots/trees/latest`, `opStream` ops,
    `opStream/joinSession` and a push socket.
 
-That is a collaborative editing session; the connector's HTML conversion needs none of it.
+That is a collaborative editing session; the connector's HTML conversion needs none of it. The connector
+reads meeting notes through `?format=html` since 2026-10-15 (exports and downloads only).
 `canExport`/`canExtract` are the flags to respect if a page forbids export; whether Graph's conversion
 already honors them is untested.
 Loop components that people paste into a chat may use the same `FluidAutoEmbedLink` embed; untested.

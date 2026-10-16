@@ -130,11 +130,13 @@ class AppContext:
             Bearer(account_tokens, "m365.search"),
             anchor_mailbox=f"Oid:{account.object_id}@{account.tenant_id}",
         )
+        shared_files = GraphFiles(graph)
         files = Files(
             history,
-            GraphFiles(graph),
+            shared_files,
             AmsImages(transport, AmsCredential(session)),
             GraphHostedImages(graph),
+            shared_files,
         )
         person = Participant(id=account.object_id, name=name)
         return Services(

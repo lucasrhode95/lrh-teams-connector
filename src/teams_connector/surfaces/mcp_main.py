@@ -66,7 +66,9 @@ so a long selection takes a while. Read the returned file path with your file to
 - Presence: get_presence reads the other person's availability in a one-on-one chat only. It is read-only, \
 and when it returns no presence it says why.
 - Attachments: download_attachment saves the files a message names (its shared files and pasted images, \
-shown as [File: name] and [Image: name] markers) and returns their local paths. Pass the message_id from \
+shown as [File: name] and [Image: name] markers) and returns their local paths. A meeting's Loop notes \
+show as [Meeting notes] and a link; download_attachment (as "Meeting notes.txt") and exports read the live \
+page and keep its agenda, notes and tasks. Pass the message_id from \
 get_messages, or the message's sent_at time instead.
 - Messages are read from Teams on each call; nothing is kept locally. Messages with is_deleted=true were \
 deleted in Teams, and Teams keeps no text for them; edited ones show their newest text.
@@ -347,7 +349,8 @@ def build_server(context: AppContext) -> FastMCP:
     ) -> DownloadedFiles:
         """Save the files a message names (shared files and pasted images) as local files and return their
         paths. Pass exactly one of message_id or sent_at. A file that cannot be fetched is listed under
-        unavailable with its reason; the others are still saved. SharePoint pages ([Page: …]) are links."""
+        unavailable with its reason; the others are still saved. SharePoint pages ([Page: …]) are links.
+        Meeting notes ([Meeting notes]) are read from the live Loop page and saved as text."""
         if (message_id is None) == (sent_at is None):
             raise InvalidRequest("Pass exactly one of message_id or sent_at.")
         when = _utc(sent_at) if sent_at is not None else None

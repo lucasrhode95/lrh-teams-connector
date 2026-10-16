@@ -174,6 +174,9 @@ class FakeTeams:
     upload_session_auth: list[str | None] = field(default_factory=list)  # Authorization on uploadUrl calls
     cancelled_uploads: list[str] = field(default_factory=list)
     deletes: list[tuple[str, str]] = field(default_factory=list)  # (conversation id, message id)
+    # Loop pages: link -> the HTML Graph converts it to, or an error status
+    loop_pages: dict[str, str | int] = field(default_factory=dict)
+    loop_reads: list[str] = field(default_factory=list)
     fail_deletes: dict[str, str] = field(default_factory=dict)  # message id -> "network" or "403"
     partial_invites: bool = False  # invites answer 207 with an error for the last recipient
     token_counter: int = 0
@@ -207,6 +210,10 @@ class FakeTeams:
             return self._graph(request, path.removeprefix("/v1.0"), parse_qs(url.query))
         if url.hostname == "tenant-my.sharepoint.com" and "/uploadSession/" in path:
             return self._upload_session(request, path.rsplit("/", 1)[-1])
+        if url.hostname == "tenant.sharepoint.com" and path.startswith("/loop/"):
+            share = path.removeprefix("/loop/")
+            link = base64.urlsafe_b64decode(share[2:] + "=" * (-len(share[2:]) % 4)).decode()
+            return httpx.Response(200, text=str(self.loop_pages[link]), headers={"content-type": "text/html"})
         if url.hostname and url.hostname.endswith(".sharepoint.com"):
             key = path.rsplit("/", 1)[-1]
             for name, data in self.files.values():
@@ -542,6 +549,16 @@ class FakeTeams:
         if parts[0] == "shares":
             share = parts[1]
             url = base64.urlsafe_b64decode(share[2:] + "=" * (-len(share[2:]) % 4)).decode()
+            if url in self.loop_pages and parts[-1] == "content" and query.get("format") == ["html"]:
+                self.loop_reads.append(url)
+                page = self.loop_pages[url]
+                if isinstance(page, int):
+                    return httpx.Response(
+                        page, json={"error": {"code": "accessDenied", "message": "synthetic"}}
+                    )
+                return httpx.Response(
+                    302, headers={"location": f"https://tenant.sharepoint.com/loop/{share}"}
+                )
             entry = self.files.get(url)
             if entry is None:
                 return _not_found()

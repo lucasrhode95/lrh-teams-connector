@@ -268,8 +268,8 @@ files and `include_attachments` is true (the default), the artifact is a ZIP hol
 the files that could be retrieved; otherwise it is the plain text or JSONL file. Several conversations are
 wrapped in one outer ZIP, `teams-conversations.zip`. A conversation retrieves at most 200 files, 100 MiB per
 file and 250 MiB in total. Later references and failed downloads stay in the text as
-`[Attachment unavailable: …]`. The result contains a local path; use the MCP client's local file-reading
-capability to inspect it.
+`[Attachment unavailable: …]`. Meeting notes go in the text instead, after their message (see below). The
+result contains a local path; use the MCP client's local file-reading capability to inspect it.
 
 An export reads each conversation from Teams page by page, newest first, and spools the pages to a temporary
 file; the text is then written oldest first from those pages. The temporary folder is removed when the export
@@ -286,6 +286,22 @@ page reads as `[Page: name] link`: it is opened, not downloaded. A meeting recor
 `[Recording: title]` and its OneDrive or SharePoint link; recordings are not downloaded. Each file is fetched
 once into the download cache (see Storage), and the tool returns the local paths. General OneDrive and
 SharePoint discovery belongs to the SharePoint connector. Email attachments belong to Outlook.
+
+**Meeting notes.** When a meeting ends, its "Facilitator" app posts a link to the meeting's Loop notes
+page ([research](api-research.md#loop-pages-and-meeting-notes)). A message from an app (`28:`) with a
+`FluidAutoEmbedLink` anchor to a `/:fl:/` link reads as `[Meeting notes] <link>` instead of the app's
+sentence, and carries a `loop` attachment named `Meeting notes.txt`; reading fetches nothing. A person's
+message with such a link keeps its text. Exports (with attachments) and `download_attachment` read the
+page with one Graph `GET /shares/{share}/driveItem/content?format=html` (`remote/loop_notes.py` cleans
+it) and keep the agenda and goal, the notes under their headings, and each task with its assignee and
+due date; the AI disclaimer, empty paragraphs, checkboxes and "Task list category" labels are dropped. An
+export reads each page once and writes the notes after the message; `download_attachment` saves them as
+a text file. The page is live, so the text starts with the time it was read and says later edits are not
+included, and the page is read again on every call rather than served from the download cache. A page
+Graph will not convert (no access, deleted, a conversion error) is reported as an unavailable attachment
+and the message text stays. Teams Web also checks the page's `opStream/capabilities` (`canExport`,
+`canExtract`) first; the connector has no SharePoint-audience token to do that, so it relies on Graph
+refusing a restricted page, which is unverified (roadmap N9).
 
 ### Send a message
 
