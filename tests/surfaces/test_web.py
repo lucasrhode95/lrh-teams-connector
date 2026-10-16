@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import io
+import re
 import zipfile
+from pathlib import Path
 
 import httpx
 import pytest
 from httpx import ASGITransport
 
 from teams_connector.bootstrap import AppContext
+from teams_connector.surfaces.web import routes
 from teams_connector.surfaces.web.routes import Activity, create_app, export_request
 from tests.fakes.teams_fake import PEER, FakeTeams, FakeTokens
 
@@ -106,3 +109,12 @@ async def test_ui_serves_graph_profile_photo_and_reports_missing_photo(
 
     missing = await web_client.get("/api/photos/66666666-6666-6666-6666-666666666666", headers=headers)
     assert missing.status_code == 404
+
+
+def test_checkbox_labels_lay_out_inline() -> None:
+    static = Path(routes.__file__).parent / "static"
+    page = (static / "index.html").read_text(encoding="utf-8")
+    styles = (static / "app.css").read_text(encoding="utf-8")
+    checkbox_labels = re.findall(r'<label([^>]*)><input [^>]*type="checkbox"', page)
+    assert checkbox_labels and all('class="check-label"' in attrs for attrs in checkbox_labels)
+    assert ".check-label { display: flex; align-items: center;" in styles

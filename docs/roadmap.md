@@ -12,15 +12,7 @@ Snapshot **2026-10-15**.
 Write each bug as **Seen** (a synthetic example: the call and what came back), **Expected**,
 **Cause** and **Fix**.
 
-### B4 — Export UI: the attachments checkbox sits above its label
-
-- **Seen:** in the export UI, the "Include message attachments" checkbox shows on its own line, with its
-  text on the line below.
-- **Expected:** the checkbox and its text on one line, like any checkbox.
-- **Cause:** `app.css` styles every `label` as `display: grid; gap: 6px` (for the stacked filter fields),
-  and the checkbox is wrapped in a plain `label`, so the input and its `<span>` become two grid rows.
-- **Fix:** give checkbox labels their own class, laid out inline (`display: flex; align-items: center;
-  gap: 8px`), and keep the grid rule for field labels only.
+None open.
 
 ## Improvements
 
