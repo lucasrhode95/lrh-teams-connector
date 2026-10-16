@@ -198,6 +198,11 @@ conversation id URL-encoded. Live unless dated otherwise:
   `view=msnp24Equivalent|supportsMessageProperties&pageSize=200&startTime=<epoch ms>` (Capture, 2026-10-14).
 - The Teams Web bundle also has GraphQL `messages(convId, replyChainId, cursor)` and
   `fetchRecentMessagesAfter`; neither takes a date range (Source, 2026-09-28).
+- A meeting chat in the catalog whose roster does not include the account answers 403 with `errorCode`
+  209 and a `message` holding `{"subCode":"AclCheckFailed","details":…}`. The details name the account's
+  MRI and the thread (2026-10-16, local UI preview). The connector reports that the account is not a
+  member and leaves out the details. Why the catalog lists such a chat (for example a meeting the account
+  was invited to but never joined) is unverified.
 
 ### One message
 

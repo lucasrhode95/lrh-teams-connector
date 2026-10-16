@@ -199,6 +199,8 @@ input[type="checkbox"] { accent-color: var(--teams-purple); }
 .preview-text-block { padding: 10px 13px; overflow-wrap: anywhere; white-space: pre-wrap; font: .86rem/1.45 ui-monospace, Consolas, monospace; content-visibility: auto; contain-intrinsic-size: auto 80px; }
 .preview-text-block + .preview-text-block { border-top: 1px solid var(--line); }
 .preview-empty { padding: 24px; color: var(--muted); text-align: center; }
+.preview-empty.error { color: var(--error); }
+.preview-empty p { margin: 0 0 12px; color: inherit; overflow-wrap: anywhere; }
 .loading-state { display: flex; min-height: 90px; flex-direction: column; align-items: center; justify-content: center; gap: 9px; padding: 20px; color: var(--muted); text-align: center; }
 .spinner { width: 24px; height: 24px; border: 3px solid var(--teams-purple-light); border-top-color: var(--teams-purple); border-radius: 50%; animation: spinner-turn .8s linear infinite; }
 @keyframes spinner-turn { to { transform: rotate(360deg); } }

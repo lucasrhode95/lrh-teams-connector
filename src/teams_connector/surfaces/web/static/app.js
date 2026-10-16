@@ -650,6 +650,33 @@ function showPreviewEmpty(message) {
   setPreviewToolbar();
 }
 
+// End a preview attempt that brought no new text, offering Retry. Earlier text stays and the toolbar
+// carries the message; an empty pane shows the message in place of its loading spinner.
+function endPreviewAttempt(message, { error = false, view = false } = {}) {
+  if (previewHasText) {
+    setPreviewToolbar({ view, status: message, error, retry: true });
+    return;
+  }
+  previewContent.replaceChildren();
+  const box = document.createElement("div");
+  box.className = "preview-empty" + (error ? " error" : "");
+  box.setAttribute("role", error ? "alert" : "status");
+  const text = document.createElement("p");
+  text.textContent = message;
+  const retry = document.createElement("button");
+  retry.className = "secondary";
+  retry.type = "button";
+  retry.textContent = "Retry";
+  retry.addEventListener("click", retryPreview);
+  box.append(text, retry);
+  previewContent.appendChild(box);
+  setPreviewToolbar();
+}
+
+function retryPreview() {
+  void startPreview({ entireRange: previewEntireRange, forceRefresh: true, keepCurrent: previewHasText });
+}
+
 function setPreviewToolbar({ view = false, status = "", spinning = false, error = false, retry = false, cancel = false } = {}) {
   const toolbar = $("preview-toolbar");
   const statusBox = $("preview-status");
@@ -864,12 +891,12 @@ async function startPreview({ entireRange = false, forceRefresh = false, keepCur
           previewEntireRange = false;
           setPreviewToolbar({ view: previewIsCapped, status: "Entire-range view cancelled. Showing the excerpt." });
         } else {
-          setPreviewToolbar({ status: "Preview cancelled.", retry: true });
+          endPreviewAttempt("Preview cancelled.");
         }
         return;
       }
       const message = job.error?.message || "The preview could not be loaded.";
-      setPreviewToolbar({ view: previewIsCapped && !entireRange, status: message, error: true, retry: true });
+      endPreviewAttempt(message, { error: true, view: previewIsCapped && !entireRange });
       if (job.error?.kind === "AuthenticationRequired") await showError(new ApiError(401, job.error));
       return;
     }
@@ -877,7 +904,7 @@ async function startPreview({ entireRange = false, forceRefresh = false, keepCur
     if (generation !== previewGeneration) return;
     activePreviewJobId = null;
     const message = error instanceof ApiError ? error.message : "Could not reach the local server.";
-    setPreviewToolbar({ view: previewIsCapped && !entireRange, status: message, error: true, retry: true });
+    endPreviewAttempt(message, { error: true, view: previewIsCapped && !entireRange });
     if (error instanceof ApiError && error.status === 401) await showError(error);
   }
 }
@@ -892,7 +919,7 @@ async function cancelPreview() {
     previewEntireRange = false;
     setPreviewToolbar({ view: previewIsCapped, status: "Entire-range view cancelled. Showing the excerpt." });
   } else {
-    setPreviewToolbar({ status: "Preview cancelled.", retry: true });
+    endPreviewAttempt("Preview cancelled.");
   }
 }
 
@@ -1041,7 +1068,7 @@ async function downloadSelected() {
   activePreviewJobId = null;
   if (previewJobId) {
     if (previewEntireRange && previewHasText) previewEntireRange = false;
-    setPreviewToolbar({ view: previewIsCapped, status: "Preview stopped for download.", retry: true });
+    endPreviewAttempt("Preview stopped for download.", { view: previewIsCapped });
   }
   authHelp.hidden = true;
   downloadButton.dataset.busy = "true";
@@ -1165,7 +1192,7 @@ function setSettingsOpen(open, { restoreFocus = false } = {}) {
 }
 settingsToggle.addEventListener("click", () => setSettingsOpen(settingsMenu.hidden));
 $("view-entire-range").addEventListener("click", () => void startPreview({ entireRange: true, keepCurrent: true }));
-$("retry-preview").addEventListener("click", () => void startPreview({ entireRange: previewEntireRange, forceRefresh: true, keepCurrent: previewHasText }));
+$("retry-preview").addEventListener("click", retryPreview);
 $("cancel-preview").addEventListener("click", cancelPreview);
 $("refresh").addEventListener("click", loadChats);
 downloadButton.addEventListener("click", downloadSelected);
