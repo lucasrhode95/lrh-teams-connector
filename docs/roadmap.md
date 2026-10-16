@@ -28,18 +28,14 @@ Files and inline images work in one-on-one and group chats and the self chat, in
 or more through upload sessions ([architecture](architecture.md#send-a-message),
 [research](api-research.md#sending-files)). Still open:
 
-- **Channels and meeting chats:** channels store files in the team's SharePoint folder instead. Meeting
-  chats are untried. Inline images there are untried too.
+- **Channels and meeting chats:** files and images are refused there today. Channels store files in the
+  team's SharePoint folder instead; meeting chats are untried.
 
 ### N9 — Meeting notes from Loop pages
 
 The meeting app's notes link reads as a marker, and exports and `download_attachment` read the page as
 text ([architecture](architecture.md#exports)). Still open:
 
-- **Restrictions:** Teams Web checks `opStream/capabilities` (`canExport`, `canExtract`) before showing a
-  page. Find out whether Graph's `?format=html` refuses a page that forbids export. If it does not, the
-  connector must check, which needs a SharePoint-audience token: a new shared auth profile, for the user
-  to decide.
 - **Pasted Loop components:** do they use the same embed? A person's message with one keeps its text and
   link today; handle it like the notes if the page converts the same way.
 - **Page name in the marker:** the app's message carries no page name, so reading shows

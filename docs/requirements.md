@@ -142,44 +142,39 @@ counts as broad Microsoft 365 search.
 - **Meeting notes** (decided and implemented 2026-10-15): the meeting app's link to a Loop notes page reads
   as a `[Meeting notes]` marker with the link. Exports and `download_attachment` read the live page once
   per call and keep only its agenda and goal, notes, and tasks with assignee and due date, saying when it
-  was read. A page that cannot be read is reported like an unavailable attachment. A page that forbids
-  export must not be exported.
+  was read. A page that cannot be read is reported like an unavailable attachment. **Export restrictions
+  are ignored by design** (decided 2026-10-16): a page the user can read in Teams can also be read,
+  screenshotted or retyped, so the connector does not check a page's export or extract permissions. A
+  page Graph itself refuses to convert is still reported as unavailable.
 - **Meeting and membership events** read as one short line each, never as their raw markup. The
   line keeps what Teams shows (a meeting's subject, duration and participants, members who joined or
   left, a new topic) and drops identifiers and flags.
 - **Reading never changes a message or chat** (decided 2026-10-15). Reading history, searching,
   exporting and downloading use only reads; nothing marks a message or chat as read or seen, so the
   user's unread state in Teams stays as it was. Checked 2026-10-15 on unread meeting chats: after history reads, a download and an export, they were still unread.
-- **Sending** needs the user's explicit authorization for both the recipient and the exact content.
-  The current conversation name must match `expected_chat_name`. Text is escaped, sent once, and the
-  server message id is returned. HTML (`html`, decided 2026-10-15) is sent as written after the passive check, which also refuses
-  embedded media (Teams shows only images it hosts) except an `<img>` naming one of the message's images. Verified live for the self chat, one-on-one and group chats
+- **Sending** needs the user's explicit authorization for the recipient and the exact content, files
+  and images. The current conversation name must match `expected_chat_name`. Text is escaped, HTML
+  (`html`, decided 2026-10-15) is sent as written after the passive check, and the message is sent once;
+  the server message id is returned. Verified live for the self chat, one-on-one and group chats
   (2026-10-14); channels and meeting chats are roadmap S3.
-- **Inline images** (decided and implemented 2026-10-15): `send_message` takes local PNG or JPEG paths
-  under the same authorization. `<img src="file name">` in `html` places one; the others follow the text.
-  A file that is not PNG or JPEG, or images that push the request past about 4 MiB (about 3 MB of
-  images), are refused before anything is sent, with a suggestion to send them as files.
-- **Sending files** (decided and implemented 2026-10-15, for one-on-one and group chats and the self
-  chat):
-  `send_message` takes local file paths under the same authorization as the recipient and content.
-  - Like Teams, the connector uploads the files to the sender's OneDrive, grants the chat's other members
-    the tenant-default access without an email, and posts the message.
-  - It posts only after every file has been uploaded and shared. Files uploaded before a failure are
-    reported, never retried or deleted.
-  - Files up to `config.MAX_SEND_FILE_BYTES` (2 GiB by default). From 250 MiB a file goes up in parts
-    (decided and implemented 2026-10-15). **Exception to sending each write once, approved by the
-    user:** when a part fails, the connector asks which ranges are still missing and resends only
-    those, a few times at most; then it cancels the upload and fails the send.
-  - Images and files may share a message. Files and images in channels and meeting chats are roadmap
-    P1.5.
-- **Deleting the user's own messages** (decided and implemented 2026-10-15), the second write path:
-  `delete_messages` soft-deletes a set of the user's own messages in one chat, as Teams' Delete does.
-  - The agent lists the set (chat, count, first and last message) and gets one explicit yes for it. The
-    connector cannot verify that confirmation, so it is a rule in the tool description and the MCP
-    instructions.
-  - The chat's current name must match `expected_chat_name`. Every message is read again before its
-    delete; anyone else's message, a system event or an already deleted one is skipped.
-  - Each delete is attempted once and never retried. The result lists what was deleted, skipped and
-    uncertain, per message.
-  - Files a deleted message shared are reported, not removed or unshared (decided 2026-10-15).
-  - Channels are not covered.
+- **Images and files** (decided and implemented 2026-10-15) go to one-on-one and group chats and the
+  self chat; channels and meeting chats are roadmap P1.5. Images and files may share a message.
+  - Images are PNG or JPEG only, sent inline in the same request; `<img src="file name">` in `html`
+    places one, and the others follow the text. A file that is not PNG or JPEG, or images that would
+    push the request past about 4 MiB (about 3 MB of images), are refused before anything is sent, with
+    a suggestion to send them as files. Any other `<img>` is refused.
+  - Files, like Teams, go to the sender's OneDrive, are shared with the chat's other members at the
+    tenant-default access without an email, and are referenced by the message, which is posted only
+    after every upload and share has succeeded. Files uploaded before a failure are reported, never
+    deleted. A file may be up to `config.MAX_SEND_FILE_BYTES` (2 GiB by default); from 250 MiB it goes up
+    in parts.
+  - **Exception to making each write once, approved by the user:** when a part of a large upload fails,
+    the connector asks which ranges are still missing and resends only those, a few times at most; then
+    it cancels the upload and fails the send.
+- **Deleting the user's own messages** (decided and implemented 2026-10-15) is the second write path.
+  `delete_messages` soft-deletes a set of the user's own messages in one chat (not a channel), as Teams'
+  Delete does. The agent lists the set (chat, count, first and last message) and gets one explicit yes
+  for it; the connector cannot verify that, so it is a rule in the tool description and the MCP
+  instructions. Anyone else's message is skipped. Each delete is attempted once, and the result reports
+  each message as deleted, skipped or uncertain. Files a deleted message shared are reported, not
+  removed or unshared.

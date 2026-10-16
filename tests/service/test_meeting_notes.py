@@ -5,14 +5,17 @@ Synthetic fixtures and the fake tenant only.
 
 from __future__ import annotations
 
+import json
 import zipfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from teams_connector.bootstrap import Services
 from teams_connector.domain.errors import Upstream
 from teams_connector.domain.models import ExportRequest
+from teams_connector.service.export import orchestrator
 from tests.fakes.teams_fake import FakeTeams, cs_message
 
 MEETING = "19:meeting_abc@thread.v2"
@@ -24,11 +27,18 @@ EMBED = (
 PAGE = (Path(__file__).parents[1] / "fixtures" / "loop_meeting_notes.html").read_text(encoding="utf-8")
 
 
+def bot_message(message_id: str, when: str, *, meeting_ended: bool = True) -> dict[str, Any]:
+    """The Facilitator app's message; Chat Service sends its bot metadata as JSON inside strings."""
+    record = cs_message(message_id, when, EMBED, author="28:facilitator-app", name="Facilitator")
+    if meeting_ended:
+        skill = json.dumps({"eventType": "TM_MeetingEnded", "callId": "synthetic-call"})
+        record["properties"]["botMetadata"] = json.dumps({"aiMetadata": {"botAiSkill": skill}})
+    return record
+
+
 @pytest.fixture
 def notes_message(fake: FakeTeams) -> None:
-    fake.chats[MEETING].messages.append(
-        cs_message("3002", "2026-07-01T10:00:00.000Z", EMBED, author="28:facilitator-app", name="Facilitator")
-    )
+    fake.chats[MEETING].messages.append(bot_message("3002", "2026-07-01T10:00:00.000Z"))
     fake.loop_pages[LINK] = PAGE
 
 
@@ -43,13 +53,17 @@ async def test_reading_shows_a_marker_and_fetches_nothing(
     assert fake.loop_reads == []
 
 
-async def test_a_persons_loop_link_keeps_its_text(services: Services, fake: FakeTeams) -> None:
-    fake.chats[MEETING].messages.append(cs_message("3003", "2026-07-01T11:00:00.000Z", f"See {EMBED}"))
+async def test_other_loop_links_keep_their_text(services: Services, fake: FakeTeams) -> None:
+    fake.chats[MEETING].messages += [
+        cs_message("3003", "2026-07-01T11:00:00.000Z", f"See {EMBED}"),  # a person's
+        bot_message("3005", "2026-07-01T11:30:00.000Z", meeting_ended=False),  # an app's, not at meeting end
+    ]
 
     page = await services.history.get_messages(MEETING)
 
-    message = next(m for m in page.items if m.id == "3003")
-    assert message.text.startswith("See Everyone, that is a wrap.") and message.attachments == []
+    for message_id in ("3003", "3005"):
+        message = next(m for m in page.items if m.id == message_id)
+        assert "Everyone, that is a wrap." in message.text and message.attachments == []
 
 
 async def test_download_saves_the_notes_as_text_read_now(
@@ -74,9 +88,7 @@ async def test_download_saves_the_notes_as_text_read_now(
 async def test_an_export_puts_the_notes_after_the_message_reading_each_page_once(
     services: Services, fake: FakeTeams, notes_message: None
 ) -> None:
-    fake.chats[MEETING].messages.append(
-        cs_message("3004", "2026-07-01T12:00:00.000Z", EMBED, author="28:facilitator-app", name="Facilitator")
-    )
+    fake.chats[MEETING].messages.append(bot_message("3004", "2026-07-01T12:00:00.000Z"))
 
     artifact = await services.exports.export(ExportRequest(conversation_ids=[MEETING]))
 
@@ -100,6 +112,47 @@ async def test_an_unreadable_page_is_reported_like_an_unavailable_attachment(
     assert artifact.chats[0].attachments_failed == 1
     with pytest.raises(Upstream, match="denied access"):
         await services.files.download_attachments(MEETING, message_id="3002", sent_at=None, names=None)
+
+
+async def test_pages_beyond_the_attachment_limit_are_not_read(
+    services: Services, fake: FakeTeams, notes_message: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    second = LINK.replace("sample-page", "second-page")
+    fake.loop_pages[second] = PAGE
+    record = bot_message("3004", "2026-07-01T12:00:00.000Z")
+    record["content"] = record["content"].replace(LINK, second)
+    fake.chats[MEETING].messages.append(record)
+    monkeypatch.setattr(orchestrator, "MAX_ASSETS_PER_CONVERSATION", 1)
+
+    artifact = await services.exports.export(ExportRequest(conversation_ids=[MEETING]))
+
+    assert fake.loop_reads == [LINK]  # the second page is past the limit
+    text = Path(artifact.path).read_text(encoding="utf-8")
+    assert f"[Attachment unavailable: Meeting notes.txt] {second}" in text
+
+
+async def test_notes_and_files_share_one_attachment_budget(
+    services: Services, fake: FakeTeams, notes_message: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake.chats[MEETING].messages.append(
+        cs_message(
+            "3006",
+            "2026-07-01T13:00:00.000Z",
+            "Slides attached",
+            files=[
+                {"fileName": "notes.txt", "fileInfo": {"shareUrl": "https://tenant.sharepoint.com/s/notes"}}
+            ],
+        )
+    )
+    monkeypatch.setattr(orchestrator, "MAX_ASSETS_PER_CONVERSATION", 1)
+
+    artifact = await services.exports.export(ExportRequest(conversation_ids=[MEETING]))
+
+    assert fake.loop_reads == [LINK]  # the notes took the one item the conversation allows
+    assert artifact.chats[0].attachments_downloaded == 1 and artifact.chats[0].attachments_failed == 1
+    with zipfile.ZipFile(artifact.path) as archive:
+        text = next(archive.read(n).decode() for n in archive.namelist() if n.endswith(".txt"))
+    assert "[Attachment unavailable: notes.txt]" in text
 
 
 async def test_without_attachments_the_export_reads_no_page(

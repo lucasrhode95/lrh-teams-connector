@@ -389,9 +389,10 @@ def build_server(context: AppContext) -> FastMCP:
         images: Annotated[
             list[str] | None,
             Field(
-                description="Absolute paths of PNG or JPEG images to show inline, up to 10 with distinct "
-                'file names, about 3 MB in total. In html, <img src="file name"> places one; the others '
-                "follow the text. Other formats or larger images are refused: send them in files."
+                description="Absolute paths of PNG or JPEG images to show inline (same chats as files), up "
+                'to 10 with distinct file names, about 3 MB in total. In html, <img src="file name"> places '
+                "one; the others follow the text. Other formats or larger images are refused: send them in "
+                "files."
             ),
         ] = None,
     ) -> SendResult:

@@ -172,12 +172,14 @@ class FakeTeams:
     chunk_failures: list[tuple[int, str]] = field(default_factory=list)
     fail_upload_status: bool = False  # reading an upload session's status answers 503
     upload_session_auth: list[str | None] = field(default_factory=list)  # Authorization on uploadUrl calls
+    # Bytes a new upload session already holds (offset -> value), as if they had arrived out of order
+    upload_prefill: dict[int, int] = field(default_factory=dict)
     cancelled_uploads: list[str] = field(default_factory=list)
     deletes: list[tuple[str, str]] = field(default_factory=list)  # (conversation id, message id)
     # Loop pages: link -> the HTML Graph converts it to, or an error status
     loop_pages: dict[str, str | int] = field(default_factory=dict)
     loop_reads: list[str] = field(default_factory=list)
-    fail_deletes: dict[str, str] = field(default_factory=dict)  # message id -> "network" or "403"
+    fail_deletes: dict[str, str] = field(default_factory=dict)  # message id -> "network", "403" or "401"
     partial_invites: bool = False  # invites answer 207 with an error for the last recipient
     token_counter: int = 0
 
@@ -315,6 +317,8 @@ class FakeTeams:
             return httpx.Response(400, json={"errorCode": "BadArgument"})
         self.deletes.append((conversation_id, record["id"]))
         failure = self.fail_deletes.get(record["id"])
+        if failure == "401":
+            return httpx.Response(401, json={"errorCode": "Unauthorized"})
         if failure == "403":
             return httpx.Response(403, json={"errorCode": "Forbidden", "message": "synthetic"})
         record["content"] = ""
@@ -398,7 +402,9 @@ class FakeTeams:
         if name in self.fail_upload_names:
             return httpx.Response(500, json={"error": {"code": "generalException", "message": "failed"}})
         key = str(len(self.upload_sessions) + 1)
-        self.upload_sessions[key] = {"folder": folder, "name": name, "size": None, "data": {}, "done": False}
+        self.upload_sessions[key] = {
+            "folder": folder, "name": name, "size": None, "data": dict(self.upload_prefill), "done": False
+        }  # fmt: skip
         upload_url = f"https://tenant-my.sharepoint.com/personal/mia/_api/v2.0/drive/uploadSession/{key}"
         return httpx.Response(
             200,
@@ -427,6 +433,8 @@ class FakeTeams:
         start, end = (int(value) for value in span.split("-"))
         assert len(request.content) == end - start + 1 and session["size"] in (None, int(total))
         session["size"] = int(total)
+        if any(offset in session["data"] for offset in range(start, end + 1)):
+            return httpx.Response(416, json={"error": {"code": "invalidRange"}})  # overlaps received bytes
         failure = next((f for f in self.chunk_failures if f[0] == start), None)
         if failure:
             self.chunk_failures.remove(failure)

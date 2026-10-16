@@ -159,6 +159,33 @@ async def test_images_too_large_for_one_request_are_refused_before_any_request(
     assert fake.calls == []
 
 
+async def test_images_are_refused_in_channels_and_meeting_chats(
+    services: Services, fake: FakeTeams, chart: Path
+) -> None:
+    await services.catalog.refresh()
+    for conversation_id in ("19:general@thread.tacv2", "19:meeting_abc@thread.v2"):
+        chat = services.store.chat(conversation_id)
+        assert chat is not None
+        with pytest.raises(InvalidRequest, match="one-on-one and group chats and the self chat only"):
+            await services.sender.send(conversation_id, expected_chat_name=chat.name, images=[str(chart)])
+    assert fake.sent == []
+
+
+async def test_the_size_check_reserves_room_for_files_before_any_upload(
+    services: Services, fake: FakeTeams, chart: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    notes = tmp_path / "notes.txt"
+    notes.write_bytes(b"synthetic notes")
+    monkeypatch.setattr(send, "MAX_IMAGE_REQUEST_BYTES", 2000)  # room for the image, not for a file too
+    await services.sender.send(ONE, expected_chat_name="Pat Peer", images=[str(chart)])
+
+    with pytest.raises(InvalidRequest, match="too large to send inline"):
+        await services.sender.send(
+            ONE, expected_chat_name="Pat Peer", files=[str(notes)], images=[str(chart)]
+        )
+    assert fake.uploads == []
+
+
 async def test_two_images_with_one_name_are_refused(
     services: Services, fake: FakeTeams, chart: Path, tmp_path: Path
 ) -> None:

@@ -16,6 +16,7 @@ partial file.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import shutil
 import tempfile
@@ -93,6 +94,7 @@ class Exports:
                 report(phase="writing", chat_index=index)
                 self._assemble(chat, text_path, spool, spans, request, exported_at, written, report, state)
                 spool.unlink(missing_ok=True)
+                read_notes = [text for text in notes.values() if text is not None]
                 per_chat, total, downloaded, failed = await self._export_chat_assets(
                     references,
                     request,
@@ -102,9 +104,11 @@ class Exports:
                     attachments_total,
                     attachments_downloaded,
                     attachments_failed,
+                    # the notes already read share the conversation's attachment budget
+                    budget_used=(len(notes), sum(len(text.encode("utf-8")) for text in read_notes)),
                 )
-                downloaded += notes.count(True)
-                failed += notes.count(False)
+                downloaded += len(read_notes)
+                failed += len(notes) - len(read_notes)
                 attachments_total += total + len(notes)
                 attachments_downloaded += downloaded
                 attachments_failed += failed
@@ -151,11 +155,11 @@ class Exports:
         report: Callable[..., None],
         state: ExportProgress,
         text_name: str,
-    ) -> tuple[list[Span], dict[str, Attachment], int, list[bool]]:
+    ) -> tuple[list[Span], dict[str, Attachment], int, dict[str, str | None]]:
         """Read the selection from Teams, newest page first, and spool each page's records. Returns the page
-        spans, the attachments the messages reference by their final names, the message count, and whether
-        each meeting-notes page could be read. The chat's own file name is taken first, so no attachment can
-        replace it in the ZIP."""
+        spans, the attachments the messages reference by their final names, the message count, and the
+        meeting-notes pages by link, each with its text or None when it was not read. The chat's own file
+        name is taken first, so no attachment can replace it in the ZIP."""
         spans: list[Span] = []
         references: dict[str, Attachment] = {}
         names: dict[tuple[str, str], str] = {}
@@ -183,19 +187,21 @@ class Exports:
                     pages_fetched=state.pages_fetched + 1,
                     messages_retrieved=state.messages_retrieved + len(page),
                 )
-        return spans, references, written, [value is not None for value in notes.values()]
+        return spans, references, written, notes
 
     async def _add_meeting_notes(self, message: Message, notes: dict[str, str | None]) -> None:
         """Put each meeting-notes page the message links to after its marker, read once per export; a page
-        that cannot be read is marked unavailable, as an attachment would be."""
+        that cannot be read, or lies beyond the conversation's attachment limits (count and total size), is
+        marked unavailable, as an attachment would be."""
         for item in message.attachments:
             if item.source != "loop" or not item.url:
                 continue
             if item.url not in notes:
-                try:
-                    notes[item.url] = await self._files.meeting_notes(item.url)
-                except ConnectorError:
-                    notes[item.url] = None
+                read = sum(len(text.encode("utf-8")) for text in notes.values() if text)
+                notes[item.url] = None
+                if len(notes) <= MAX_ASSETS_PER_CONVERSATION and read < MAX_TOTAL_ASSET_BYTES:
+                    with contextlib.suppress(ConnectorError):  # an unreadable page stays None
+                        notes[item.url] = await self._files.meeting_notes(item.url)
             marker = f"[Meeting notes] {item.url}"
             document = notes[item.url]
             replacement = (
@@ -238,10 +244,13 @@ class Exports:
         total_before: int,
         downloaded_before: int,
         failed_before: int,
+        *,
+        budget_used: tuple[int, int] = (0, 0),
     ) -> tuple[Path, int, int, int]:
         """Fetch the chat's attachments through the download cache and package them with its text.
 
         An attachment that cannot be fetched, or lies beyond the export's limits, is marked in the text.
+        ``budget_used`` is the (items, bytes) of the conversation's limits the meeting notes already took.
         """
         if not request.include_attachments or not references:
             return text_path, 0, 0, 0
@@ -249,8 +258,9 @@ class Exports:
         report(phase="attachments", attachments_total=total_before + len(references))
         files: list[tuple[Path, str]] = []
         unavailable: list[str] = []
-        downloaded = failed = total_bytes = 0
-        for index, (name, attachment) in enumerate(references.items(), start=1):
+        downloaded = failed = 0
+        items_before, total_bytes = budget_used
+        for index, (name, attachment) in enumerate(references.items(), start=items_before + 1):
             remaining = MAX_TOTAL_ASSET_BYTES - total_bytes
             if index > MAX_ASSETS_PER_CONVERSATION or remaining <= 0:
                 unavailable.append(name)
