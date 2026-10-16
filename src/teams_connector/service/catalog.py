@@ -244,6 +244,19 @@ class Catalog:
             items=page, cursor=next_cursor, coverage=self.coverage(source, len(chats), empty_excluded)
         )
 
+    async def active_since(self, since: datetime, kinds: tuple[str, ...]) -> list[Chat]:
+        """The stored chats of ``kinds`` whose latest message is at or after ``since``, quietest first.
+
+        A meeting's recording is posted while its chat is active, so the chat that goes quiet soonest after it
+        is the likeliest. Refreshes a stale catalog first, as listings do."""
+        await self.ensure(refresh=False)
+        chats = [
+            chat
+            for chat in self._store.chats()
+            if chat.kind in kinds and chat.last_message_at and chat.last_message_at >= since
+        ]
+        return sorted(chats, key=lambda chat: chat.last_message_at or since)
+
     def coverage(self, source: str, total: int, empty_excluded: int = 0) -> CatalogCoverage:
         stamp = self._store.meta("catalog_at")
         return CatalogCoverage(

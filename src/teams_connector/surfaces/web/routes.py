@@ -147,12 +147,16 @@ def export_request(payload: Any) -> ExportRequest:
     include_attachments = payload.get("include_attachments", True)
     if not isinstance(include_attachments, bool):
         raise InvalidRequest("include_attachments must be true or false.")
+    include_transcripts = payload.get("include_transcripts", True)
+    if not isinstance(include_transcripts, bool):
+        raise InvalidRequest("include_transcripts must be true or false.")
     return ExportRequest(
         conversation_ids=ids,
         since=since,
         until=until,
         message_limit=limit,
         include_attachments=include_attachments,
+        include_transcripts=include_transcripts,
     )
 
 

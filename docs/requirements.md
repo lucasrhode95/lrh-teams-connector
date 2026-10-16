@@ -81,6 +81,7 @@ The current split ([research](api-research.md#microsoft-graph-with-the-teams-cli
 | Sending | Graph | Returns the server message id |
 | Downloading files linked from messages | Graph shares | |
 | Downloading pasted images | AMS, private (full-size views); Graph hosted copies for channel images | AMS holds them and the Skype token reads them ([research](api-research.md#ams-async-media-service)); a channel's Graph copy is read with the Graph token |
+| Meeting transcripts (download and search) | Graph `media/transcripts`, JSON content | Verified on one account and tenant (2026-10-16); the route is not in Graph's documentation, and a fresh account is untested (roadmap A1). The recording card names the recording, so no lookup is needed. |
 | Online message discovery | Search v2 (`m365.search`) | Graph `chatMessage` search is denied to the tested client |
 | Presence of one-on-one peers | Teams Unified Presence, private, at the route AuthZ names (`presenceUPS`) | Graph presence needs `Presence.Read`, which the client lacks; the AuthZ route answers the `teams.spaces` bearer ([research](api-research.md#unified-presence)) |
 
@@ -120,11 +121,12 @@ not deleted, and the catalog is rebuilt from Teams
 |---|---|---|
 | Conversation filter | Local UI | Filters the loaded catalog in the browser. Typing never calls Teams. |
 | Conversation search | MCP (`search_chats`) | Matches conversation names in the catalog and, with a refresh (the default), the named group and meeting chats Teams matches by a plain name or email, with the members that matched, and the one-on-ones with the people Teams suggests for it ([research](api-research.md#people-suggestions)). `refresh=false` searches the cache only. Reports what it could not cover; older named chats matched only by a member are a known gap. |
+| Transcript search | MCP (`search_transcripts`) | Words said in meetings, found in the transcripts of recordings (decided 2026-10-16). With conversation ids, their recordings are read in full: the result is complete unless a transcript could not be read or the limit was reached. Without them, Graph's search ranks videos by their spoken words, and a video is kept only when a meeting chat holds a recording card naming that drive item; the result is never complete, the total is approximate, and videos whose chats were all read and hold no card are counted as not meetings, and videos whose chats could not all be read as unverified; neither is listed. Terms are phrases matched inside one utterance, by word prefix, without case or accents. |
 | Message search | MCP (`search_messages`) | Search v2 on the server, across Teams or scoped to chosen conversations and dates. Takes a list of terms, any of which matches; each term is one phrase, never split and never read as a query operator. Matches words, word prefixes and phrases; returns message ids, totals, pages, and a confirmed zero. No local match modes (decided 2026-10-15).
 
-Calendar events, meeting recaps, transcript lists, transcript content and transcript-text search are
-separate capabilities. Report each one as verified, blocked or unverified; message search alone never
-counts as broad Microsoft 365 search.
+Calendar events and meeting recaps are separate capabilities. Report each one as verified, blocked or
+unverified; message search alone never counts as broad Microsoft 365 search. Transcripts are searched by
+`search_transcripts` (below); the Graph route they use is verified on one account only.
 
 ## 8. History, exports, sending and deleting
 
@@ -155,6 +157,12 @@ counts as broad Microsoft 365 search.
   are ignored by design** (decided 2026-10-16): a page the user can read in Teams can also be read,
   screenshotted or retyped, so the connector does not check a page's export or extract permissions. A
   page Graph itself refuses to convert is still reported as unavailable.
+- **Meeting transcripts** (decided 2026-10-16, implemented): a recording whose card says Teams made a
+  transcript reads as a `[Transcript: title]` marker. Exports (`include_transcripts`, on by default) write it
+  as text into the export's `transcripts/` folder, and `download_attachment` saves it under its title. The
+  connector reads transcripts even where Teams disables Download for a meeting: it serves a person who
+  already has access to the meeting, and the user decided this for their own access. Reading a transcript
+  changes nothing in Teams.
 - **Meeting and membership events** read as one short line each, never as their raw markup. The
   line keeps what Teams shows (a meeting's subject, duration and participants, members who joined or
   left, a new topic) and drops identifiers and flags.

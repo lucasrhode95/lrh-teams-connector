@@ -185,6 +185,9 @@ class FakeTeams:
     loop_reads: list[str] = field(default_factory=list)
     fail_deletes: dict[str, str] = field(default_factory=dict)  # message id -> "network", "403" or "401"
     partial_invites: bool = False  # invites answer 207 with an error for the last recipient
+    # meeting transcripts by recording drive item id: {"id", "document" (the JSON), "denied" (Graph refuses)}
+    transcripts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    videos: list[dict[str, Any]] = field(default_factory=list)  # search hits, in order (see add_meeting)
     token_counter: int = 0
 
     # ------------------------------------------------------------------ routing
@@ -494,8 +497,63 @@ class FakeTeams:
             return httpx.Response(207, json={"value": [granted, {"error": error}]})
         return httpx.Response(200, json={"value": [{"id": "perm", "roles": body["roles"]}]})
 
+    def _search(self, body: dict[str, Any]) -> httpx.Response:
+        """Graph's search over drive items: the videos in order, one page at a time (terms are not matched:
+        the connector checks transcripts itself)."""
+        request = body["requests"][0]
+        offset, size = int(request.get("from", 0)), int(request.get("size", 25))
+        hits = [
+            {
+                "hitId": str(number),
+                "rank": number,
+                "resource": {
+                    "id": video["itemId"],
+                    "name": video["name"],
+                    "createdDateTime": video["createdDateTime"],
+                    "parentReference": {"driveId": video["driveId"]},
+                    "webUrl": "https://tenant.sharepoint.com/synthetic",
+                },
+            }
+            for number, video in enumerate(self.videos[offset : offset + size], start=offset + 1)
+        ]
+        container = {
+            "hits": hits,
+            "total": len(self.videos),
+            "moreResultsAvailable": offset + size < len(self.videos),
+        }
+        return httpx.Response(200, json={"value": [{"searchTerms": [], "hitsContainers": [container]}]})
+
+    def _transcript(self, parts: list[str], query: dict[str, list[str]]) -> httpx.Response:
+        """A recording's transcripts: the listing, and the JSON content of the one listed."""
+        entry = self.transcripts.get(parts[3])
+        if entry is not None and entry.get("denied"):
+            return httpx.Response(403, json={"error": {"code": "accessDenied", "message": "denied"}})
+        if entry is None:
+            return _page([])
+        if len(parts) == 6:
+            return _page([{"id": entry["id"], "isDefault": True, "displayName": "Synthetic"}])
+        if (
+            len(parts) == 8
+            and parts[6] == entry["id"]
+            and parts[7] == "content"
+            and query.get("format") == ["json"]
+        ):
+            if isinstance(entry["document"], bytes):  # a body that is not JSON
+                return httpx.Response(200, content=entry["document"])
+            return httpx.Response(200, json=entry["document"])
+        return _not_found()
+
     def _graph(self, request: httpx.Request, path: str, query: dict[str, list[str]]) -> httpx.Response:
         parts = path.strip("/").split("/")
+        if request.method == "POST" and path == "/search/query":
+            return self._search(json.loads(request.content))
+        if (
+            len(parts) >= 6
+            and parts[0] == "drives"
+            and parts[2] == "items"
+            and parts[4:6] == ["media", "transcripts"]
+        ):
+            return self._transcript(parts, query)
         if request.method == "PUT" and path.startswith("/me/drive/root:/") and path.endswith(":/content"):
             return self._upload(request, path, query)
         if (
@@ -758,3 +816,51 @@ def _missing(session: dict[str, Any]) -> list[str]:
             index += 1
         ranges.append(f"{start}-" if index == size else f"{start}-{index - 1}")
     return ranges
+
+
+def recording_card(title: str, drive: str, item: str, transcript_id: str | None) -> str:
+    """A recording card's markup as Chat Service sends it: the video item, and the transcript if any."""
+    items = (
+        f'<item type="onedriveForBusinessVideo" driveId="{drive}" driveItemId="{item}" '
+        f'id="v-{item}" uri="x"/>'
+    )
+    if transcript_id:
+        items += (
+            f'<item type="onedriveForBusinessTranscript" driveId="{drive}" driveItemId="{item}" '
+            f'id="{transcript_id}" uri="x"/><item type="amsTranscript" id="a-{item}" uri="y"/>'
+        )
+    return (
+        '<URIObject type="Video.2/CallRecording.1" uri="https://example.invalid/card">'
+        f"<Title>{title}</Title>"
+        f'<a href="https://tenant.sharepoint.com/:v:/p/owner/{item}">recording</a>'
+        f"<RecordingContent>{items}</RecordingContent></URIObject>"
+    )
+
+
+def add_meeting(
+    fake: FakeTeams,
+    *,
+    chat_id: str,
+    title: str,
+    when: str,
+    drive: str,
+    item: str,
+    transcript_id: str | None,
+    document: dict[str, Any] | None = None,
+    denied: bool = False,
+    message_id: str | None = None,
+) -> None:
+    """Put one synthetic meeting in the tenant: a recording card in the chat (sent at ``when``), the video
+    search finds, and its transcript (``document`` in Teams' JSON form) when there is one."""
+    chat = fake.chats[chat_id]
+    chat.messages.append(
+        cs_message(
+            message_id or f"rec-{item}",
+            when,
+            recording_card(title, drive, item, transcript_id),
+            kind="RichText/Media_CallRecording",
+        )
+    )
+    fake.videos.append({"driveId": drive, "itemId": item, "name": f"{title}.mp4", "createdDateTime": when})
+    if transcript_id:
+        fake.transcripts[item] = {"id": transcript_id, "document": document or {}, "denied": denied}

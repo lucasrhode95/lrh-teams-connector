@@ -31,6 +31,7 @@ async def test_mcp_exposes_current_contract_and_reads_synthetic_chats(context: A
             "export_chats",
             "download_attachment",
             "get_presence",
+            "search_transcripts",
             "send_message",
             "delete_messages",
         }
@@ -42,6 +43,8 @@ async def test_mcp_exposes_current_contract_and_reads_synthetic_chats(context: A
         assert tools["delete_messages"].annotations.destructiveHint is True
         assert "explicit confirmation" in (tools["delete_messages"].description or "")
         assert "files" in tools["send_message"].inputSchema["properties"]
+        assert "include_transcripts" in tools["export_chats"].inputSchema["properties"]
+        assert tools["search_transcripts"].annotations.readOnlyHint is True
         assert tools["search_messages"].annotations.readOnlyHint is True
 
         auth_status = await client.call_tool("auth_status", {})

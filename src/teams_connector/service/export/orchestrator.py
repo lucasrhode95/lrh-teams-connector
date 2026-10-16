@@ -177,7 +177,14 @@ class Exports:
                 for message in page:
                     if request.include_attachments:
                         await self._add_meeting_notes(message, notes)
-                    _name_attachments(message, names, used, references)
+                    _name_attachments(
+                        message,
+                        names,
+                        used,
+                        references,
+                        include_files=request.include_attachments,
+                        include_transcripts=request.include_transcripts,
+                    )
                     record = (
                         formatter.txt_message(message)
                         if request.format == "txt"
@@ -257,7 +264,7 @@ class Exports:
         which download finishes first; a file fetched in parallel that no longer fits the total is dropped.
         ``budget_used`` is the (items, bytes) of the conversation's limits the meeting notes already took.
         """
-        if not request.include_attachments or not references:
+        if not references:  # only the kinds the request includes are referenced
             return ConversationOutput(text_path), 0, 0, 0
 
         report(phase="attachments", attachments_total=total_before + len(references))
@@ -303,16 +310,38 @@ class Exports:
         return ConversationOutput(text_path, files), len(references), len(files), len(unavailable)
 
 
+TRANSCRIPT_FOLDER = "transcripts/"
+
+
 def _name_attachments(
     message: Message,
     names: dict[tuple[str, str], str],
     used: set[str],
     references: dict[str, Attachment],
+    *,
+    include_files: bool,
+    include_transcripts: bool,
 ) -> None:
     """Give each downloadable attachment one name for this export. A source keeps its name wherever it
-    appears; a different source whose name is taken gets a number. The marker is renamed to match."""
-    for index, attachment in enumerate(message.attachments):
+    appears; a different source whose name is taken gets a number. The marker is renamed to match.
+
+    Files and images are named in the conversation's folder; a transcript goes to the ``transcripts/`` folder
+    as ``<title>.txt``. An attachment the request leaves out is not referenced: its marker is removed for a
+    transcript (it has no other form) and kept for a file, as an unsaved file always is.
+    """
+    kept: list[Attachment] = []
+    for attachment in message.attachments:
         if attachment.source is None or attachment.source == "loop":  # notes go in the text instead
+            kept.append(attachment)
+            continue
+        if attachment.source == "transcript":
+            if not include_transcripts:
+                message.text = _without(message.text, f"[Transcript: {attachment.name}]")
+                continue
+            kept.append(_name_transcript(attachment, names, used, references, message))
+            continue
+        if not include_files:
+            kept.append(attachment)
             continue
         key = (attachment.source, attachment.source_id or attachment.url or attachment.name)
         final = names.get(key)
@@ -323,22 +352,60 @@ def _name_attachments(
         if final != attachment.name:
             label = _label(attachment)
             message.text = message.text.replace(f"[{label}: {attachment.name}]", f"[{label}: {final}]")
-            message.attachments[index] = attachment.model_copy(update={"name": final})
+            kept.append(attachment.model_copy(update={"name": final}))
+        else:
+            kept.append(attachment)
+    message.attachments = kept
+
+
+def _name_transcript(
+    attachment: Attachment,
+    names: dict[tuple[str, str], str],
+    used: set[str],
+    references: dict[str, Attachment],
+    message: Message,
+) -> Attachment:
+    """A transcript's file in the export: ``transcripts/<title>.txt``, numbered when another name took it. The
+    marker shows the file's name without its extension, so the marker and the file agree."""
+    key = ("transcript", attachment.source_id or attachment.name)
+    final = names.get(key)
+    if final is None:
+        final = TRANSCRIPT_FOLDER + unique_asset_name(f"{attachment.name}.txt", used)
+        names[key] = final
+        references[final] = attachment
+    stem = Path(final).stem
+    if stem != attachment.name:
+        message.text = message.text.replace(f"[Transcript: {attachment.name}]", f"[Transcript: {stem}]")
+    return attachment.model_copy(update={"name": stem})
+
+
+def _without(text: str, marker: str) -> str:
+    """The text with one marker line removed."""
+    return "\n".join(line for line in text.split("\n") if line.strip() != marker).strip("\n")
 
 
 def _label(attachment: Attachment) -> str:
+    if attachment.source == "transcript":
+        return "Transcript"
     return "Image" if attachment.kind == "image" else "File"
 
 
 def _mark_unavailable(path: Path, names: list[str]) -> None:
-    """Replace the markers of attachments that could not be included with an unavailable note."""
+    """Replace the markers of attachments that could not be included with an unavailable note. A transcript is
+    named by its file's stem in the marker, a file by its name."""
     if not names:
         return
     text = path.read_text(encoding="utf-8")
     jsonl = path.suffix.casefold() == ".jsonl"
     for name in names:
+        if name.startswith(TRANSCRIPT_FOLDER):
+            stem = Path(name).stem
+            old, new = f"[Transcript: {stem}]", f"[Attachment unavailable: {stem}]"
+            text = _replace_text(text, old, new, jsonl=jsonl)
+            continue
         for label in ("Image", "File"):
-            text = _replace_text(text, f"[{label}: {name}]", f"[Attachment unavailable: {name}]", jsonl=jsonl)
+            old, new = f"[{label}: {name}]", f"[Attachment unavailable: {name}]"
+            text = _replace_text(text, old, new, jsonl=jsonl)
     path.write_text(text, encoding="utf-8", newline="\n")
 
 

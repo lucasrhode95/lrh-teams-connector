@@ -27,6 +27,7 @@ from teams_connector.remote.graph_teams import (
     GraphPeople,
     GraphWriter,
 )
+from teams_connector.remote.graph_transcripts import GraphTranscripts, GraphVideoSearch
 from teams_connector.remote.image_readers import AmsCredential, AmsImages, GraphHostedImages
 from teams_connector.remote.presence import TeamsPresence
 from teams_connector.remote.substrate_search import SubstrateChatSearch, SubstrateSearch
@@ -40,6 +41,7 @@ from teams_connector.service.history import History
 from teams_connector.service.presence import Presences
 from teams_connector.service.search import Search
 from teams_connector.service.send import Sender
+from teams_connector.service.transcripts import TranscriptSearch
 from teams_connector.store.db import Store, store_path
 
 
@@ -57,6 +59,7 @@ class Services:
     files: Files
     photos: Photos
     presence: Presences
+    transcript_search: TranscriptSearch
 
 
 class AppContext:
@@ -131,12 +134,14 @@ class AppContext:
             anchor_mailbox=f"Oid:{account.object_id}@{account.tenant_id}",
         )
         shared_files = GraphFiles(graph)
+        transcripts = GraphTranscripts(graph)
         files = Files(
             history,
             shared_files,
             AmsImages(transport, AmsCredential(session)),
             GraphHostedImages(graph),
             shared_files,
+            transcripts,
         )
         person = Participant(id=account.object_id, name=name)
         return Services(
@@ -159,6 +164,7 @@ class AppContext:
             deleter=Deleter(catalog, history, chat_service),
             files=files,
             photos=Photos(people),
+            transcript_search=TranscriptSearch(catalog, history, transcripts, GraphVideoSearch(graph)),
             presence=Presences(
                 catalog, TeamsPresence(transport, session, Bearer(account_tokens, "teams.spaces"))
             ),

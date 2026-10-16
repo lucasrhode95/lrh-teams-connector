@@ -34,6 +34,7 @@ from teams_connector.domain.models import (
     MessageSearchResult,
     PresenceResult,
     SendResult,
+    TranscriptSearchResult,
 )
 
 log = logging.getLogger(__name__)
@@ -69,6 +70,12 @@ shown as [File: name] and [Image: name] markers) and returns their local paths. 
 show as [Meeting notes] and a link; download_attachment (as "Meeting notes.txt") and exports read the live \
 page and keep its agenda, notes and tasks. Pass the message_id from \
 get_messages, or the message's sent_at time instead.
+- Transcripts: a meeting recording whose transcript Teams made shows [Transcript: title] in get_messages. \
+download_attachment (as "title") and exports (include_transcripts, on by default; the transcripts folder) \
+save it as text with speakers and times. search_transcripts finds words said in meetings: with \
+conversation_ids it reads those chats' recordings and is complete unless a transcript could not be read or \
+the limit was reached; without them it ranks videos Graph's search returns, keeps only those a meeting chat \
+holds, and is never complete.
 - Messages are read from Teams on each call; nothing is kept locally. Messages with is_deleted=true were \
 deleted in Teams, and Teams keeps no text for them; edited ones show their newest text.
 - Times are UTC; a date-time without an offset is taken as UTC.
@@ -268,6 +275,41 @@ def build_server(context: AppContext) -> FastMCP:
             cursor=cursor,
         )
 
+    @mcp.tool(annotations=READ_ONLY)
+    @_logged
+    async def search_transcripts(
+        terms: Annotated[
+            list[str],
+            Field(
+                description="1 to 25 phrases; an utterance matches when ANY term matches (OR). Each term is "
+                "one phrase matched inside one utterance, on whole words and word prefixes, without case "
+                "or accents, and never read as query syntax. No double quotes."
+            ),
+        ],
+        conversation_ids: Annotated[
+            list[str] | None,
+            Field(
+                description="Scope: up to 100 conversation ids from list_chats or search_chats. Their "
+                "recordings are read in full. Omit to search across meetings (ranked, not complete)."
+            ),
+        ] = None,
+        since: Since = None,
+        until: Until = None,
+        limit: Annotated[int, Field(ge=1, le=100, description="Matches to return, 1 to 100.")] = 25,
+    ) -> TranscriptSearchResult:
+        """Search the transcripts of meeting recordings for words said in the meeting. Each match names its
+        meeting, conversation and recording message (message_id is the id get_messages reads), the speaker,
+        the time into the recording, and the utterance. Read coverage: a result in conversations is complete
+        unless a transcript could not be read or the limit was reached; a result across meetings is ranked
+        and never complete. It counts videos that are not meetings, and those it could not place, apart."""
+        return await (await services()).transcript_search.search(
+            terms,
+            conversation_ids=conversation_ids,
+            since=_utc(since),
+            until=_utc(until),
+            limit=limit,
+        )
+
     @mcp.tool(annotations=LOCAL_FILE)
     @_logged
     async def export_chats(
@@ -279,6 +321,13 @@ def build_server(context: AppContext) -> FastMCP:
         include_attachments: Annotated[
             bool,
             Field(description="Include selected message files and images beside the conversation export."),
+        ] = True,
+        include_transcripts: Annotated[
+            bool,
+            Field(
+                description="Include the meeting transcripts of selected recordings, as text in the "
+                "transcripts folder of the export."
+            ),
         ] = True,
         format: Annotated[
             ExportFormat, Field(description="txt (for people) or jsonl (one JSON record per message).")
@@ -297,6 +346,7 @@ def build_server(context: AppContext) -> FastMCP:
             message_limit=message_limit,
             format=format,
             include_attachments=include_attachments,
+            include_transcripts=include_transcripts,
         )
         loop = asyncio.get_running_loop()
         pending: set[asyncio.Task[None]] = set()
