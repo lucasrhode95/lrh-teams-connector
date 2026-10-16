@@ -116,6 +116,9 @@ If the preferred port is busy, the connector selects another free loopback port.
 per-run session token and rejects non-local hosts. It supports chat selection, an inclusive date
 range in the browser's time zone, a per-chat message limit, and text or attachment-inclusive
 downloads. The browser opens only after the server reports ready and prints the selected URL.
+The date picker behaves like the Outlook connector's: weeks start on Sunday, future days are
+disabled, two clicks in either order make the range, and the calendar stays open until Done or
+Escape. The × beside the field clears the range.
 One conversation with no selected attachments downloads as a plain file; with attachments, its text
 and available files are placed together in a conversation-named folder inside one ZIP. Multiple
 conversations download as one outer ZIP, with an inner ZIP for each conversation with attachments
