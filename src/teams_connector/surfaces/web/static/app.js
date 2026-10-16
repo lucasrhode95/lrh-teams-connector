@@ -13,6 +13,7 @@ themePreference.addEventListener("change", applyTheme);
 
 const chats = [];
 const selected = new Set();
+let previewConversationId = null;
 const $ = (id) => document.getElementById(id);
 const list = $("chat-list");
 const search = $("chat-search");
@@ -26,6 +27,8 @@ const includeSummariesInput = $("include-summaries");
 const statusText = $("status");
 const authHelp = $("auth-help");
 const accountInfo = $("account-info");
+const selectedChats = $("selected-chats");
+const previewContent = $("preview-content");
 const settingsToggle = $("settings-toggle");
 const settingsMenu = $("settings-menu");
 const calendar = $("calendar");
@@ -276,6 +279,63 @@ function updateControls() {
   includeSummariesInput.disabled = busy;
 }
 
+function renderSelection() {
+  count.textContent = selected.size + " selected";
+  downloadButton.disabled = selected.size === 0 || downloadButton.dataset.busy === "true";
+  selectedChats.replaceChildren();
+  for (const id of selected) {
+    const chat = chats.find((item) => item.id === id);
+    if (!chat) continue;
+    const pill = document.createElement("span");
+    pill.className = "selected-pill";
+    const name = document.createElement("span");
+    name.className = "selected-pill-name";
+    name.textContent = chat.name;
+    const remove = document.createElement("button");
+    remove.className = "pill-remove";
+    remove.type = "button";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", "Remove " + chat.name + " from download selection");
+    remove.addEventListener("click", (event) => {
+      event.stopPropagation();
+      selected.delete(id);
+      renderSelection();
+      updateControls();
+      renderChatStates();
+    });
+    pill.append(name, remove);
+    selectedChats.appendChild(pill);
+  }
+}
+
+function renderChatStates() {
+  for (const row of list.querySelectorAll(".chat-row")) {
+    const id = row.dataset.conversationId;
+    const checked = selected.has(id);
+    row.classList.toggle("selected", checked);
+    row.classList.toggle("previewed", id === previewConversationId);
+    const checkbox = row.querySelector('input[type="checkbox"]');
+    if (checkbox) checkbox.checked = checked;
+  }
+}
+
+function setChatSelection(id, checked, { preview = true } = {}) {
+  if (checked) selected.add(id);
+  else selected.delete(id);
+  if (preview) {
+    previewConversationId = id;
+    const chat = chats.find((item) => item.id === id);
+    previewContent.replaceChildren();
+    const placeholder = document.createElement("div");
+    placeholder.className = "preview-empty";
+    placeholder.textContent = chat ? "Loading preview for " + chat.name + "…" : "Loading preview…";
+    previewContent.appendChild(placeholder);
+  }
+  renderSelection();
+  renderChatStates();
+  updateControls();
+}
+
 function renderChats() {
   const query = search.value.trim().toLocaleLowerCase();
   const visible = chats.filter((chat) => !query || chat.name.toLocaleLowerCase().includes(query));
@@ -288,15 +348,19 @@ function renderChats() {
     return;
   }
   for (const chat of visible) {
-    const row = document.createElement("label");
+    const row = document.createElement("div");
     row.className = "chat-row";
+    row.tabIndex = 0;
+    row.setAttribute("role", "group");
+    row.dataset.conversationId = chat.id;
+    row.title = chatTypeLabel(chat) + " · " + (chat.last_message_at
+      ? new Date(chat.last_message_at).toLocaleString() : "No recent activity shown");
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
+    checkbox.setAttribute("aria-label", "Include " + chat.name + " in download");
     checkbox.checked = selected.has(chat.id);
     checkbox.addEventListener("change", () => {
-      if (checkbox.checked) selected.add(chat.id);
-      else selected.delete(chat.id);
-      updateControls();
+      setChatSelection(chat.id, checkbox.checked);
     });
     const avatar = document.createElement("span");
     avatar.className = "chat-avatar avatar";
@@ -311,10 +375,20 @@ function renderChats() {
     name.textContent = chat.name;
     const metadata = document.createElement("span");
     metadata.className = "chat-meta";
-    const when = chat.last_message_at ? new Date(chat.last_message_at).toLocaleString() : "No recent activity shown";
-    metadata.textContent = chatTypeLabel(chat) + " · " + when;
+    metadata.textContent = chat.last_message_at ? new Date(chat.last_message_at).toLocaleString() : "No recent activity shown";
     text.append(name, metadata);
     row.append(checkbox, avatar, text);
+    row.addEventListener("click", (event) => {
+      if (event.target === checkbox) return;
+      setChatSelection(chat.id, !selected.has(chat.id));
+    });
+    row.addEventListener("keydown", (event) => {
+      if (event.target === checkbox || (event.key !== "Enter" && event.key !== " ")) return;
+      event.preventDefault();
+      setChatSelection(chat.id, !selected.has(chat.id));
+    });
+    row.classList.toggle("selected", selected.has(chat.id));
+    row.classList.toggle("previewed", chat.id === previewConversationId);
     list.appendChild(row);
   }
 }
@@ -343,7 +417,12 @@ function applyCatalog(body) {
   accountInfo.hidden = !body.account;
   const known = new Set(chats.map((chat) => chat.id));
   for (const id of Array.from(selected)) if (!known.has(id)) selected.delete(id);
+  if (previewConversationId && !known.has(previewConversationId)) {
+    previewConversationId = null;
+    previewContent.textContent = "The previewed conversation is no longer available.";
+  }
   renderChats();
+  renderSelection();
   updateControls();
 }
 

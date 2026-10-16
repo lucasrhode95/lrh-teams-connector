@@ -132,6 +132,16 @@ def test_web_page_uses_full_panel_layout_and_tracks_system_theme_changes() -> No
     assert "height: 100%;" in styles and 'themePreference.addEventListener("change", applyTheme)' in script
 
 
+def test_selection_pills_and_preview_target_are_separate() -> None:
+    static = Path(routes.__file__).parent / "static"
+    page = (static / "index.html").read_text(encoding="utf-8")
+    script = (static / "app.js").read_text(encoding="utf-8")
+    assert 'id="selected-chats"' in page and 'id="preview-content"' in page
+    assert "let previewConversationId = null" in script
+    assert "event.stopPropagation();\n      selected.delete(id);" in script
+    assert "if (preview) {\n    previewConversationId = id;" in script
+
+
 def test_date_picker_weeks_start_on_sunday_like_outlook() -> None:
     page = (Path(routes.__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
     weekdays = re.search(r'<div class="weekdays"[^>]*>(.*?)</div>', page)
