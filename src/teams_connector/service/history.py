@@ -18,7 +18,7 @@ from teams_connector.domain.models import Chat, HistoryCoverage, Message, Messag
 from teams_connector.remote.ports import ChannelHistoryReader, ChatHistoryReader, HistoryReader
 from teams_connector.service import cursors
 from teams_connector.service.catalog import Catalog
-from teams_connector.service.summaries import MeetingSummaries
+from teams_connector.service.summaries import MeetingSummaries, withhold_meeting_notes
 from teams_connector.store.db import from_iso, iso
 
 REMOTE_PAGE_SIZE = 100
@@ -182,6 +182,8 @@ class History:
                 if over_count or over_limit:
                     stopped = True
                     break
+                if not include_summaries:  # the flag governs the Facilitator's notes too
+                    withhold_meeting_notes(message)
                 if include_summaries:  # read before the budget check: the summary counts toward max_chars
                     await self._summaries.add_to_message(message, include_transcripts=True)
                 over_budget = bool(items) and used + len(message.text) > max_chars

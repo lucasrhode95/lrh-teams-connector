@@ -68,7 +68,7 @@ and when it returns no presence it says why.
 - Attachments: download_attachment saves the files a message names (its shared files and pasted images, \
 shown as [File: name] and [Image: name] markers) and returns their local paths. A meeting's Loop notes \
 show as [Meeting notes] and a link; download_attachment (as "Meeting notes.txt") and exports read the live \
-page and keep its agenda, notes and tasks. Pass the message_id from \
+page and keep its agenda, notes and tasks, unless include_summaries is false. Pass the message_id from \
 get_messages, or the message's sent_at time instead.
 - Transcripts: a meeting recording whose transcript Teams made shows [Transcript: title] in get_messages. \
 download_attachment (as "title") and exports (include_transcripts, on by default; the transcripts folder) \
@@ -424,6 +424,13 @@ def build_server(context: AppContext) -> FastMCP:
                 description="The files to save, by the names their markers show; all of them when omitted."
             ),
         ] = None,
+        include_summaries: Annotated[
+            bool,
+            Field(
+                description="Include the meeting notes a Facilitator posts, read from the live Loop page. "
+                "They are AI-generated; off leaves them out, as it leaves out the AI summaries."
+            ),
+        ] = True,
     ) -> DownloadedFiles:
         """Save the files a message names (shared files and pasted images) as local files and return their
         paths. Pass exactly one of message_id or sent_at. A file that cannot be fetched is listed under
@@ -433,7 +440,11 @@ def build_server(context: AppContext) -> FastMCP:
             raise InvalidRequest("Pass exactly one of message_id or sent_at.")
         when = _utc(sent_at) if sent_at is not None else None
         return await (await services()).files.download_attachments(
-            conversation_id, message_id=message_id, sent_at=when, names=names
+            conversation_id,
+            message_id=message_id,
+            sent_at=when,
+            names=names,
+            include_summaries=include_summaries,
         )
 
     @mcp.tool(annotations=SEND)

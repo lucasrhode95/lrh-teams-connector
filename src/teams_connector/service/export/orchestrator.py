@@ -48,7 +48,7 @@ from teams_connector.service.export.packaging import (
 )
 from teams_connector.service.files import Files
 from teams_connector.service.history import History, check_range
-from teams_connector.service.summaries import MeetingSummaries
+from teams_connector.service.summaries import MeetingSummaries, withhold_meeting_notes
 
 MAX_ASSETS_PER_CONVERSATION = 200
 MAX_ASSET_BYTES = 100 * 1024 * 1024
@@ -177,6 +177,8 @@ class Exports:
             ):
                 start = output.tell()
                 for message in page:
+                    if not request.include_summaries:  # the flag governs the Facilitator's notes too
+                        withhold_meeting_notes(message)
                     if request.include_attachments:
                         await self._add_meeting_notes(message, notes)
                     if request.include_summaries:

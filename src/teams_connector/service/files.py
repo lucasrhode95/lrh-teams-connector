@@ -35,6 +35,7 @@ from teams_connector.remote.ports import (
 )
 from teams_connector.service import localfiles, transcript_text
 from teams_connector.service.history import History
+from teams_connector.service.summaries import withhold_meeting_notes
 
 PHOTO_TTL_SECONDS = 3600
 MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
@@ -72,12 +73,16 @@ class Files:
         message_id: str | None,
         sent_at: datetime | None,
         names: list[str] | None,
+        include_summaries: bool = True,
     ) -> DownloadedFiles:
         """Entry point: the files one message names (all of them, or those in ``names``), saved locally.
 
-        The caller passes exactly one of ``message_id`` or ``sent_at``, validated at the surface.
+        The caller passes exactly one of ``message_id`` or ``sent_at``, validated at the surface. Without
+        ``include_summaries`` the message's meeting notes are withheld, and so are their pages.
         """
         message = await self._history.resolve(conversation_id, message_id=message_id, sent_at=sent_at)
+        if not include_summaries:
+            withhold_meeting_notes(message)
         chosen = [item for item in message.attachments if item.source is not None]
         if names is not None:
             available = {item.name for item in chosen}

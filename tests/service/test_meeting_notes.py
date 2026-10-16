@@ -14,7 +14,7 @@ import pytest
 
 from teams_connector import config
 from teams_connector.bootstrap import Services
-from teams_connector.domain.errors import Upstream
+from teams_connector.domain.errors import NotFound, Upstream
 from teams_connector.domain.models import ExportRequest
 from teams_connector.service.export import orchestrator
 from tests.fakes.teams_fake import FakeTeams, cs_message
@@ -89,6 +89,41 @@ async def test_an_allowlisted_senders_page_is_notes_without_a_meeting_end_record
     message = next(m for m in page.items if m.id == "3006")
     assert message.text == f"[Meeting notes] {LINK}"
     assert [(a.name, a.source) for a in message.attachments] == [("Meeting notes.txt", "loop")]
+
+
+async def test_without_summaries_the_notes_are_withheld_and_their_page_is_not_read(
+    services: Services, fake: FakeTeams, notes_message: None
+) -> None:
+    page = await services.history.get_messages(MEETING, include_summaries=False)
+
+    message = next(m for m in page.items if m.id == "3002")
+    assert "Everyone, that is a wrap." in message.text and "[Meeting notes]" not in message.text
+    assert message.attachments == []
+    assert fake.loop_reads == []
+
+
+async def test_an_export_without_summaries_has_no_notes_and_reads_no_page(
+    services: Services, fake: FakeTeams, notes_message: None
+) -> None:
+    artifact = await services.exports.export(
+        ExportRequest(
+            conversation_ids=[MEETING], format="txt", include_attachments=False, include_summaries=False
+        )
+    )
+
+    text = Path(artifact.path).read_text(encoding="utf-8")
+    assert "Everyone, that is a wrap." in text and "[Meeting notes]" not in text
+    assert fake.loop_reads == []
+
+
+async def test_a_download_without_summaries_finds_no_notes(
+    services: Services, fake: FakeTeams, notes_message: None
+) -> None:
+    with pytest.raises(NotFound):
+        await services.files.download_attachments(
+            MEETING, message_id="3002", sent_at=None, names=None, include_summaries=False
+        )
+    assert fake.loop_reads == []
 
 
 async def test_download_saves_the_notes_as_text_read_now(

@@ -167,6 +167,7 @@ def to_message(raw: dict[str, Any], conversation_id: str) -> Message:
     files = _files(raw, props, {item.name.casefold() for item in inline})
     author_id = message_author_id(raw)
     notes = _meeting_notes(content, author_id, {item.name.casefold() for item in [*inline, *files]})
+    own_text = text  # kept for a read that withholds the meeting notes
     if notes:  # the bot's sentence is replaced by the notes marker
         text, inline = "", []
     recording = recording_cards.recording(content) if kind.casefold().startswith("richtext") else None
@@ -180,6 +181,10 @@ def to_message(raw: dict[str, Any], conversation_id: str) -> Message:
             *(f"[Transcript: {item.name}]" for item in transcripts),
         ]
         text = "\n\n".join(part for part in (text, "\n".join(markers)) if part)
+    text_without_notes = None
+    if notes:  # the message's own text and its other markers, as they read with the notes withheld
+        other_markers = [*file_markers(files), *(f"[Transcript: {item.name}]" for item in transcripts)]
+        text_without_notes = "\n\n".join(part for part in (own_text, "\n".join(other_markers)) if part)
     sent_at = message_datetime(raw)
     author = _first_string(raw, "imdisplayname", "imDisplayName", "fromDisplayNameInToken", "displayName")
     message_id = raw.get("id")
@@ -203,6 +208,7 @@ def to_message(raw: dict[str, Any], conversation_id: str) -> Message:
         attachments=[*inline, *files, *notes, *transcripts],
         reply_to_id=str(root) if root and str(root) != str(message_id) else None,
         recording=recording,
+        text_without_notes=text_without_notes,
     )
 
 
