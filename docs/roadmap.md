@@ -46,11 +46,14 @@ text ([architecture](architecture.md#exports)). Still open:
 ### P2.2f — Meeting recaps, and transcripts beyond the first version
 
 Transcripts are implemented: the `[Transcript: title]` marker, exports and downloads, and
-`search_transcripts` (architecture, "Meeting transcripts"; [research](api-research.md#transcripts)).
-Still open:
+`search_transcripts` (architecture, "Meeting transcripts"; [research](api-research.md#transcripts)). Exports
+also carry Teams' AI summary of each transcribed meeting after its marker (`include_summaries`, on by default;
+architecture, "Meeting transcripts"; [research](api-research.md#meeting-summary), 2026-10-16). Still open:
 
-- **Recaps:** the AI summary, mentions and tasks come from an internal service. The route is known from the
-  Recaps app capture (2026-10-10); not built.
+- **Recaps:** mentions and tasks are not built. The AI summary is in exports only, not in `get_messages` or
+  search.
+- **Transcript download default:** whether exports download transcripts by default is left to the user, once
+  agents have used the summaries to judge whether a full transcript is needed.
 - **Channel recordings:** their transcripts are untested. Search skips channel conversations with a note.
 - **Across meetings:** each video costs a few chat reads (at most 25 chats, 20 pages each), so a video old
   enough that many chats were active since is reported as unverified. Measure on a busy tenant before raising

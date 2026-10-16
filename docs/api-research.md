@@ -758,6 +758,32 @@ Not used by the connector; the starting point for roadmap P2.2f.
   - A hit may match the file name instead of the speech.
   - This matches Microsoft's description of Microsoft Search indexing transcribed recordings by what was said.
 
+### Meeting summary
+
+Live, 2026-10-16, one meeting with a transcript and a summary, read-only with the connector's `m365.search`
+sign-in (the summary text is not kept):
+
+- `POST https://substrate.office.com/search/api/v1/recommendations?setflight=AiTasksV2,AiNotesV2,AllowResultsWithoutMeeting,PeopleMentionsV2`
+  answers 200 with the summary. The body is `{"entityRequests": [{"context": {"entityId": …}, "queryParameters":
+  [{"entityType": "MeetingCatchUp"}]}], "scenario": {"name": "MeetingCatchup"}}`. Teams Web's capture of the same
+  call has this shape. Its captured request carried no `X-AnchorMailbox`; the connector sends one, as its other
+  substrate calls do, and the answer matched the capture.
+- The summary is `EntitySets[0].ResultSets[0].Results[0].Source.MeetingSummary`: one line of plain text, about
+  2,300 characters for the probed meeting. The same name under `InsightProcessingStates` is a processing state,
+  not the text.
+- The entity id is `SPO_` + the base64url of the site, web and library GUIDs as comma-joined text + `_` + the
+  recording's drive item id. The GUIDs come from the drive id: `b!` + the base64url of three 16-byte blocks in
+  little-endian GUID byte order, in the order site, web, library. The id built from the card's `driveId` and
+  `driveItemId` matched the captured id.
+- Teams Web's client code (a saved copy of its scripts, captured 2026-10-14) builds the same id and sends the
+  same route and scenario.
+- In the same probe, the web client's other body shape (`Context.EntityId`, scenario `MeetingCatchUp.MeetingRecap`)
+  answered with an upstream failure, so the connector sends the captured shape.
+- Limits: the route is private and undocumented, and its flights are Teams Web's and may change. A meeting
+  without a summary gets an answer without one. One meeting on one account is verified; reassess per deployment
+  (roadmap A1). The Recaps route `meetingcatchup/multilingual/aicontent` below answers related content with
+  `MeetingInsights` and is not used.
+
 ### Recaps and meeting resources
 
 Capture, 2026-10-10 (Recaps app); all HTTP 200:
