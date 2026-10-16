@@ -151,17 +151,16 @@ async def test_latest_n_and_dates_and_deleted_marker(services: Services, fake: F
     )  # Teams keeps no text
 
 
-async def test_several_chats_always_return_outer_zip_and_jsonl(services: Services) -> None:
+async def test_several_chats_return_one_flat_zip_with_attachment_folders_and_jsonl(
+    services: Services,
+) -> None:
     ids = [ONE, CHANNEL]
+    one = packaging.filename_stem(await services.catalog.get(ONE))
+    channel = packaging.filename_stem(await services.catalog.get(CHANNEL))
     zipped = await services.exports.export(ExportRequest(conversation_ids=ids))
+    assert zipped.filename == "teams-conversations.zip"
     with zipfile.ZipFile(zipped.path) as archive:
-        names = archive.namelist()
-        assert len(names) == 2
-        chat_archive_name = next(name for name in names if name.endswith(".zip"))
-        assert any(name.endswith(".txt") for name in names)
-        with zipfile.ZipFile(archive.open(chat_archive_name)) as chat_archive:
-            stem = chat_archive_name.removesuffix(".zip")
-            assert sorted(chat_archive.namelist()) == sorted([f"{stem}.txt", f"{stem}/notes.txt"])
+        assert sorted(archive.namelist()) == sorted([f"{one}.txt", f"{one}/notes.txt", f"{channel}.txt"])
     text_only = await services.exports.export(ExportRequest(conversation_ids=ids, include_attachments=False))
     with zipfile.ZipFile(text_only.path) as archive:
         names = archive.namelist()

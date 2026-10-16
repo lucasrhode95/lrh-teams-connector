@@ -7,7 +7,8 @@
 2. Write each chat's file oldest first by copying the spooled pages in reverse. The attachments are fetched
    through the download cache and written beside the text under those names; one that cannot be fetched is
    marked in the text instead.
-3. Package one file, or one ZIP for several.
+3. Package one flat file, or one ZIP with every flat file at its root and its attachments in a folder
+   named after it.
 
 Nothing is kept outside the temporary folder and the download cache. The export runs inside the caller (an MCP
 tool call, or a UI background task that reports progress and can be cancelled). A cancelled export leaves no
@@ -38,9 +39,9 @@ from teams_connector.service import localfiles
 from teams_connector.service.catalog import Catalog
 from teams_connector.service.export import formatter
 from teams_connector.service.export.packaging import (
+    ConversationOutput,
     filename_stem,
     package,
-    package_conversation,
     unique_asset_name,
 )
 from teams_connector.service.files import Files
@@ -78,7 +79,7 @@ class Exports:
         suffix = ".jsonl" if request.format == "jsonl" else ".txt"
         work = Path(tempfile.mkdtemp(prefix=".export-", dir=localfiles.kept_dir("exports")))
         try:
-            outputs: list[Path] = []
+            outputs: list[ConversationOutput] = []
             summary: list[ExportedChat] = []
             used: set[str] = set()
             attachments_total = attachments_downloaded = attachments_failed = 0
@@ -99,7 +100,6 @@ class Exports:
                     references,
                     request,
                     text_path,
-                    stem,
                     report,
                     attachments_total,
                     attachments_downloaded,
@@ -239,21 +239,20 @@ class Exports:
         references: dict[str, Attachment],
         request: ExportRequest,
         text_path: Path,
-        stem: str,
         report: Callable[..., None],
         total_before: int,
         downloaded_before: int,
         failed_before: int,
         *,
         budget_used: tuple[int, int] = (0, 0),
-    ) -> tuple[Path, int, int, int]:
-        """Fetch the chat's attachments through the download cache and package them with its text.
+    ) -> tuple[ConversationOutput, int, int, int]:
+        """Fetch the chat's attachments through the download cache, to be packaged beside its text.
 
         An attachment that cannot be fetched, or lies beyond the export's limits, is marked in the text.
         ``budget_used`` is the (items, bytes) of the conversation's limits the meeting notes already took.
         """
         if not request.include_attachments or not references:
-            return text_path, 0, 0, 0
+            return ConversationOutput(text_path), 0, 0, 0
 
         report(phase="attachments", attachments_total=total_before + len(references))
         files: list[tuple[Path, str]] = []
@@ -285,8 +284,7 @@ class Exports:
             )
 
         _mark_unavailable(text_path, unavailable)
-        result = package_conversation(text_path, files, folder_name=stem)
-        return result, len(references), downloaded, failed
+        return ConversationOutput(text_path, files), len(references), downloaded, failed
 
 
 def _name_attachments(
