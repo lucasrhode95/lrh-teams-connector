@@ -299,10 +299,10 @@ once into the download cache (see Storage), and the tool returns the local paths
 SharePoint discovery belongs to the SharePoint connector. Email attachments belong to Outlook.
 
 **Meeting notes.** When a meeting ends, its "Facilitator" app posts a link to the meeting's Loop notes
-page ([research](api-research.md#loop-pages-and-meeting-notes)). An app (`28:`) message whose bot metadata
-names `eventType: TM_MeetingEnded` and whose HTML has a `FluidAutoEmbedLink` anchor to a `/:fl:/` link
+page ([research](api-research.md#loop-pages-and-meeting-notes)). A message from an allowlisted sender (`config.NOTES_SENDER_IDS`, the meeting's Facilitator app)
+and whose HTML has a `FluidAutoEmbedLink` anchor to a `/:fl:/` link
 reads as `[Meeting notes] <link>` instead of the app's sentence, and carries a `loop` attachment named
-`Meeting notes.txt`; reading fetches nothing. Any other message with such a link keeps its text.
+`Meeting notes.txt`; reading fetches nothing. The page is read only for such messages, through Graph's HTML conversion, which may redirect once to a regional media host (`config.NOTES_MEDIA_HOSTS`), followed without credentials. Any other message with such a link keeps its text.
 
 Exports (with attachments) and `download_attachment` read the page with one Graph
 `GET /shares/{share}/driveItem/content?format=html`, and `remote/loop_notes.py` keeps the agenda and goal,

@@ -42,6 +42,9 @@ text ([architecture](architecture.md#exports)). Still open:
   `[Meeting notes] <link>`; the title appears only once the page is read. Is there a name to show without
   reading the page?
 - Decided 2026-10-16: the downloaded file is text, not the PDF (`?format=pdf`).
+- Done 2026-10-16: notes are recognized by the allowlisted Facilitator sender, not by the meeting-ended record, and
+  the converted page's media host is named in config for that one read (api-research, "Meeting notes" live
+  findings). Checked live on the standup's rundown page.
 
 ### P2.2f — Meeting recaps, and transcripts beyond the first version
 

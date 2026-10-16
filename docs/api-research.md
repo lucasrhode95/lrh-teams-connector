@@ -602,6 +602,11 @@ reads meeting notes through `?format=html` since 2026-10-15 (exports and downloa
 them is untested. The connector does not check them, by design (decided 2026-10-16).
 Loop components that people paste into a chat may use the same `FluidAutoEmbedLink` embed; untested.
 
+**Live, 2026-10-16** (the standup's rundown message, the connector's read, and a browser capture of a reload):
+- The browser loads the page as a live Fluid document from SharePoint: `POST …/_api/v2.1/drives/{drive}/items/{item}/opStream/snapshots/trees/latest` (`application/ms-fluid`; two responses of about 97 KB and 149 KB, both containing the page's wording). The HAR strips credential headers, so the capture does not show which credential it used. The connector has no SharePoint-audience token, so it does not use this route.
+- The connector's read, `GET /shares/{share}/driveItem/content?format=html` with the Teams client's Graph token, answered with a redirect to a regional Fluid media host, `francecentral1-mediap.svc.ms` for this tenant. The browser capture has no request to that host. The read followed the redirect once, without credentials, once the host was named in `config.NOTES_MEDIA_HOSTS`; the converted page then parsed into headings and bullets, and the AI disclaimer was dropped as before.
+- The rundown's sender is the Facilitator app: one sender id across its three messages in the standup chat. `config.NOTES_SENDER_IDS` allowlists that Microsoft app's id, so a link from it is read whether or not the meeting-ended record is present. The rundown message has the embed but no meeting-ended metadata.
+
 ### Sending files
 
 Teams Web, Capture 2026-10-15: a one-on-one and a four-member group chat, a repeated name, an 8 MB file and an
