@@ -1,0 +1,329 @@
+"""Searching meeting transcripts: the words in the transcripts of meeting recordings.
+
+Two ways in, one result shape (docs/requirements.md §8, docs/roadmap.md P2.2f):
+
+- **In conversations** (conversation_ids given, optionally with dates): the recording messages of those chats
+  are read, and each recording's transcript is searched. The result is complete within the scope unless a
+  transcript could not be read or the limit was reached.
+- **Across meetings** (no conversations): Graph's search finds transcribed videos by their spoken words,
+  which ranks them but does not prove they are meetings. Each video is kept only when a meeting chat holds a
+  recording card naming that very drive item, which also gives its chat. The result is never complete: it is
+  ranked, its total is approximate, and videos no chat accounts for are counted as not meetings.
+
+Terms are phrases matched inside one utterance (service/transcript_text.py). Pure matching and rendering
+live in transcript_text; this module reads the chats, the transcripts and the search, and decides what a
+result says.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import Literal
+
+from teams_connector.domain.errors import ConnectorError, InvalidRequest
+from teams_connector.domain.models import (
+    Chat,
+    Message,
+    RecordingRef,
+    Transcript,
+    TranscriptHit,
+    TranscriptSearchCoverage,
+    TranscriptSearchResult,
+)
+from teams_connector.remote.ports import TranscriptReader, VideoHit, VideoSearch
+from teams_connector.service import transcript_text
+from teams_connector.service.catalog import Catalog
+from teams_connector.service.history import History, check_range
+
+MAX_TERMS = 25
+MAX_TERM_CHARS = 200
+MAX_LIMIT = 100
+MAX_CONVERSATIONS = 100
+CANDIDATE_PAGE = 25  # videos per search request
+MAX_CANDIDATES = 40  # videos checked per call across meetings: each costs a few chat reads
+MAX_CHATS_PER_VIDEO = 25  # chats read to find one video's recording card
+MAX_PAGES_PER_CHAT = 20  # history pages read per chat when looking for a card
+CHAT_KINDS = ("meeting", "group", "one_on_one")  # where recording cards are posted
+
+
+@dataclass
+class _Tally:
+    recordings: int = 0  # transcripts whose text was searched
+    unavailable: int = 0  # recordings whose transcript could not be read
+    untranscribed: int = 0  # recording cards Teams made no transcript for
+    candidates: int = 0  # across meetings: videos checked
+    not_meetings: int = 0  # across meetings: videos no chat holds a recording card for
+    unverified: int = 0  # across meetings: videos whose chats could not all be read
+    channels_skipped: int = 0
+    notes: list[str] = field(default_factory=list)
+
+
+class TranscriptSearch:
+    """Entry point for transcript search (MCP). Reads only; nothing is written to Teams."""
+
+    def __init__(
+        self,
+        catalog: Catalog,
+        history: History,
+        transcripts: TranscriptReader,
+        videos: VideoSearch,
+    ) -> None:
+        self._catalog = catalog
+        self._history = history
+        self._transcripts = transcripts
+        self._videos = videos
+
+    async def search(
+        self,
+        terms: list[str],
+        *,
+        conversation_ids: list[str] | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int = 25,
+    ) -> TranscriptSearchResult:
+        """Find the utterances that match any term. ``terms`` are checked here, once, at this entry point."""
+        words = _checked_terms(terms)
+        check_range(since, until)
+        if not 1 <= limit <= MAX_LIMIT:
+            raise InvalidRequest(f"limit must be between 1 and {MAX_LIMIT}.")
+        if conversation_ids is not None:
+            ids = list(dict.fromkeys(i.strip() for i in conversation_ids if i.strip()))
+            if not ids or len(ids) > MAX_CONVERSATIONS:
+                raise InvalidRequest(f"Pass 1 to {MAX_CONVERSATIONS} conversation ids, or omit them.")
+            return await self._in_conversations(words, ids, since, until, limit)
+        return await self._across_meetings(words, since, until, limit)
+
+    # ------------------------------------------------------------------ in conversations
+
+    async def _in_conversations(
+        self,
+        words: list[str],
+        ids: list[str],
+        since: datetime | None,
+        until: datetime | None,
+        limit: int,
+    ) -> TranscriptSearchResult:
+        tally = _Tally()
+        hits: list[TranscriptHit] = []
+        seen: set[tuple[str, str]] = set()
+        for conversation_id in ids:
+            chat = await self._catalog.get(conversation_id)
+            if chat.kind == "channel":
+                tally.channels_skipped += 1
+                continue
+            async for page in self._history.selection(chat, since=since, until=until):
+                for message in page:
+                    recording = message.recording
+                    if recording is None or (recording.drive_id, recording.item_id) in seen:
+                        continue
+                    seen.add((recording.drive_id, recording.item_id))
+                    if not _transcribed(message):
+                        tally.untranscribed += 1
+                        continue
+                    hits.extend(await self._hits_of(chat, message, recording, words, tally))
+                    if len(hits) >= limit:
+                        return self._result("conversations", hits[:limit], tally, truncated=True)
+        return self._result("conversations", hits, tally, truncated=False)
+
+    # ------------------------------------------------------------------ across meetings
+
+    async def _across_meetings(
+        self,
+        words: list[str],
+        since: datetime | None,
+        until: datetime | None,
+        limit: int,
+    ) -> TranscriptSearchResult:
+        tally = _Tally()
+        hits: list[TranscriptHit] = []
+        offset = 0
+        query = _video_query(words)
+        while True:
+            page, total = await self._videos.videos(query, offset=offset, size=CANDIDATE_PAGE)
+            if not page:
+                break
+            for video in page:
+                if not _in_dates(video, since, until):
+                    continue
+                if tally.candidates >= MAX_CANDIDATES:
+                    return self._across_result(hits, tally, truncated=True)
+                tally.candidates += 1
+                located = await self._recording_card(video, tally)
+                if located is None:
+                    tally.not_meetings += 1
+                    continue
+                chat, message = located
+                recording = _transcribed(message)
+                if recording is None:
+                    tally.untranscribed += 1
+                    continue
+                hits.extend(await self._hits_of(chat, message, recording, words, tally))
+                if len(hits) >= limit:
+                    return self._across_result(hits[:limit], tally, truncated=True)
+            offset += len(page)
+            if total is not None and offset >= total:
+                break
+        return self._across_result(hits, tally, truncated=False)
+
+    def _across_result(
+        self, hits: list[TranscriptHit], tally: _Tally, *, truncated: bool
+    ) -> TranscriptSearchResult:
+        tally.notes.append(
+            "Ranked search over the videos Graph returns: not a complete list of meetings, and the total is "
+            "approximate."
+        )
+        return self._result("meetings", hits, tally, truncated=truncated, complete=False)
+
+    async def _recording_card(self, video: VideoHit, tally: _Tally) -> tuple[Chat, Message] | None:
+        """The meeting chat and recording message that name this video, or None. Only chats active since the
+        video was created are read, quietest first, so the cost is bounded by the chats that followed it."""
+        if video.created_at is None:
+            return None
+        since = video.created_at - timedelta(hours=1)
+        until = video.created_at + timedelta(days=1)
+        chats = await self._catalog.active_since(since, CHAT_KINDS)
+        if len(chats) > MAX_CHATS_PER_VIDEO:
+            tally.unverified += 1
+        for chat in chats[:MAX_CHATS_PER_VIDEO]:
+            pages = 0
+            async for page in self._history.selection(chat, since=since, until=until):
+                pages += 1
+                for message in page:
+                    recording = message.recording
+                    if (
+                        recording is not None
+                        and recording.item_id == video.item_id
+                        and (recording.drive_id == video.drive_id)
+                    ):
+                        return chat, message
+                if pages >= MAX_PAGES_PER_CHAT:
+                    tally.unverified += 1
+                    break
+        return None
+
+    # ------------------------------------------------------------------ shared
+
+    async def _hits_of(
+        self,
+        chat: Chat,
+        message: Message,
+        recording: RecordingRef,
+        words: list[str],
+        tally: _Tally,
+    ) -> list[TranscriptHit]:
+        """Read one recording's transcript and return its matching utterances. A transcript that cannot be
+        read is counted as unavailable, not as a search that found nothing."""
+        tally.recordings += 1
+        try:
+            transcript = await self._transcripts.default(recording)
+        except ConnectorError:
+            transcript = None
+        if transcript is None:
+            tally.unavailable += 1
+            return []
+        return _matches(chat, message, recording, transcript, words)
+
+    def _result(
+        self,
+        mode: Literal["conversations", "meetings"],
+        hits: list[TranscriptHit],
+        tally: _Tally,
+        *,
+        truncated: bool,
+        complete: bool = True,
+    ) -> TranscriptSearchResult:
+        notes = list(tally.notes)
+        if tally.untranscribed:
+            notes.append(f"{tally.untranscribed} recording(s) have no transcript in Teams.")
+        if tally.unavailable:
+            notes.append(
+                f"{tally.unavailable} recording(s) had no readable transcript; they were not searched."
+            )
+        if tally.channels_skipped:
+            notes.append("Channel recordings are not searched yet; channel conversations were skipped.")
+        if tally.unverified:
+            notes.append(
+                f"{tally.unverified} video(s) could not be checked against every chat that might hold them."
+            )
+        if truncated:
+            notes.append(
+                "More matches or videos may exist; narrow the terms, the dates or the conversations."
+            )
+        return TranscriptSearchResult(
+            items=hits,
+            coverage=TranscriptSearchCoverage(
+                mode=mode,
+                complete=complete and tally.unavailable == 0 and not truncated,
+                recordings=tally.recordings,
+                transcripts_unavailable=tally.unavailable,
+                candidates=tally.candidates,
+                not_meetings=tally.not_meetings,
+                truncated=truncated,
+                notes=notes,
+            ),
+        )
+
+
+def _transcribed(message: Message) -> RecordingRef | None:
+    """The recording of a message whose card says Teams made a transcript, or None."""
+    recording = message.recording
+    if recording is None or not any(item.source == "transcript" for item in message.attachments):
+        return None
+    return recording
+
+
+def _matches(
+    chat: Chat,
+    message: Message,
+    recording: RecordingRef,
+    transcript: Transcript,
+    words: list[str],
+) -> list[TranscriptHit]:
+    hits: list[TranscriptHit] = []
+    for entry in transcript.entries:
+        term = next((term for term in words if transcript_text.matches(term, entry.text)), None)
+        if term is None:
+            continue
+        hits.append(
+            TranscriptHit(
+                meeting=recording.title,
+                conversation_id=chat.id,
+                message_id=message.id,
+                speaker=entry.speaker,
+                offset=transcript_text.offset_label(entry.start),
+                text=entry.text,
+                term=term,
+            )
+        )
+    return hits
+
+
+def _checked_terms(terms: list[str]) -> list[str]:
+    """One to 25 phrases, each non-empty, short, and without double quotes (the query is built from them)."""
+    if not terms or len(terms) > MAX_TERMS:
+        raise InvalidRequest(f"Pass 1 to {MAX_TERMS} terms.")
+    checked: list[str] = []
+    for term in terms:
+        text = term.strip() if isinstance(term, str) else ""
+        if not text or len(text) > MAX_TERM_CHARS or '"' in text:
+            raise InvalidRequest(
+                f"Each term must be 1 to {MAX_TERM_CHARS} characters, with no double quotes."
+            )
+        checked.append(text)
+    return checked
+
+
+def _video_query(words: list[str]) -> str:
+    """Graph's search over video files for any of the phrases."""
+    phrases = " OR ".join(f'"{word}"' for word in words)
+    return f"({phrases}) filetype:mp4"
+
+
+def _in_dates(video: VideoHit, since, until) -> bool:
+    if video.created_at is None:
+        return since is None and until is None
+    if since is not None and video.created_at < since:
+        return False
+    return not (until is not None and video.created_at > until)
