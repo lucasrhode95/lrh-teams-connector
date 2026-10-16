@@ -60,7 +60,8 @@ class _Tally:
     unverified: int = 0  # across meetings: some chat that could hold the card could not be read
     channels_skipped: int = 0
     notes: list[str] = field(default_factory=list)
-    matched: dict[str, RecordingRef] = field(default_factory=dict)  # recordings with matches, by message id
+    # recordings with matches, by (conversation id, message id): a message id can repeat across chats
+    matched: dict[tuple[str, str], RecordingRef] = field(default_factory=dict)
 
 
 class TranscriptSearch:
@@ -284,7 +285,7 @@ class TranscriptSearch:
             return []
         found = _matches(chat, message, recording, transcript, words)
         if found:
-            tally.matched[message.id] = recording
+            tally.matched[(chat.id, message.id)] = recording
         return found
 
     async def _result(
@@ -349,12 +350,13 @@ class TranscriptSearch:
         Each returned match's recording is in ``tally.matched``, recorded by ``_hits_of``."""
         entries: list[MeetingSummaryEntry] = []
         failed = 0
-        seen: set[str] = set()
+        seen: set[tuple[str, str]] = set()
         for hit in hits:
-            if hit.message_id in seen:
+            key = (hit.conversation_id, hit.message_id)  # a message id can repeat across chats
+            if key in seen:
                 continue
-            seen.add(hit.message_id)
-            read = await self._summaries.read(tally.matched[hit.message_id])
+            seen.add(key)
+            read = await self._summaries.read(tally.matched[key])
             failed += 1 if read.failed else 0
             entries.append(
                 MeetingSummaryEntry(

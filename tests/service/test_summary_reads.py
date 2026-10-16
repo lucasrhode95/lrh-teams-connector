@@ -11,6 +11,7 @@ from teams_connector.service.summaries import SUMMARY_LABEL, SUMMARY_UNAVAILABLE
 from tests.fakes.teams_fake import FakeTeams, add_meeting, synthetic_drive
 
 CHAT = "19:one@unq.gbl.spaces"
+OTHER_CHAT = "19:meeting_abc@thread.v2"
 DRIVE = synthetic_drive(
     "11111111-2222-3333-4444-555555555555",
     "66666666-7777-8888-9999-aaaaaaaaaaaa",
@@ -200,3 +201,40 @@ async def test_the_summaries_follow_the_returned_matches(services: Services, fak
     assert len(result.items) == 1
     assert [entry.meeting for entry in result.summaries] == [result.items[0].meeting]
     assert len(fake.summary_reads) == 1
+
+
+async def test_the_same_message_id_in_two_chats_keeps_each_meetings_summary(
+    services: Services, fake: FakeTeams
+) -> None:
+    add_meeting(
+        fake,
+        chat_id=CHAT,
+        title="Synthetic Standup",
+        when="2026-12-30T10:00:00Z",
+        drive=DRIVE,
+        item="01GD1",
+        transcript_id="t-gd-1",
+        document=DOCUMENT,
+        message_id="rec-same",
+        summary="Synthetic summary one.",
+    )
+    add_meeting(
+        fake,
+        chat_id=OTHER_CHAT,
+        title="Synthetic Review",
+        when="2026-12-31T10:00:00Z",
+        drive=DRIVE,
+        item="01GD2",
+        transcript_id="t-gd-2",
+        document=DOCUMENT,
+        message_id="rec-same",
+        summary="Synthetic summary two.",
+    )
+    await services.catalog.refresh()
+
+    result = await services.transcript_search.search(["deployment"], conversation_ids=[CHAT, OTHER_CHAT])
+
+    assert {entry.summary for entry in result.summaries} == {
+        "Synthetic summary one.",
+        "Synthetic summary two.",
+    }
