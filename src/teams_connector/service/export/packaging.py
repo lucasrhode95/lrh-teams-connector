@@ -1,4 +1,10 @@
-"""Export packaging: one flat file when there is one output, otherwise one ZIP.
+"""Export packaging (requirements §8, decided 2026-10-16).
+
+- A conversation with no saved attachment is one flat file (.txt or .jsonl).
+- A conversation with saved attachments is one ZIP: the flat file at its root and a folder, named after
+  the file, holding the attachments.
+- One conversation downloads as its own file or ZIP; several are wrapped in one outer ZIP holding each
+  conversation's flat file or ZIP.
 
 The final file is created exclusively in the exports directory (a numbered suffix on a name clash),
 so concurrent exports never overwrite each other.
@@ -60,21 +66,16 @@ def unique_asset_name(value: str | None, used: set[str]) -> str:
     return candidate
 
 
-def package_conversation(
-    text_path: Path,
-    assets: Iterable[tuple[Path, str]],
-    *,
-    folder_name: str,
-    has_attachments: bool,
-) -> Path:
-    """Return a text file or a per-conversation ZIP with text and available attachments together."""
+def package_conversation(text_path: Path, assets: Iterable[tuple[Path, str]], *, folder_name: str) -> Path:
+    """The conversation's flat file when no attachment was saved; otherwise a ZIP with the flat file at its
+    root and the attachments in ``folder_name/``."""
     asset_rows = list(assets)
-    if not has_attachments:
+    if not asset_rows:
         return text_path
     target = text_path.with_suffix(".zip")
     try:
         with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            archive.write(text_path, arcname=f"{folder_name}/{text_path.name}")
+            archive.write(text_path, arcname=text_path.name)
             for path, name in asset_rows:
                 archive.write(path, arcname=f"{folder_name}/{name}")
     except BaseException:

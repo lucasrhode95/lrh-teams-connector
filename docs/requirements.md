@@ -128,8 +128,10 @@ counts as broad Microsoft 365 search.
   in time order, so for a channel the latest N are those of the most recently active threads
   (decided 2026-10-15). A page holds whole messages: `page_size` and `max_chars` decide how many, and no message
   text is cut to fit a response (decided 2026-10-15).
-- **Exports** produce one artifact per conversation: the plain TXT/JSONL file, or a ZIP with a folder
-  holding the text and its attachments. Several conversations are wrapped in one outer ZIP.
+- **Exports** produce one artifact per conversation (decided 2026-10-16): the plain TXT/JSONL file when
+  no attachment was saved, otherwise a ZIP with that file at its root and the attachments in a folder
+  named after it. Several conversations are wrapped in one outer ZIP holding each conversation's file
+  or ZIP.
   Attachments are included by default, up to 200 references per conversation, 100 MiB per file and
   250 MiB per conversation. A failed download keeps the text and marks the attachment unavailable.
   TXT is for reading and keeps a lean header; JSONL is for code and keeps every field.

@@ -56,11 +56,10 @@ term matches), optionally scoped by conversation_ids and since/until. Each term 
 whole words and word prefixes; it is never split on its spaces or read as query syntax. Hits are pointers: \
 message_id is the id get_messages reads, and conversation_id is set when it matches a known chat. total is \
 approximate. Read coverage before treating results as complete.
-- Exporting: export_chats returns a local artifact path. One conversation without selected \
-attachments returns a plain .txt/.jsonl file; with attachments it returns a .zip containing one \
-conversation-named folder with the text export and retrieved files. Several conversations return one \
-outer .zip, with an inner .zip for each conversation with attachments and a plain file for each \
-without them. Attachments are included by default; set include_attachments=false to omit them. Date \
+- Exporting: export_chats returns a local artifact path. A conversation with no attachment saved is a \
+plain .txt/.jsonl file; with attachments it is a .zip with that file at its root and the attachments in \
+a folder named after it. Several conversations return one outer .zip holding each conversation's file \
+or .zip. Attachments are included by default; set include_attachments=false to omit them. Date \
 bounds and latest-N message_limit apply per conversation; export fetches the selected history, \
 so a long selection takes a while. Read the returned file path with your file tools.
 - Presence: get_presence reads the other person's availability in a one-on-one chat only. It is read-only, \
@@ -286,9 +285,9 @@ def build_server(context: AppContext) -> FastMCP:
     ) -> ExportArtifact:
         """Export selected conversations and return the local artifact path.
 
-        A single conversation without selected attachments returns a plain text/JSONL file; with
-        attachments it returns a ZIP containing a folder with the text and retrieved files. Several
-        conversations return one outer ZIP of each conversation artifact. Selected history is
+        A conversation with no attachment saved returns a plain text/JSONL file; with attachments it
+        returns a ZIP with that file at its root and the attachments in a folder named after it. Several
+        conversations return one outer ZIP of each conversation's file or ZIP. Selected history is
         fetched from Teams first.
         """
         request = ExportRequest(

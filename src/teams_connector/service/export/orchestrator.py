@@ -285,12 +285,7 @@ class Exports:
             )
 
         _mark_unavailable(text_path, unavailable)
-        result = package_conversation(
-            text_path,
-            files,
-            folder_name=stem,
-            has_attachments=bool(references),
-        )
+        result = package_conversation(text_path, files, folder_name=stem)
         return result, len(references), downloaded, failed
 
 

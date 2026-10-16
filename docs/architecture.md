@@ -266,10 +266,11 @@ This operation does not discover recap or transcript text; those capabilities re
 ### Exports
 
 `export_chats` writes `.txt` by default or `.jsonl` when requested, with inclusive date bounds and an optional
-latest-message limit per conversation. Each conversation becomes one artifact. When its text refers to linked
-files and `include_attachments` is true (the default), the artifact is a ZIP holding a folder with the text and
-the files that could be retrieved; otherwise it is the plain text or JSONL file. Several conversations are
-wrapped in one outer ZIP, `teams-conversations.zip`. A conversation retrieves at most 200 files, 100 MiB per
+latest-message limit per conversation. Each conversation becomes one artifact: the plain text or JSONL file
+when no attachment was saved (none referenced, `include_attachments=false`, or every download failed),
+otherwise a ZIP with that file at its root and the saved attachments in a folder named after it. Several
+conversations are wrapped in one outer ZIP, `teams-conversations.zip`, holding each conversation's file or
+ZIP. A conversation retrieves at most 200 files, 100 MiB per
 file and 250 MiB in total. Later references and failed downloads stay in the text as
 `[Attachment unavailable: …]`. Meeting notes go in the text instead, after their message (see below). The
 result contains a local path; use the MCP client's local file-reading capability to inspect it.
