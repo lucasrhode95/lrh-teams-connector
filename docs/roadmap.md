@@ -5,7 +5,7 @@ Open bugs, improvements, enhancements and validation only. What the connector mu
 evidence is in the [research record](api-research.md). Delete an item once it is done. Codes are
 never reused.
 
-Snapshot **2026-10-15**.
+Snapshot **2026-10-16**.
 
 ## Bugs
 

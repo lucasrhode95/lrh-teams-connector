@@ -214,13 +214,31 @@ async def test_notes_and_files_share_one_attachment_budget(
     assert "[Attachment unavailable: notes.txt]" in Path(artifact.path).read_text(encoding="utf-8")
 
 
-async def test_without_attachments_the_export_reads_no_page(
+async def test_without_attachments_the_export_still_includes_notes_when_summaries_are_enabled(
     services: Services, fake: FakeTeams, notes_message: None
 ) -> None:
     artifact = await services.exports.export(
         ExportRequest(conversation_ids=[MEETING], include_attachments=False)
     )
 
-    assert f"[Meeting notes] {LINK}" in Path(artifact.path).read_text(encoding="utf-8")
-    assert fake.loop_reads == []
+    assert "Meeting notes: Weekly sync 2026-10-14" in Path(artifact.path).read_text(encoding="utf-8")
+    assert fake.loop_reads == [LINK]
     assert not zipfile.is_zipfile(artifact.path)
+
+
+async def test_preview_includes_meeting_notes_as_text_without_fetching_binary_assets(
+    services: Services, fake: FakeTeams, notes_message: None
+) -> None:
+    preview = await services.exports.preview(
+        ExportRequest(
+            conversation_ids=[MEETING],
+            format="txt",
+            include_attachments=False,
+            include_transcripts=False,
+            include_summaries=True,
+        )
+    )
+
+    assert "Meeting notes: Weekly sync 2026-10-14" in preview.text
+    assert fake.loop_reads == [LINK]
+    assert preview.text

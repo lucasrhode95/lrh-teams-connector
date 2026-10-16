@@ -198,6 +198,11 @@ conversation id URL-encoded. Live unless dated otherwise:
   `view=msnp24Equivalent|supportsMessageProperties&pageSize=200&startTime=<epoch ms>` (Capture, 2026-10-14).
 - The Teams Web bundle also has GraphQL `messages(convId, replyChainId, cursor)` and
   `fetchRecentMessagesAfter`; neither takes a date range (Source, 2026-09-28).
+- A meeting chat in the catalog whose roster does not include the account answers 403 with `errorCode`
+  209 and a `message` holding `{"subCode":"AclCheckFailed","details":…}`. The details name the account's
+  MRI and the thread (2026-10-16, local UI preview). The connector reports that the account is not a
+  member and leaves out the details. Why the catalog lists such a chat (for example a meeting the account
+  was invited to but never joined) is unverified.
 
 ### One message
 
@@ -394,6 +399,20 @@ The capture strips credentials, so the upload's auth isn't shown; Source points 
 - Answers one row per MRI: `mri`, `etag`, `etagMatch`, `status`, and `presence` with `availability`,
   `activity`, `deviceType`, `lastActiveTime`, `calendarData`, `workLocation`, `forcedAvailability`,
   `capabilities` and `sourceNetwork`. The connector keeps the first four.
+- Which fields come back depends on the person's state. Probe of 60 one-on-one peers and the account in one
+  request, 2026-10-16, cross-checked with Capture and Source:
+  - `deviceType` is absent for every peer whose availability and activity are both `Offline` (11 of 11): no
+    client is signed in to report one. An `Offline` peer whose activity is `OffWork` still reported
+    `Mobile`. Values seen: `Desktop`, `Mobile`, `ExternalApp`, and `Web` for the account itself (Capture).
+  - `lastActiveTime` is absent for `Available` people (4 peers and the account, also in Capture) and present
+    for Away, Busy, In a call, Out of office and Offline. Teams Web's persona card shows "last seen" only
+    for away, be right back, offline and out of office, and only within a year (Source).
+  - The row `status` is `20000` for a real reading. Six peers answered `40401` with a placeholder `Offline`
+    and `sourceNetwork` `Unknown`; Teams Web names that code `UserNotFound`, beside `20200` Pending, `40300`
+    Forbidden, `40400` NotFound, `40402` NoData and `5000x` failures (Source). The connector treats any
+    status other than `20000` as no presence, so these do not show as offline.
+  - Other fields seen and not kept: `calendarData.isOutOfOffice` (with an `outOfOfficeNote`), a status
+    `note`, `capabilities`, and `forcedAvailability` for the account.
 - The global host (`unifiedPresence`) answers 301 to the regional one; the Skype token gets 401 on both.
 - Teams Web takes its base from `regionGtm("unifiedPresence")` (or an AFD route) and also subscribes at
   `v1/pubsub/subscriptions/` (Source; Capture of `/ups/{region}/…`, where a global `/ups/global/` alias

@@ -25,7 +25,7 @@ overview; this document records the rules and contracts they cannot show.
 | `remote/substrate_search.py` | Search v2 message search and named-chat matches, and Teams Web's search-box people suggestions (`substrate.office.com`), all with the `m365.search` token. |
 | `remote/substrate_summaries.py` | Teams' AI meeting summary from the search recommendations route (`substrate.office.com`, `MeetingCatchUp`), with the `m365.search` token; only `service/summaries.py` calls it. |
 | `service/summaries.py` | The one place that reads a meeting's AI summary for exports, `get_messages` and transcript search, each only for the meetings its result returns. Nothing is cached. |
-| `remote/presence.py`, `service/presence.py` | Presence of a one-on-one peer, read at the presence service AuthZ names (`presenceUPS`); the service keeps a result for a minute and fails open. |
+| `remote/presence.py`, `service/presence.py` | Presence of a one-on-one peer or signed-in user, read at the presence service AuthZ names (`presenceUPS`); the service keeps a result for a minute and fails open. |
 | `remote/inline_images.py`, `remote/image_readers.py` | Pasted images: the marker name and attachment record of each image in a message (`inline_images.py`, no network); the AMS full-size and Graph hosted-copy readers (`image_readers.py`). |
 | `remote/*_mapping.py` and `remote/teams_html.py` | Convert wire responses into domain records and readable message text. Wire-format field names remain inside this layer. |
 | `store/db.py` | Account-bound SQLite store for the chat catalog and account metadata only. Holds no message content and no tokens. |
@@ -69,6 +69,8 @@ and the adapters behind them. The split of backends (which private or public ser
 | UI | `GET /api/status` | token status | none | `TokenProvider` |
 | UI | `GET /api/chats` | `Catalog.list` (or `ensure`) | as `list_chats` | as `list_chats` |
 | UI | `GET /api/photos/{user_id}` | `Photos.photo` | `People` | `GraphPeople` |
+| UI | `GET /api/presence/me`, `GET /api/presence/chat` | `Presences.for_self` / `Presences.for_chat` | active account id or catalog conversation | `TeamsPresence` |
+| UI | `POST /api/preview` and its job routes | `Exports.preview` in the single cancellable preview slot | `HistoryReader` (`History.selection`), `MeetingSummaryReader`, `FileReader` (meeting notes only) | `ChatService`, `GraphChannels`, `SubstrateMeetingSummaries`, `GraphFiles` (text conversion only) |
 | UI | `POST /api/exports` and its job routes | `Exports.export` in a background job | as `export_chats` | as `export_chats` |
 
 ## Authentication and account boundaries
@@ -108,6 +110,8 @@ The MCP server is a stdio process scoped to one client session. It performs no n
 tool needs them. The UI runs only while explicitly started, binds to loopback, and closes on exit,
 Ctrl+C, or its idle timeout. There is no recurring sync task, watcher, remote listener, or background
 refresh process.
+Each authenticated UI API request, including presence reads and preview-status polling, counts as
+activity for the idle timeout.
 
 The chat catalog may be reused for up to ten minutes. Explicit refresh waits for the remote read.
 The local store holds the chat and channel catalog (names, kinds, last activity, photo ids, and the
@@ -213,11 +217,14 @@ Example arguments for a bounded history read:
 ### Presence
 
 `get_presence` reads the availability, activity, device type and last-active time of the other person in a
-one-on-one chat. It reads Unified Presence where AuthZ names it for the account (`presenceUPS`, a
-`teams.microsoft.com/ups/<region>` route, as Teams Web does) with the `teams.spaces` bearer, sends only the
-person's id, keeps the result for a minute in the process, and never blocks the chat list. A failed read
-returns no presence and a reason. Other fields Teams returns (calendar, work location, capabilities) are not
-reported.
+one-on-one chat. The local UI also reads the signed-in user's presence for the account avatar and visible
+one-to-one rows for peer badges and last-seen subtitles. The UI routes resolve identities on the server:
+the own-presence route takes the active account id, and the peer route takes a conversation id checked by
+`Catalog`; the page cannot ask for an arbitrary person's presence. Reads use Unified Presence where AuthZ
+names it for the account (`presenceUPS`, a `teams.microsoft.com/ups/<region>` route, as Teams Web does) with
+the `teams.spaces` bearer, and share a one-minute process cache. A failed read, or a row whose status is not
+`20000` (Teams answers `40401` with a placeholder Offline for a user it does not know), returns no presence
+and a reason. Teams omits the device for offline people and the last-active time for available ones. Other fields Teams returns (calendar, work location, capabilities) are not reported.
 
 ### Message search
 
@@ -285,6 +292,16 @@ result contains a local path; use the MCP client's local file-reading capability
 An export reads each conversation from Teams page by page, newest first, and spools the pages to a temporary
 file; the text is then written oldest first from those pages. The temporary folder is removed when the export
 ends, so a failed export publishes nothing.
+
+The local UI's `/api/preview` uses a separate cancellable job slot and the same text formatter. Starts are
+ordered by arrival: a start that a newer one overtook while it waited is refused with 409, so it never
+replaces the newer job. It reads no binary attachments or transcript files; meeting summaries and Loop notes
+are text enrichment. An initial preview reads at most the newest 200 messages and 1 MiB of text, reports when
+the excerpt may be incomplete, and keeps chronological order. **View entire range** removes only those preview
+caps; the selected date range and message limit still apply. Preview spools are temporary and removed on
+success, failure or cancellation. The status route reports the UTC completion time; the browser keeps at most
+ten completed results in memory until 60 seconds after that time, even if the tab is suspended before
+retrieving the result. No message text is stored in the catalog database or browser storage.
 
 `download_attachment` saves the files a message names: its shared files and its pasted images. Pass exactly
 one of `message_id`, or `sent_at` (the time exactly as the TXT export prints it). `names` selects files by
@@ -409,3 +426,37 @@ as uncertain and never resent. If sign-in fails after some deletes, the rest are
 attempted, so the result still shows what happened. The result lists `deleted` (each message's time and
 the names of the files it shared, which stay in the sender's OneDrive, still shared with the chat),
 `skipped` and `uncertain`. `get_messages` then shows a deleted message as `is_deleted` with no text.
+
+## Local export UI
+
+`uv run teams-connector ui` serves the page on a loopback URL, normally `http://127.0.0.1:8765`, and
+stops after 30 idle minutes (`--port`, `--no-browser` and `--idle-minutes` change that). A busy port is
+replaced by another free loopback port; the browser opens only after the server reports ready and
+prints the URL it chose. Every API call carries a per-run session token and a loopback Host.
+
+The page lists conversations on the left and previews one on the right. Clicking a row previews it. The
+round button that appears on the row's right when you hover adds it to the download or removes it;
+Ctrl+click (Cmd+click on a Mac) previews the row and does the same. Selected conversations keep a check
+on their row and appear as pills under the list, where **Clear all** deselects them. Above them are an
+inclusive date range in the browser's time zone, a per-chat message limit, and a settings menu (the cog)
+with switches for AI meeting summaries (which also govern the meeting's Loop notes), transcripts and
+attachments. Every setting applies to both the download and the preview.
+
+The preview is the export text itself, opened at its newest messages. It shows the latest 200
+messages (at most 1 MiB of text) of the chosen range; **View entire range** shows all of it. A
+preview never downloads attachment or transcript files, but their markers read as in the download.
+The page keeps up to ten previews in memory for 60 seconds after each one finishes. Refresh chats
+reloads the list and the open preview.
+
+The signed-in avatar and visible one-to-one rows show Teams presence. A one-to-one row also shows the
+person's device and, as in Teams, when they were last seen if they are away, out of office or offline;
+each part appears only when Teams reports it. Hovering or focusing a row shows its kind and last
+activity. Presence that cannot be read, or a person Teams does not know, shows as unknown, never as
+offline.
+
+The date picker behaves like the Outlook connector's: weeks start on Sunday, future days are
+disabled, two clicks in either order make the range, and the calendar stays open until Done or
+Escape. The × beside the field clears the range.
+One conversation with no attachment saved downloads as a plain file. Anything else downloads as one
+ZIP: each conversation's plain file at the top, and its attachments in a folder named after that file.
+There is never a ZIP inside the ZIP.

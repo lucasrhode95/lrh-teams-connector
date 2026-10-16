@@ -13,7 +13,8 @@ over one engine:
 
 - **MCP server:** agents find conversations, read history, search message text, discover messages
   online, export conversations, and send a message the user explicitly authorized.
-- **Local UI:** the user exports conversations as text or ZIP bundles without an AI client.
+- **Local UI:** the user exports conversations as text or ZIP bundles without an AI client, with
+  Teams presence for the signed-in user and visible one-to-one peers.
 
 The connector must:
 
@@ -21,7 +22,8 @@ The connector must:
   correct types and honest catalog coverage;
 - read history with reliable paging and inclusive date and count filters;
 - search message text across Teams or in a chosen scope, on the server;
-- treat Teams as the record: keep no local copy of message content (§6);
+- treat Teams as the record: keep no local copy of message content beyond the local UI's short-lived
+  in-memory preview cache (§6);
 - send a text message the user explicitly authorized.
 
 Presence (one-on-one, read only) is part of the reads. Outlook, Teams and
@@ -84,7 +86,7 @@ The current split ([research](api-research.md#microsoft-graph-with-the-teams-cli
 | Meeting transcripts (download and search) | Graph `media/transcripts`, JSON content | Verified on one account and tenant (2026-10-16); the route is not in Graph's documentation, and a fresh account is untested (roadmap A1). The recording card names the recording, so no lookup is needed. |
 | Meeting AI summary (exports, `get_messages`, `search_transcripts`) | Search recommendations route, `MeetingCatchUp` entity, `m365.search` sign-in | Verified on one meeting (2026-10-16); the route is private and not in Graph's documentation. The entity id is built from the recording's drive id, so no lookup is needed (roadmap A1). |
 | Online message discovery | Search v2 (`m365.search`) | Graph `chatMessage` search is denied to the tested client |
-| Presence of one-on-one peers | Teams Unified Presence, private, at the route AuthZ names (`presenceUPS`) | Graph presence needs `Presence.Read`, which the client lacks; the AuthZ route answers the `teams.spaces` bearer ([research](api-research.md#unified-presence)) |
+| Presence of the signed-in user and one-on-one peers | Teams Unified Presence, private, at the route AuthZ names (`presenceUPS`) | Graph presence needs `Presence.Read`, which the client lacks; the AuthZ route answers the `teams.spaces` bearer ([research](api-research.md#unified-presence)) |
 
 Teams-native services stay where they are richer than Graph: presence and read state,
 broad heterogeneous search, and AMS media.
@@ -102,9 +104,15 @@ broad heterogeneous search, and AMS media.
 - The catalog answers from the local store for up to ten minutes; an explicit refresh waits for
   Teams.
 
-## 6. Local data (decided 2026-10-14)
+## 6. Local data (decided 2026-10-14; preview cache added 2026-10-16)
 
-**Teams is the record.** The connector keeps no local copy of message content. Teams itself keeps
+**Teams is the record.** The connector keeps no durable local copy of message content. The local UI
+may keep up to ten completed conversation previews in browser memory for 60 seconds after each
+preview finishes; cache hits do not extend that period. The least recently used entry is evicted
+when adding an eleventh. There is no size limit. Refresh chats, account changes and authentication
+failures clear the cache; closing or reloading the page drops it. Preview jobs hold their result only
+until the UI retrieves it. Preview and export work files are temporary and removed when the job ends.
+This cache exists only to make recently viewed text quick to revisit. Teams itself keeps
 no readable copy of deleted text or of an edited message's earlier version
 ([research](api-research.md#edits-and-deletes)), so the connector shows what Teams returns now: an
 edited message with its newest text and `edited_at`, and a deleted message marked deleted with
@@ -145,6 +153,11 @@ unverified; message search alone never counts as broad Microsoft 365 search. Tra
   Attachments are included by default, up to 200 references per conversation, 100 MiB per file and
   250 MiB per conversation. A failed download keeps the text and marks the attachment unavailable.
   TXT is for reading and keeps a lean header; JSONL is for code and keeps every field.
+- **Local UI preview** (decided 2026-10-16): selecting a conversation shows its plain-text export
+  output beside the list, without fetching binary attachment or transcript files. The initial view
+  covers the newest 200 messages and at most 1 MiB of text within the selected date range and message
+  limit; **View entire range** removes only these preview caps. It runs in a cancellable job separate
+  from downloads, and Refresh chats reloads the active preview.
 - **Attachments by name** (decided and implemented 2026-10-15): one text extraction serves
   `get_messages`, exports and downloads. Files and pasted images appear in the text as markers with
   names derived from the message; `download_attachment` fetches the named files of one message, at

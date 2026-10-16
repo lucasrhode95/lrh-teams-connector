@@ -417,6 +417,12 @@ def describe_failure(
     echo message bodies in error messages; tokens never appear in them.
     """
     where = "Microsoft Graph" if host == "graph.microsoft.com" else "Microsoft Teams"
+    if status == 403 and message and "AclCheckFailed" in message:
+        message = "AclCheckFailed"  # its details name the user and thread; the sentence below says it plainly
+        detail = (
+            "The signed-in account is not a member of this conversation, so Teams does not let it read it."
+            + (f" {detail}" if detail else "")
+        )
     parts = [f"HTTP {status}", code or "no error code"]
     text = ", ".join(parts)
     if message:

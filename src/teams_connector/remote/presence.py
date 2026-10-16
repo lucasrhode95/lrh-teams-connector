@@ -16,6 +16,8 @@ from teams_connector.remote.chat_service_mapping import parse_time
 from teams_connector.remote.teams_session import TeamsSession
 from teams_connector.remote.transport import Credential, Transport, operation
 
+STATUS_OK = 20000  # a real reading; others include 40401 user not found and 50002 federation failed
+
 
 class TeamsPresence:
     """PresenceReader over the regional Unified Presence service."""
@@ -43,11 +45,13 @@ class TeamsPresence:
 
 
 def _presence_of(data: Any) -> Presence | None:
-    """The first person's presence in the response, with only the reported fields."""
+    """The first person's presence in the response, with only the reported fields. A row whose status is
+    not OK (such as 40401, a user the service does not know) carries a placeholder Offline, not a real
+    status, so it counts as no presence."""
     rows = data if isinstance(data, list) else []
     row = next((item for item in rows if isinstance(item, dict)), None)
     presence = row.get("presence") if row else None
-    if not isinstance(presence, dict):
+    if not isinstance(presence, dict) or (row or {}).get("status") != STATUS_OK:
         return None
     return Presence(
         availability=_text(presence.get("availability")),

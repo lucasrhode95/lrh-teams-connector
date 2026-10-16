@@ -154,6 +154,8 @@ class FakeTeams:
     images: dict[str, bytes] = field(default_factory=dict)  # AMS object id -> full-size image bytes
     hosted: dict[str, bytes] = field(default_factory=dict)  # Graph hosted-content id -> image bytes
     presence_fails: bool = False  # the regional presence service answers 503
+    presence_mris: list[str] = field(default_factory=list)
+    presence_unknown: bool = False  # the service answers 40401 (user not found) with a placeholder Offline
     delta_rows: list[dict[str, Any]] = field(default_factory=list)  # rows returned for the next delta
     deleted_chat_ids: list[str] = field(default_factory=list)
     csa_partial: bool = False
@@ -366,6 +368,9 @@ class FakeTeams:
         if self.presence_fails:
             return httpx.Response(503, json={"errorCode": "Unavailable"})
         rows = json.loads(request.content)
+        self.presence_mris.extend(
+            row["mri"] for row in rows if isinstance(row, dict) and isinstance(row.get("mri"), str)
+        )
         presence = {
             "availability": "Available",
             "activity": "InACall",
@@ -380,7 +385,17 @@ class FakeTeams:
         return httpx.Response(
             200,
             json=[
-                {"mri": row["mri"], "etag": "1", "etagMatch": False, "status": 200, "presence": presence}
+                {"mri": row["mri"], "etag": "1", "etagMatch": False, "status": 20000, "presence": presence}
+                if not self.presence_unknown
+                else {
+                    "mri": row["mri"],
+                    "status": 40401,
+                    "presence": {
+                        "availability": "Offline",
+                        "activity": "Offline",
+                        "sourceNetwork": "Unknown",
+                    },
+                }
                 for row in rows
             ],  # fmt: skip
         )

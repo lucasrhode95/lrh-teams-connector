@@ -1,15 +1,11 @@
-# Teams for MCP clients
+![Local MCP clients and the Teams connector, with a screenshot of the browser UI using synthetic Teams data.](https://raw.githubusercontent.com/lucasrhode95/lrh-teams-connector/main/docs/connector-overview.svg)
 
-A local MCP server and browser UI for one user's Microsoft Teams chats and channels.
+A local MCP server and browser UI for one user's Microsoft Teams chats, channels and meetings.
 
 - Find conversations by name or participant, then read chat and channel history.
-- Search message text in chosen chats and dates, or discover messages online through Microsoft Search.
-- Export conversations with their attachments, and download files linked from messages.
-- Send a message, only after you explicitly authorize it, and delete your own chat messages after you confirm the set.
-
-Local search covers the history the connector has prepared, and online search returns bounded
-pages; neither claims to cover every message or meeting transcript. See the
-[requirements](docs/requirements.md) for scope and the [roadmap](docs/roadmap.md) for open work.
+- Search message text and meeting transcripts, with each meeting's AI summary.
+- Export conversations with their attachments, transcripts and summaries.
+- Send a message or delete your own, only after you explicitly authorize it.
 
 ## Requirements
 
@@ -81,6 +77,17 @@ Replace the sample path with your clone’s absolute path. In Windows JSON paths
 
 > **Client compatibility:** These examples require a locally running agentic client that can launch a stdio MCP server. Hosted ChatGPT Web, Claude web chat, Copilot web chat, and similar services cannot start this local process. This project does not provide a remote MCP endpoint; hosted clients require one to be deployed separately.
 
+The UI opens in your browser and stops after 30 minutes without activity:
+
+```bash
+uv run teams-connector ui
+```
+
+![125 percent screenshot of the local Teams connector UI inside a macOS-style browser window. People, chats and messages are synthetic.](https://raw.githubusercontent.com/lucasrhode95/lrh-teams-connector/main/docs/ui-preview.svg)
+
+> The web UI is for manual exports. Its preview is the export's own plain text, built with the same
+> settings as the download; how the page behaves is in [architecture](docs/architecture.md#local-export-ui).
+
 ## MCP tools
 
 The MCP server exposes the tools below. Each one's inputs, results and caveats are in [architecture](docs/architecture.md#mcp-tools).
@@ -102,50 +109,6 @@ The MCP server exposes the tools below. Each one's inputs, results and caveats a
 Message timestamps are returned in UTC.
 
 Which service backs each tool and route, and which private or public service each capability uses, is in [the architecture](docs/architecture.md#services-ports-and-adapters) and [requirements §4](docs/requirements.md#4-backend-choice).
-
-## Browser export UI
-
-Start the local UI when you want to choose conversations and download an export without an MCP
-client:
-
-```bash
-uv run teams-connector ui
-```
-
-It opens a browser on a loopback URL, normally `http://127.0.0.1:8765`, and stops after 30 idle
-minutes. Use `uv run teams-connector ui --help` for `--port`, `--no-browser`, and `--idle-minutes`.
-If the preferred port is busy, the connector selects another free loopback port. The page uses a
-per-run session token and rejects non-local hosts. It supports chat selection, an inclusive date
-range in the browser's time zone, a per-chat message limit, and text or attachment-inclusive
-downloads. The browser opens only after the server reports ready and prints the selected URL.
-The date picker behaves like the Outlook connector's: weeks start on Sunday, future days are
-disabled, two clicks in either order make the range, and the calendar stays open until Done or
-Escape. The × beside the field clears the range.
-One conversation with no attachment saved downloads as a plain file. Anything else downloads as one
-ZIP: each conversation's plain file at the top, and its attachments in a folder named after that file.
-There is never a ZIP inside the ZIP.
-
-The local store holds the chat catalog and account metadata, and nothing else. Message content is not
-kept: Teams is the record, and every history read goes to Teams. The store is separated by Microsoft
-account and checks its stored owner before use; it is not application-encrypted, so follow the storage
-rules for the device. Generated exports and downloaded message attachments are cleaned up after seven
-days the next time their output directory is used. Downloads are cached per source under the data directory's
-`downloads` folder, so a file already there is returned without being fetched again.
-
-## Troubleshooting
-
-- **MCP says sign-in is required:** run `uv run teams-connector auth`, complete Microsoft's device
-  challenge and MFA if requested, then reconnect the MCP server.
-- **A profile is missing:** the explicit auth command checks the shared catalog and asks only for
-  profiles not yet accepted. `status --check` tests token acquisition for those profiles.
-- **A specific chat or file says access denied:** the current sign-in may be valid while that item
-  or operation is unavailable to the account. A cached token does not prove service permission.
-- **The MCP dependency cannot be fetched:** `lrh-m365-auth` is installed from its public GitHub
-  repository over HTTPS; check that github.com is reachable, then run `uv sync --locked` again.
-- **The local UI does not start:** check its printed URL and any automatically selected port. Stop
-  the UI with Ctrl+C; it also exits after the configured idle period.
-- **The store belongs to another account:** do not delete or replace it. Sign into the expected
-  account or choose a separate `TEAMS_CONNECTOR_HOME` location.
 
 ## Microsoft 365 connectors
 
@@ -173,6 +136,7 @@ uv run ruff check .
 uv run ruff format --check .
 uv run pyright
 uv run pytest
+node --test tests/surfaces/export_ui.test.cjs
 ```
 
 Tests use synthetic accounts and fake HTTP transports. They do not use browser captures or real
@@ -183,12 +147,10 @@ Project references: [documentation index](docs/README.md) · [requirements](docs
 ## Disclaimer
 
 > [!WARNING]
-> These tools sign in as Microsoft's own apps and use undocumented Outlook and Teams services.
-> Giving an AI agent access to your work mail, chats or files may break your organization's policies
-> on AI use and data handling, so check with your IT or security team first. The tools are provided
-> as is, without warranty, and the authors are not responsible for any misuse or its consequences.
-> Microsoft, Outlook, Teams, SharePoint and Entra are trademarks of Microsoft; this project is not
-> affiliated with or endorsed by Microsoft.
+> Unofficial: these tools sign in as Microsoft's own apps and use undocumented services. Check your
+> organization's AI and data policies before giving an agent your work data. Provided as is, without
+> warranty. Microsoft, Outlook, Teams, SharePoint and Entra are Microsoft trademarks; this project is
+> not affiliated with Microsoft.
 
 ## License
 

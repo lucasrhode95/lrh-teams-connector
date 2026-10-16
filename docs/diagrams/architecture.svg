@@ -45,7 +45,7 @@
   <text class="card-subtitle" x="930" y="227"><tspan class="code">teams-connector ui</tspan> · started by you when needed</text>
   <rect x="930" y="260" width="750" height="100" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
   <text class="detail" x="950" y="292"><tspan class="code">surfaces/web/</tspan>: Starlette JSON API + static page</text>
-  <text class="detail" x="950" y="320">Choose chats and dates · export jobs · one download</text>
+  <text class="detail" x="950" y="320">Chats · text previews · presence · export jobs</text>
   <text class="detail" x="950" y="348">Localhost only · session token · exits when idle</text>
 
   <!-- No-daemon note. -->

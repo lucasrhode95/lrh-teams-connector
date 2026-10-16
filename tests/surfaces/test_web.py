@@ -4,6 +4,7 @@ import asyncio
 import io
 import re
 import zipfile
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -11,9 +12,12 @@ import pytest
 from httpx import ASGITransport
 
 from teams_connector.bootstrap import AppContext
+from teams_connector.domain.models import Chat
+from teams_connector.service.catalog import Catalog
+from teams_connector.service.export.orchestrator import Exports
 from teams_connector.surfaces.web import routes
-from teams_connector.surfaces.web.routes import Activity, create_app, export_request
-from tests.fakes.teams_fake import PEER, FakeTeams, FakeTokens
+from teams_connector.surfaces.web.routes import Activity, create_app, export_request, preview_request
+from tests.fakes.teams_fake import ME, PEER, FakeTeams, FakeTokens
 
 SESSION = "synthetic-session-token"
 PORT = 8765
@@ -98,6 +102,155 @@ async def test_ui_rejects_invalid_export_and_unknown_job(web_client: httpx.Async
     assert missing.status_code == 404
 
 
+async def test_ui_runs_a_preview_job_and_returns_text_with_coverage(
+    web_client: httpx.AsyncClient,
+) -> None:
+    headers = {"x-session-token": SESSION}
+    await web_client.get("/api/chats?refresh=1", headers=headers)
+    started = await web_client.post(
+        "/api/preview",
+        headers=headers,
+        json={"conversation_ids": ["19:one@unq.gbl.spaces"], "entire_range": False},
+    )
+    assert started.status_code == 202
+    job_id = started.json()["id"]
+
+    for _ in range(30):
+        await asyncio.sleep(0)
+        result = await web_client.get(f"/api/preview/{job_id}", headers=headers)
+        if result.json()["status"] != "running":
+            break
+    assert result.json()["status"] == "complete"
+    assert "First hello" in result.json()["result"]["text"]
+    assert result.json()["result"]["messages"] > 0
+    assert result.json()["result"]["capped"] is False
+    completed_at = datetime.fromisoformat(result.json()["completed_at"])
+    assert completed_at.tzinfo == UTC
+    assert (await web_client.get(f"/api/preview/{job_id}", headers=headers)).status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("job_kind", "method_name", "start_path", "status_path"),
+    [
+        ("export", "export", "/api/exports", "/api/exports/"),
+        ("preview", "preview", "/api/preview", "/api/preview/"),
+    ],
+)
+async def test_unexpected_job_errors_become_sanitized_terminal_failures(
+    web_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    job_kind: str,
+    method_name: str,
+    start_path: str,
+    status_path: str,
+) -> None:
+    async def fail(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("synthetic internal details")
+
+    monkeypatch.setattr(Exports, method_name, fail)
+    headers = {"x-session-token": SESSION}
+    await web_client.get("/api/chats?refresh=1", headers=headers)
+    payload: dict[str, object] = {"conversation_ids": ["19:one@unq.gbl.spaces"]}
+    if job_kind == "preview":
+        payload["entire_range"] = False
+    started = await web_client.post(start_path, headers=headers, json=payload)
+    assert started.status_code == 202
+
+    for _ in range(20):
+        await asyncio.sleep(0)
+        status = await web_client.get(status_path + started.json()["id"], headers=headers)
+        if status.json()["status"] != "running":
+            break
+
+    assert status.json()["status"] == "failed"
+    assert status.json()["error"]["kind"] == "InternalError"
+    assert status.json()["error"]["message"] == f"The {job_kind} failed unexpectedly."
+    assert "synthetic internal details" not in status.text
+
+
+async def test_ui_can_cancel_a_running_preview_job(
+    web_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def wait_for_cancel(*args: object, **kwargs: object) -> None:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(Exports, "preview", wait_for_cancel)
+    headers = {"x-session-token": SESSION}
+    await web_client.get("/api/chats?refresh=1", headers=headers)
+    started = await web_client.post(
+        "/api/preview",
+        headers=headers,
+        json={"conversation_ids": ["19:one@unq.gbl.spaces"]},
+    )
+    job_id = started.json()["id"]
+    await asyncio.sleep(0)
+
+    cancelled = await web_client.post(f"/api/preview/{job_id}/cancel", headers=headers)
+    status = await web_client.get(f"/api/preview/{job_id}", headers=headers)
+
+    assert cancelled.status_code == 202 and cancelled.json()["status"] == "cancelled"
+    assert status.status_code == 200 and status.json()["status"] == "cancelled"
+
+
+async def test_an_older_preview_start_cannot_replace_a_newer_one(
+    web_client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def wait_for_cancel(*args: object, **kwargs: object) -> None:
+        await asyncio.Event().wait()
+
+    original_get = Catalog.get
+    release_first = asyncio.Event()
+    calls = 0
+
+    async def slow_first_get(self: Catalog, conversation_id: str) -> Chat:
+        nonlocal calls
+        calls += 1
+        if calls == 1:  # the older request stalls in its catalog check
+            await release_first.wait()
+        return await original_get(self, conversation_id)
+
+    headers = {"x-session-token": SESSION}
+    await web_client.get("/api/chats?refresh=1", headers=headers)
+    monkeypatch.setattr(Exports, "preview", wait_for_cancel)
+    monkeypatch.setattr(Catalog, "get", slow_first_get)
+    body = {"conversation_ids": ["19:one@unq.gbl.spaces"]}
+
+    older = asyncio.create_task(web_client.post("/api/preview", headers=headers, json=body))
+    while calls < 1:
+        await asyncio.sleep(0)
+    newer = await web_client.post("/api/preview", headers=headers, json=body)
+    release_first.set()
+    stale = await older
+
+    assert newer.status_code == 202
+    assert stale.status_code == 409 and stale.json()["kind"] == "Superseded"
+    status = await web_client.get(f"/api/preview/{newer.json()['id']}", headers=headers)
+    assert status.status_code == 200 and status.json()["status"] == "running"
+
+
+async def test_ui_rejects_invalid_preview_request(web_client: httpx.AsyncClient) -> None:
+    headers = {"x-session-token": SESSION}
+    multiple = await web_client.post(
+        "/api/preview",
+        headers=headers,
+        json={"conversation_ids": ["a", "b"]},
+    )
+    invalid_mode = await web_client.post(
+        "/api/preview",
+        headers=headers,
+        json={"conversation_ids": ["a"], "entire_range": "yes"},
+    )
+    assert multiple.status_code == 400
+    assert invalid_mode.status_code == 400
+
+
+def test_preview_request_accepts_only_one_conversation_and_boolean_mode() -> None:
+    request, entire_range = preview_request(
+        {"conversation_ids": ["19:sample@thread.v2"], "entire_range": True}
+    )
+    assert request.conversation_ids == ["19:sample@thread.v2"] and entire_range
+
+
 async def test_ui_serves_graph_profile_photo_and_reports_missing_photo(
     web_client: httpx.AsyncClient,
 ) -> None:
@@ -111,13 +264,109 @@ async def test_ui_serves_graph_profile_photo_and_reports_missing_photo(
     assert missing.status_code == 404
 
 
-def test_checkbox_labels_lay_out_inline() -> None:
+async def test_ui_presence_routes_use_the_active_account_and_conversation_only(
+    web_client: httpx.AsyncClient, fake: FakeTeams
+) -> None:
+    headers = {"x-session-token": SESSION}
+    await web_client.get("/api/chats?refresh=1", headers=headers)
+
+    own = await web_client.get(
+        "/api/presence/me?user_id=33333333-3333-3333-3333-333333333333", headers=headers
+    )
+    peer = await web_client.get(
+        "/api/presence/chat", params={"conversation_id": "19:one@unq.gbl.spaces"}, headers=headers
+    )
+    group = await web_client.get(
+        "/api/presence/chat", params={"conversation_id": "19:group@thread.v2"}, headers=headers
+    )
+    arbitrary_person = await web_client.get(
+        "/api/presence/person/33333333-3333-3333-3333-333333333333", headers=headers
+    )
+
+    assert own.status_code == 200 and own.json()["presence"]["availability"] == "Available"
+    assert peer.status_code == 200 and peer.json()["presence"]["device_type"] == "Desktop"
+    assert group.status_code == 400
+    assert arbitrary_person.status_code == 404
+    assert fake.presence_mris == [f"8:orgid:{ME}", f"8:orgid:{PEER}"]
+
+
+def test_avatars_are_round_and_clip_their_photos() -> None:
+    styles = (Path(routes.__file__).parent / "static" / "app.css").read_text(encoding="utf-8")
+    assert ".avatar { display: grid; place-items: center; overflow: hidden;" in styles
+    assert ".avatar img { width: 100%; height: 100%; object-fit: cover; }" in styles
+
+
+def test_settings_switches_are_accessible_and_lay_out_inline() -> None:
     static = Path(routes.__file__).parent / "static"
     page = (static / "index.html").read_text(encoding="utf-8")
     styles = (static / "app.css").read_text(encoding="utf-8")
-    checkbox_labels = re.findall(r'<label([^>]*)><input [^>]*type="checkbox"', page)
-    assert checkbox_labels and all('class="check-label"' in attrs for attrs in checkbox_labels)
-    assert ".check-label { display: flex; align-items: center;" in styles
+    switch_labels = re.findall(r'<label class="switch"><input([^>]*)', page)
+    assert len(switch_labels) == 3
+    assert all('type="checkbox" role="switch"' in attrs for attrs in switch_labels)
+    assert ".switch input:checked::after { transform: translateX(14px); }" in styles
+    # Field labels stack their control below; that rule must not reach the menu's switch labels.
+    assert ".conversation-controls > label, .export-controls > label { display: grid;" in styles
+    assert ".switch { display: inline-flex;" in styles
+    assert "@media (prefers-reduced-motion: reduce)" in styles
+
+
+def test_web_page_uses_full_panel_layout_and_tracks_system_theme_changes() -> None:
+    static = Path(routes.__file__).parent / "static"
+    page = (static / "index.html").read_text(encoding="utf-8")
+    styles = (static / "app.css").read_text(encoding="utf-8")
+    script = (static / "app.js").read_text(encoding="utf-8")
+    assert "Choose conversations and filters" not in page
+    assert 'class="content-row"' in page and 'class="footer-row"' in page
+    assert page.index('id="auth-help"') < page.index("</header>")
+    assert "height: 100%;" in styles and 'themePreference.addEventListener("change", applyTheme)' in script
+
+
+def test_selection_pills_and_preview_target_are_separate() -> None:
+    static = Path(routes.__file__).parent / "static"
+    page = (static / "index.html").read_text(encoding="utf-8")
+    script = (static / "app.js").read_text(encoding="utf-8")
+    assert 'id="selected-chats"' in page and 'id="preview-content"' in page
+    assert "let previewConversationId = null" in script
+    assert "event.stopPropagation();\n      selected.delete(id);" in script
+    # A row click only previews; its add button, or Ctrl/Cmd+click, also changes the selection.
+    assert "if (event.ctrlKey || event.metaKey) toggleChatSelection(chat.id);" in script
+    assert "event.stopPropagation();\n      toggleChatSelection(chat.id);" in script
+    assert 'checkbox.type = "checkbox"' not in script
+    assert 'clear.textContent = "Clear all"' in script and 'id="selection-count"' not in page
+
+
+def test_preview_ui_supports_full_range_cancellation_and_page_memory_cache() -> None:
+    static = Path(routes.__file__).parent / "static"
+    page = (static / "index.html").read_text(encoding="utf-8")
+    styles = (static / "app.css").read_text(encoding="utf-8")
+    script = (static / "app.js").read_text(encoding="utf-8")
+    assert 'id="view-entire-range"' in page and 'id="cancel-preview"' in page
+    assert 'id="preview-toolbar"' in page
+    assert "const PREVIEW_CACHE_MS = 60_000" in script
+    assert "const PREVIEW_CACHE_LIMIT = 10" in script
+    assert "function cachePreview(key, result, completedAt)" in script
+    assert "Date.parse(completedAt)" in script
+    assert "cachePreview(key, job.result, job.completed_at)" in script
+    assert "previewCache.keys().next().value" in script
+    assert "entire_range: entireRange" in script
+    assert "overflow-x: hidden; overflow-y: auto" in styles
+    assert "content-visibility: auto" in styles
+
+
+def test_presence_is_lazy_accessible_and_never_confuses_unknown_with_offline() -> None:
+    static = Path(routes.__file__).parent / "static"
+    page = (static / "index.html").read_text(encoding="utf-8")
+    styles = (static / "app.css").read_text(encoding="utf-8")
+    script = (static / "app.js").read_text(encoding="utf-8")
+    assert 'id="account-presence"' in page and 'role="img" aria-label="Presence unavailable"' in page
+    assert 'root: list, rootMargin: "0px"' in script
+    assert 'chat.photo_user_id.startsWith("28:")' in script
+    assert '"Last seen: " + lastActive.toLocaleString()' in script
+    assert 'parts.join(" · ")' in script and "metadata.hidden = !metadata.textContent" in script
+    assert r"/\b(away|berightback|outofoffice|offline)\b/" in script  # last seen only when inactive, as Teams
+    assert "Last seen: unavailable" not in script and ".chat-meta[hidden] { display: none; }" in styles
+    assert '"Presence unavailable"' in script and 'value === "offline"' in script
+    assert ".presence-unknown::after" in styles and ".chat-row:focus-visible" in styles
 
 
 def test_date_picker_weeks_start_on_sunday_like_outlook() -> None:

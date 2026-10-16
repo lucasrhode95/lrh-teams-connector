@@ -11,13 +11,14 @@ finished file is downloaded from the job.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import re
 import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 from datetime import time as day_time
 from importlib import resources
 from typing import Any
@@ -39,7 +40,7 @@ from teams_connector.domain.errors import (
     NotFound,
     Throttled,
 )
-from teams_connector.domain.models import ExportArtifact, ExportProgress, ExportRequest
+from teams_connector.domain.models import ExportArtifact, ExportProgress, ExportRequest, PreviewOutput
 
 STATIC = resources.files("teams_connector.surfaces.web") / "static"
 _STATUS = {AuthenticationRequired: 401, InvalidRequest: 400, NotFound: 404, Throttled: 429}
@@ -72,6 +73,17 @@ class ExportJob:
     task: asyncio.Task[None] | None = None
 
 
+@dataclass
+class PreviewJob:
+    id: str
+    status: str = "running"  # running, complete, cancelled, failed
+    progress: ExportProgress = field(default_factory=lambda: ExportProgress(phase="retrieving"))
+    result: PreviewOutput | None = None
+    completed_at: datetime | None = None
+    error: dict[str, str] | None = None
+    task: asyncio.Task[None] | None = None
+
+
 def _guard(token: str, port: int, activity: Activity) -> type[BaseHTTPMiddleware]:
     allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
 
@@ -100,6 +112,12 @@ def _flag(request: Request, name: str, default: bool = False) -> bool:
 def _error(exc: Exception) -> JSONResponse:
     status = next((code for kind, code in _STATUS.items() if isinstance(exc, kind)), 502)
     return JSONResponse({"error": str(exc), "kind": type(exc).__name__}, status_code=status)
+
+
+def _superseded() -> JSONResponse:
+    return JSONResponse(
+        {"error": "A newer preview request replaced this one.", "kind": "Superseded"}, status_code=409
+    )
 
 
 def local_day(value: Any, *, end: bool, offset_minutes: Any, name: str) -> datetime | None:
@@ -164,11 +182,26 @@ def export_request(payload: Any) -> ExportRequest:
     )
 
 
+def preview_request(payload: Any) -> tuple[ExportRequest, bool]:
+    """Entry point: validate one preview conversation, export settings, and the full-range flag."""
+    if not isinstance(payload, dict):
+        raise InvalidRequest("The request body must be a JSON object.")
+    entire_range = payload.get("entire_range", False)
+    if not isinstance(entire_range, bool):
+        raise InvalidRequest("entire_range must be true or false.")
+    request = export_request(payload)
+    if len(request.conversation_ids) != 1:
+        raise InvalidRequest("Preview exactly one conversation.")
+    return request, entire_range
+
+
 def create_app(context: AppContext, *, session_token: str, port: int, activity: Activity) -> Starlette:
     index_html = (
         (STATIC / "index.html").read_text(encoding="utf-8").replace("{{SESSION_TOKEN}}", session_token)
     )
     jobs: dict[str, ExportJob] = {}
+    preview_job: PreviewJob | None = None
+    preview_starts = 0  # preview start requests received, in arrival order
 
     def api(handler: Callable[[Request], Awaitable[Response]]) -> Callable[[Request], Awaitable[Response]]:
         async def wrapped(request: Request) -> Response:
@@ -229,6 +262,18 @@ def create_app(context: AppContext, *, session_token: str, port: int, activity: 
             return Response(status_code=304, headers=headers)
         return Response(content, media_type=content_type, headers=headers)
 
+    async def self_presence(_: Request) -> Response:
+        services = await context.services()
+        result = await services.presence.for_self(services.account.object_id)
+        return JSONResponse(result.model_dump(mode="json"))
+
+    async def chat_presence(request: Request) -> Response:
+        conversation_id = request.query_params.get("conversation_id")
+        if not conversation_id or not conversation_id.strip():
+            raise InvalidRequest("conversation_id is required.")
+        result = await (await context.services()).presence.for_chat(conversation_id)
+        return JSONResponse(result.model_dump(mode="json"))
+
     async def start_export(request: Request) -> Response:
         export = export_request(await request.json())
         if any(job.status == "running" for job in jobs.values()):
@@ -237,6 +282,7 @@ def create_app(context: AppContext, *, session_token: str, port: int, activity: 
         services = await context.services()
         for chat_id in export.conversation_ids:  # fail fast on unknown chats, before the job starts
             await services.catalog.get(chat_id)
+        await cancel_active_preview()
         job = ExportJob(id=uuid.uuid4().hex)
 
         def report(progress: ExportProgress) -> None:
@@ -251,9 +297,87 @@ def create_app(context: AppContext, *, session_token: str, port: int, activity: 
             except ConnectorError as exc:
                 job.status = "failed"
                 job.error = {"message": str(exc), "kind": type(exc).__name__}
+            except Exception:
+                job.status = "failed"
+                job.error = {"message": "The export failed unexpectedly.", "kind": "InternalError"}
 
         job.task = asyncio.create_task(run())
         jobs[job.id] = job
+        return JSONResponse({"id": job.id, "status": job.status}, status_code=202)
+
+    async def cancel_active_preview() -> None:
+        if preview_job is None or preview_job.status != "running" or preview_job.task is None:
+            return
+        preview_job.task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await preview_job.task
+
+    async def start_preview(request: Request) -> Response:
+        """Start a preview in the single slot. Starts are ordered by arrival, before any await, so an older
+        request that resumes after a newer one is refused instead of replacing the newer job."""
+        nonlocal preview_job, preview_starts
+        preview_starts += 1
+        order = preview_starts
+        export, entire_range = preview_request(await request.json())
+        services = await context.services()
+        chat_id = export.conversation_ids[0]
+        await services.catalog.get(chat_id)
+        if order != preview_starts:
+            return _superseded()
+        await cancel_active_preview()
+        if order != preview_starts:
+            return _superseded()
+        job = PreviewJob(id=uuid.uuid4().hex)
+
+        def report(progress: ExportProgress) -> None:
+            job.progress = progress
+
+        async def run() -> None:
+            try:
+                job.result = await services.exports.preview(
+                    export, entire_range=entire_range, progress=report
+                )
+                job.completed_at = datetime.now(UTC)
+                job.status = "complete"
+            except asyncio.CancelledError:
+                job.status = "cancelled"
+            except ConnectorError as exc:
+                job.status = "failed"
+                job.error = {"message": str(exc), "kind": type(exc).__name__}
+            except Exception:
+                job.status = "failed"
+                job.error = {"message": "The preview failed unexpectedly.", "kind": "InternalError"}
+
+        job.task = asyncio.create_task(run())
+        preview_job = job
+        return JSONResponse({"id": job.id, "status": job.status}, status_code=202)
+
+    def _preview_job(request: Request) -> PreviewJob:
+        if preview_job is None or preview_job.id != request.path_params["job_id"]:
+            raise NotFound("The preview was not found.")
+        return preview_job
+
+    async def preview_status(request: Request) -> Response:
+        nonlocal preview_job
+        job = _preview_job(request)
+        body = {
+            "id": job.id,
+            "status": job.status,
+            "progress": job.progress.model_dump(mode="json"),
+            "error": job.error,
+            "result": job.result.model_dump(mode="json") if job.result else None,
+            "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+        }
+        if job.status != "running":
+            preview_job = None
+        return JSONResponse(body)
+
+    async def cancel_preview(request: Request) -> Response:
+        job = _preview_job(request)
+        if job.status == "running" and job.task is not None:
+            job.task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await job.task
         return JSONResponse({"id": job.id, "status": job.status}, status_code=202)
 
     def _job(request: Request) -> ExportJob:
@@ -296,6 +420,11 @@ def create_app(context: AppContext, *, session_token: str, port: int, activity: 
         Route("/api/status", api(status)),
         Route("/api/chats", api(chats)),
         Route("/api/photos/{user_id}", api(photo)),
+        Route("/api/presence/me", api(self_presence)),
+        Route("/api/presence/chat", api(chat_presence)),
+        Route("/api/preview", api(start_preview), methods=["POST"]),
+        Route("/api/preview/{job_id}", api(preview_status)),
+        Route("/api/preview/{job_id}/cancel", api(cancel_preview), methods=["POST"]),
         Route("/api/exports", api(start_export), methods=["POST"]),
         Route("/api/exports/{job_id}", api(export_status)),
         Route("/api/exports/{job_id}/cancel", api(cancel_export), methods=["POST"]),

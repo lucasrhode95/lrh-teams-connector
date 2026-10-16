@@ -52,13 +52,14 @@ The Outlook, Teams, and SharePoint connectors use application-owned Microsoft si
 
 ## Checks
 
-Run all four before every commit:
+Run all five before every commit:
 
 ```bash
 uv run ruff check .
 uv run ruff format --check .   # use `uv run ruff format .` to fix
 uv run pyright
 uv run pytest
+node --test tests/surfaces/export_ui.test.cjs
 ```
 
 Use synthetic fixtures and fake transports only. Never use live chat content, identities, or captures in tests.

@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from teams_connector.domain.errors import InvalidRequest, Upstream, WriteOutcomeUnknown
-from teams_connector.remote.transport import Transport
+from teams_connector.remote.transport import Transport, describe_failure
 
 
 class Credential:
@@ -262,3 +262,18 @@ async def test_upload_sessions_reach_only_sharepoint_and_carry_no_credential() -
 
     assert status.status_code == 200
     assert seen == [("GET", None), ("PUT", None)]  # the failed chunk was sent once
+
+
+def test_a_roster_denial_says_the_account_is_not_a_member_without_echoing_identifiers() -> None:
+    details = (
+        '{"subCode":"AclCheckFailed","details":"The initiator 8:orgid:00000000-0000-0000-0000-000000000001 '
+        "is not a member of the roster 00000000-0000-0000-0000-000000000002 in the generic thread "
+        '19:meeting_synthetic@thread.v2"}'
+    )
+
+    error = describe_failure(status=403, code="209", message=details, request="synthetic-request")
+
+    assert isinstance(error, Upstream)
+    assert "not a member of this conversation" in str(error)
+    assert "AclCheckFailed" in str(error) and "synthetic-request" in str(error)
+    assert "8:orgid" not in str(error) and "19:meeting" not in str(error)

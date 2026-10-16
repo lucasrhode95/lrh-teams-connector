@@ -66,7 +66,7 @@ class Presence(Compact):
 
 
 class PresenceResult(Compact):
-    """The presence of the other person in a one-on-one chat. ``reason`` says why there is none."""
+    """One person's presence. ``reason`` says why there is none."""
 
     presence: Presence | None = None
     reason: str | None = None
@@ -316,6 +316,14 @@ class ExportProgress(Compact):
     attachments_total: int = 0
     attachments_downloaded: int = 0
     attachments_failed: int = 0
+
+
+class PreviewOutput(Compact):
+    """One conversation's plain-text export preview and whether the initial excerpt is incomplete."""
+
+    text: str
+    messages: int
+    capped: bool
 
 
 # -------------------------------------------------------------------------------------------- transcripts
