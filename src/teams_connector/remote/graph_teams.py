@@ -316,7 +316,9 @@ class GraphFileSharer:
 
     async def upload(self, path: Path) -> UploadedFile:
         """One file into the chat-files folder: a single PUT below 250 MiB (Graph's limit for one request),
-        an upload session from there on. A name clash is renamed."""
+        an upload session from there on. A name clash is renamed. When Graph stores the file but does not
+        describe it well enough to reference or delete it, the upload's outcome is reported as unknown, so
+        the caller names it as possibly left behind."""
         target = f"/me/drive/root:/{segment(self._folder)}/{segment(path.name)}:"
         with operation("uploading a file"):
             if path.stat().st_size < SINGLE_UPLOAD_BYTES:
@@ -325,7 +327,12 @@ class GraphFileSharer:
                 )
             else:
                 item = await self._upload_in_chunks(path, target)
-        return _uploaded(item)
+        try:
+            return _uploaded(item)
+        except Upstream as exc:
+            raise WriteOutcomeUnknown(
+                f"{exc} The file may be in your OneDrive, and cannot be referenced or deleted automatically."
+            ) from None
 
     async def share(self, file: UploadedFile, recipients: Sequence[str]) -> None:
         """One invite for every recipient. A partial success (HTTP 207, with an ``error`` entry for some

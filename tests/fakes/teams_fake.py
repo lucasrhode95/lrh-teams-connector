@@ -166,6 +166,7 @@ class FakeTeams:
     fail_upload_names: set[str] = field(default_factory=set)  # file names whose upload answers 500
     fail_invites: bool = False
     throttled_uploads: int = 0  # the next N single uploads answer 429 (nothing stored)
+    undescribed_uploads: set[str] = field(default_factory=set)  # stored, but answered without an eTag
     deleted_items: list[str] = field(default_factory=list)  # drive items deleted again
     fail_item_deletes: bool = False
     # Upload sessions: id -> {"folder", "name", "size", "data", "received" (byte offsets)}
@@ -398,7 +399,10 @@ class FakeTeams:
             return httpx.Response(
                 429, headers={"Retry-After": "0"}, json={"error": {"code": "tooManyRequests"}}
             )
-        return httpx.Response(201, json=self._store_upload(folder, name, request.content))
+        item = self._store_upload(folder, name, request.content)
+        if name in self.undescribed_uploads:
+            item.pop("eTag")
+        return httpx.Response(201, json=item)
 
     def _create_upload_session(self, request: httpx.Request, path: str) -> httpx.Response:
         body = json.loads(request.content)

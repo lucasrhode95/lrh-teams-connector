@@ -340,6 +340,20 @@ async def test_a_file_that_cannot_be_deleted_is_reported_as_left_behind(
         await services.sender.send(ONE, expected_chat_name="Pat Peer", files=[str(notes)])
 
 
+async def test_an_upload_graph_stores_but_does_not_describe_is_reported_as_possibly_left(
+    services: Services, fake: FakeTeams, notes: Path, plan: Path
+) -> None:
+    fake.undescribed_uploads = {"plan.pdf"}
+
+    with pytest.raises(WriteOutcomeUnknown) as raised:
+        await services.sender.send(ONE, expected_chat_name="Pat Peer", files=[str(notes), str(plan)])
+
+    message = str(raised.value)
+    assert "Deleted again from your OneDrive (recycle bin): notes.txt." in message
+    assert "plan.pdf may also have been uploaded" in message
+    assert fake.deleted_items == ["ITEM1"] and fake.sent == []
+
+
 async def test_a_throttled_upload_is_retried_and_the_send_succeeds(
     services: Services, fake: FakeTeams, notes: Path
 ) -> None:
