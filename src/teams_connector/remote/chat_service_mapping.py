@@ -19,6 +19,7 @@ _MRI = re.compile(
 _OBJECT_ID = re.compile(r"(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _ORDINARY_TYPES = ("richtext", "text")  # message types that carry user content (prefixes)
 _DELETE_TYPES = {"messagedelete"}
+_NOTICE_TYPES = {"richtext/media_calltranscript"}  # rich-text types that are system notices, not user content
 
 
 def mapping(value: Any) -> dict[str, Any]:
@@ -154,7 +155,8 @@ def to_message(raw: dict[str, Any], conversation_id: str) -> Message:
     is_deleted = lowered in _DELETE_TYPES or deleted_at is not None
     system_event = None
     inline: list[Attachment] = []
-    if kind and not lowered.startswith(_ORDINARY_TYPES) and lowered not in _DELETE_TYPES:
+    is_notice = lowered in _NOTICE_TYPES or not lowered.startswith(_ORDINARY_TYPES)
+    if kind and is_notice and lowered not in _DELETE_TYPES:
         system_event = kind
         text = chat_events.render(kind, content)
     else:
