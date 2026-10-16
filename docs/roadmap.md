@@ -43,30 +43,40 @@ text ([architecture](architecture.md#exports)). Still open:
   reading the page?
 - Decided 2026-10-16: the downloaded file is text, not the PDF (`?format=pdf`).
 
-### P2.2f — Meeting recaps and transcripts
+### P2.2f — Meeting transcripts
 
-Four separate capabilities, none implemented: finding recaps, listing a meeting's transcripts,
-reading a transcript, and searching transcript text. The Teams Web routes are now known
-([research](api-research.md#transcripts)):
+Treat a meeting's transcript like an attachment of its recording message. On one account and tenant (live,
+2026-10-16), Graph's undocumented `media/transcripts` route worked with the existing `teams.graph` token,
+with no SharePoint token or admin consent ([research](api-research.md#transcripts)). Grants differ between
+deployments (see A1): reassess this before relying on it elsewhere, and report transcripts as unavailable
+when the route is denied, rather than failing the read or export.
 
-- list a recording's transcripts: `{site}/_api/v2.0/drives/{drive}/items/{item}/media/transcripts`,
-  taking the one flagged `isDefault`;
-- read one: `…/media/transcripts/{id}/content` (`?format=docx`, or `?is=1` for VTT), or
-  `{site}/_api/v2.1/drives/{drive}/items/{item}/versions/current/media/transcripts/{id}/streamContent`;
-- meeting chats already carry a reference to that last route
-  ([research](api-research.md#transcripts)), and
-  recording messages carry an `amsTranscript` item ([research](api-research.md#recording-cards)).
-
-**Live, 2026-10-16:** Graph's `media/transcripts` route works with the existing `teams.graph` token, so no
-SharePoint token or admin consent is needed. The listing and VTT content both answered 200 for one recording
-([research](api-research.md#transcripts)).
-
-**Decided 2026-10-16:** the user chose to read transcripts even where the Teams UI disables download for a
-meeting. This overrides the earlier plan to respect that restriction, for the user's own access. Record the
-policy choice in requirements §8 before building.
-
-**Next:** decide the first version's scope (list and read transcripts; search and recaps later) and where
-transcripts appear (separate tools or export), then build against Graph's route with fakes.
+- **Marker:** in `get_messages` and exports, a recording message whose card references a transcript gets a
+  marker like its file markers, built only from the card: `[Transcript: <recording title>]`. Reading fetches
+  nothing, so the marker carries no speaker count or duration.
+- **Download:** exports and `download_attachment` fetch the default transcript (`isDefault`) with
+  `?format=json`. They write it as text into a `transcripts/` folder next to the attachments folder:
+  - a header with the meeting, the speakers and the duration, which only the fetched transcript provides;
+  - then consecutive entries grouped by `speakerDisplayName` with the start offset (`Name  0:17` and then
+    the lines).
+- **Flag:** `include_transcripts`, on by default in MCP and the UI, like `include_attachments`.
+- **Failures:** a missing or unreadable transcript is reported like an unavailable attachment.
+- **Access (decided 2026-10-16):** the connector serves a person who already has access to the meeting, so
+  it reads transcripts even where the Teams UI disables Download. Record this in requirements §8 when
+  building.
+- **Search:** a `search_transcripts(terms, conversation_ids?, since?, until?)` tool with two paths and one
+  result shape: meeting, conversation, recording, speaker, offset, line. Its coverage says which path ran.
+  - *Scoped* (conversations given): read those chats' recording messages, fetch each JSON transcript, and
+    match in memory. The result is complete within the scope. If long chats make this slow, run the
+    unscoped search first and keep only the scope's recordings.
+  - *Unscoped:* Graph `POST /search/query` over `driveItem` with `filetype:mp4` and the terms finds
+    transcribed videos by their spoken words, ranked, with approximate totals. Not every hit is a Teams
+    meeting: the search covers any OneDrive or SharePoint video the user can open, and the response has no
+    conversation. Keep a hit only when it resolves to a meeting recording, such as a recording card in a
+    meeting chat that links to that item, which also supplies the conversation. List the rest as non-meeting
+    videos or drop them. Then fetch each kept hit's JSON transcript to find the speaker and offset, and to drop
+    title-only hits. How to resolve a recording to its chat cheaply is open; probe it before building.
+- **Later:** recaps (AI summary, mentions, tasks; an internal service).
 
 ## Validation
 
