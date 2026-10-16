@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Literal
 
-from teams_connector.domain.errors import ConnectorError, InvalidRequest
+from teams_connector.domain.errors import AuthenticationRequired, ConnectorError, InvalidRequest
 from teams_connector.domain.models import (
     Chat,
     Message,
@@ -187,20 +187,32 @@ class TranscriptSearch:
         if len(chats) > MAX_CHATS_PER_VIDEO:
             tally.unverified += 1
         for chat in chats[:MAX_CHATS_PER_VIDEO]:
-            pages = 0
-            async for page in self._history.selection(chat, since=since, until=until):
-                pages += 1
-                for message in page:
-                    recording = message.recording
-                    if (
-                        recording is not None
-                        and recording.item_id == video.item_id
-                        and (recording.drive_id == video.drive_id)
-                    ):
-                        return chat, message
-                if pages >= MAX_PAGES_PER_CHAT:
-                    tally.unverified += 1
-                    break
+            try:
+                message = await self._card_in(chat, video, since, until)
+            except AuthenticationRequired:
+                raise
+            except ConnectorError:  # one chat Teams refuses does not end the search; it is counted
+                tally.unverified += 1
+                continue
+            if message is not None:
+                return chat, message
+        return None
+
+    async def _card_in(self, chat: Chat, video: VideoHit, since: datetime, until: datetime) -> Message | None:
+        """The recording message in one chat that names this video's drive item, if there is one."""
+        pages = 0
+        async for page in self._history.selection(chat, since=since, until=until):
+            pages += 1
+            for message in page:
+                recording = message.recording
+                if (
+                    recording is not None
+                    and recording.item_id == video.item_id
+                    and (recording.drive_id == video.drive_id)
+                ):
+                    return message
+            if pages >= MAX_PAGES_PER_CHAT:
+                break
         return None
 
     # ------------------------------------------------------------------ shared
@@ -218,6 +230,8 @@ class TranscriptSearch:
         tally.recordings += 1
         try:
             transcript = await self._transcripts.default(recording)
+        except AuthenticationRequired:
+            raise
         except ConnectorError:
             transcript = None
         if transcript is None:

@@ -8,8 +8,8 @@ from datetime import UTC, datetime
 import pytest
 
 from teams_connector.bootstrap import Services
-from teams_connector.domain.errors import InvalidRequest
-from tests.fakes.teams_fake import FakeTeams, add_meeting
+from teams_connector.domain.errors import InvalidRequest, Upstream
+from tests.fakes.teams_fake import FakeTeams, add_meeting, cs_message
 
 CHAT = "19:one@unq.gbl.spaces"
 DRIVE = "b!SYNTH-DRIVE"
@@ -223,3 +223,51 @@ async def test_the_limit_and_conversation_count_are_bounded(services: Services) 
         await services.transcript_search.search(["x"], limit=0)
     with pytest.raises(InvalidRequest):
         await services.transcript_search.search(["x"], conversation_ids=[])
+
+
+async def test_one_chat_that_refuses_to_be_read_does_not_end_the_search(
+    services: Services, fake: FakeTeams, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    add_meeting(
+        fake,
+        chat_id=CHAT,
+        title="Synthetic Standup",
+        when="2026-09-10T10:00:00Z",
+        drive=DRIVE,
+        item="01TS1",
+        transcript_id="t-ts-1",
+        document=STANDUP,
+    )
+    # a quieter chat active around the video's creation, which Teams refuses to read
+    fake.chats["19:meeting_abc@thread.v2"].messages.append(
+        cs_message("quiet-1", "2026-09-10T09:30:00Z", "Quiet chat")
+    )
+    fake.videos.clear()
+    fake.videos.append(
+        {
+            "driveId": DRIVE,
+            "itemId": "01TS1",
+            "name": "Synthetic Standup.mp4",
+            "createdDateTime": "2026-09-10T10:00:00Z",
+        }
+    )
+    await services.catalog.refresh()
+    original = services.history.selection
+
+    def selection(chat, **kwargs):  # type: ignore[no-untyped-def]
+        if chat.id == "19:meeting_abc@thread.v2":
+
+            async def refuse():  # type: ignore[no-untyped-def]
+                raise Upstream("Teams refused the chat.")
+                yield  # pragma: no cover
+
+            return refuse()
+        return original(chat, **kwargs)
+
+    monkeypatch.setattr(services.history, "selection", selection)
+
+    result = await services.transcript_search.search(["deployment"])
+
+    assert {h.meeting for h in result.items} == {"Synthetic Standup"}
+    assert result.coverage.not_meetings == 0
+    assert any("could not be checked" in note for note in result.coverage.notes)
