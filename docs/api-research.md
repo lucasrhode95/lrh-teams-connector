@@ -394,6 +394,9 @@ The capture strips credentials, so the upload's auth isn't shown; Source points 
 - Answers one row per MRI: `mri`, `etag`, `etagMatch`, `status`, and `presence` with `availability`,
   `activity`, `deviceType`, `lastActiveTime`, `calendarData`, `workLocation`, `forcedAvailability`,
   `capabilities` and `sourceNetwork`. The connector keeps the first four.
+- `lastActiveTime` is not always present (2026-10-16, observed in the local UI, not a dedicated probe): one
+  peer read Away came with a time, and the same peer read Available minutes later came without one. This
+  matches Teams showing "last seen" only for people who are not active; the exact rule is unverified.
 - The global host (`unifiedPresence`) answers 301 to the regional one; the Skype token gets 401 on both.
 - Teams Web takes its base from `regionGtm("unifiedPresence")` (or an AFD route) and also subscribes at
   `v1/pubsub/subscriptions/` (Source; Capture of `/ups/{region}/…`, where a global `/ups/global/` alias

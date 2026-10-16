@@ -160,8 +160,9 @@ colour is not the only signal. Unknown presence must not look like a confirmed o
 
 Move the conversation kind and last-message time into a tooltip, also shown on keyboard focus.
 Replace the one-to-one subtitle with `Last seen: <localized last-active time> · <device>`, using
-presence's last-active field, never the last message time. Omit a missing device, and show when
-last-seen is unavailable. Groups, channels, meetings and bot chats (`28:` peers) get no badge and
+presence's last-active field, never the last message time. Show each part only when Teams reports it,
+with the separator only between two parts: Teams omits the last-active time for people active now
+(observed 2026-10-16), so such a row shows just the device, or no subtitle without one. Groups, channels, meetings and bot chats (`28:` peers) get no badge and
 no person subtitle. The self chat may use the signed-in user's presence.
 
 Reuse `service/presence.py` and `remote/presence.py`. The own-presence route uses the active account

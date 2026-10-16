@@ -130,9 +130,10 @@ preview never downloads attachment or transcript files, but their markers read a
 The page keeps up to ten previews in memory for 60 seconds after each one finishes. Refresh chats
 reloads the list and the open preview.
 
-The signed-in avatar and visible one-to-one rows show Teams presence, and a one-to-one row shows when
-the person was last seen. Hovering or focusing a row shows its kind and last activity. Presence that
-cannot be read shows as unknown, never as offline.
+The signed-in avatar and visible one-to-one rows show Teams presence. A one-to-one row also shows
+when the person was last seen and on which device, each only when Teams reports it; there is no
+last-seen time for someone active now. Hovering or focusing a row shows its kind and last activity. Presence that cannot be read shows
+as unknown, never as offline.
 
 The date picker behaves like the Outlook connector's: weeks start on Sunday, future days are
 disabled, two clicks in either order make the range, and the calendar stays open until Done or

@@ -299,19 +299,25 @@ function setPresenceBadge(badge, presence) {
   badge.title = label;
 }
 
+// Teams reports a last-active time only for people who are not active now. Each part is shown only when
+// reported, so a row may show just the device, or no line at all.
 function lastSeenText(presence) {
-  if (!presence?.last_active_at) return "Last seen: unavailable";
-  const lastActive = new Date(presence.last_active_at);
-  if (Number.isNaN(lastActive.getTime())) return "Last seen: unavailable";
-  const device = String(presence.device_type || "").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ").trim();
-  return "Last seen: " + lastActive.toLocaleString() + (device ? " · " + device : "");
+  const lastActive = new Date(presence?.last_active_at || NaN);
+  const device = String(presence?.device_type || "").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ").trim();
+  const parts = [];
+  if (!Number.isNaN(lastActive.getTime())) parts.push("Last seen: " + lastActive.toLocaleString());
+  if (device) parts.push(device);
+  return parts.join(" · ");
 }
 
 function applyPresenceToRow(row, result) {
   const presence = result?.presence || null;
   const metadata = row.querySelector(".chat-meta");
   const badge = row.querySelector(".chat-presence-dot");
-  if (metadata) metadata.textContent = lastSeenText(presence);
+  if (metadata) {
+    metadata.textContent = lastSeenText(presence);
+    metadata.hidden = !metadata.textContent;
+  }
   if (badge) setPresenceBadge(badge, presence);
 }
 
@@ -584,7 +590,7 @@ function renderChats() {
     name.textContent = chat.name;
     const metadata = document.createElement("span");
     metadata.className = "chat-meta";
-    if (personChat) metadata.textContent = "Last seen: loading presence…";
+    metadata.hidden = true;
     text.appendChild(name);
     if (personChat) text.appendChild(metadata);
     row.append(checkbox, avatarWrap, text, tooltip);

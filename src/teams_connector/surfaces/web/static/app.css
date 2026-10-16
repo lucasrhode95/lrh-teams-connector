@@ -180,6 +180,7 @@ input[type="checkbox"] { accent-color: var(--teams-purple); }
 .chat-presence-dot { right: -2px; bottom: -2px; width: 13px; height: 13px; }
 .chat-name { display: block; color: var(--text); font-weight: 600; overflow-wrap: anywhere; }
 .chat-meta { display: block; margin-top: 2px; color: var(--muted); font-size: .82rem; }
+.chat-meta[hidden] { display: none; }
 .chat-tooltip { position: fixed; z-index: 30; display: none; max-width: min(340px, calc(100vw - 16px)); padding: 7px 10px; border: 1px solid var(--surface-border); border-radius: 5px; color: var(--text); background: var(--surface); box-shadow: var(--shadow); font-size: .8rem; font-weight: 500; line-height: 1.35; pointer-events: none; }
 .chat-row:hover .chat-tooltip, .chat-row:focus-visible .chat-tooltip, .chat-row:has(:focus-visible) .chat-tooltip { display: block; }
 .empty { padding: 24px; color: var(--muted); text-align: center; }
