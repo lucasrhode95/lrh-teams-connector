@@ -163,7 +163,10 @@ The MCP process logs to a per-process daily-rotated file, keeping stdout for pro
 files are under the Teams data directory's `logs/` folder. UI logs also go to stdout. Operational
 records include timing, status, and counts, not message bodies, search text, chat names, IDs, tokens,
 or authorization headers. Set `TEAMS_CONNECTOR_LOG_LEVEL=DEBUG` to enable safe request and paging
-diagnostics.
+diagnostics. httpx and httpcore stay at WARNING whatever the level: at INFO httpx logs every full request
+URL, and these URLs carry conversation and team ids, sharing links (Graph share ids encode them) and
+pre-authenticated upload URLs. The transport's own debug line records the method, the path with ids
+replaced, the status and the time instead.
 
 ## MCP tools
 

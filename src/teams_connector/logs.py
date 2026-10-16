@@ -1,7 +1,9 @@
 """Process logging for the long-running commands (``mcp``, ``ui``): a daily-rotated file per process.
 
 MCP processes log to the file only, keeping stdout for the protocol. Records never carry tokens: a
-redaction filter removes common credential forms before any output.
+redaction filter removes common credential forms before any output. httpx and httpcore are held at
+WARNING at every configured level: at INFO httpx logs each full request URL, and these URLs carry
+conversation and team ids, sharing links and pre-authenticated upload URLs.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from teams_connector import config
 LOG_FORMAT = "%(asctime)s | %(levelname)s | %(filename)s:%(lineno)d | %(message)s"
 LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 DEFAULT_BACKUP_DAYS = 7
+QUIET_LIBRARIES = ("httpx", "httpcore")  # held at WARNING: their INFO and DEBUG records carry full URLs
 _VALID_COMPONENT = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 _BEARER_SECRET = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
 _ASSIGNED_SECRET = re.compile(
@@ -95,6 +98,8 @@ def configure_app_logging(
         if getattr(handler, "_teams_connector_managed", False):
             handler.close()
     root.setLevel(level)
+    for name in QUIET_LIBRARIES:
+        logging.getLogger(name).setLevel(max(level, logging.WARNING))
 
     file_handler = logging.handlers.TimedRotatingFileHandler(
         log_path,
