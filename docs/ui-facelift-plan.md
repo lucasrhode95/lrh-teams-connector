@@ -1,11 +1,10 @@
 # UI facelift implementation plan
 
-Date: 2026-10-16. Status: implementation and final review complete; branch ready for PR.
+Date: 2026-10-16. Status: implemented on `codex/ui-facelift`; reviewed and corrected 2026-10-16.
 
 This plan turns the agreed layout and interactions for the local Teams export UI into incremental
-work. Contributors should be able to implement it from this document alone. Compare the result with
-the user-supplied reference image `Untitled-2026-04-17-1350.png` in the user's Downloads folder;
-the sketch contains private data and stays outside the repository.
+work. Contributors should be able to implement it from this document alone. The reference sketch
+contains private data and stays outside the repository.
 
 ## 1. Intended result
 
@@ -124,7 +123,10 @@ error, and nothing is published to the export folder.
 
 ### Loading and rendering
 
-Show a spinner while a preview is prepared. For `entire_range`, show progress and a cancel action,
+Show one spinner while a preview is prepared: in the pane while it is empty, in the toolbar while
+earlier text stays visible. A loaded preview opens scrolled to its end, the newest messages. Clicking
+the previewed row again only toggles its selection; the preview, its view and scroll stay. For
+`entire_range`, show progress and a cancel action,
 keep the excerpt visible meanwhile, and on failure or cancellation keep the excerpt and offer retry.
 Never label partial text as complete.
 
@@ -164,12 +166,10 @@ no person subtitle. The self chat may use the signed-in user's presence.
 
 Reuse `service/presence.py` and `remote/presence.py`. The own-presence route uses the active account
 id, and the peer route accepts only a catalog conversation id; the page cannot request an arbitrary
-person. Both share the service's one-minute cache. Presence loads separately for the signed-in user
-and visible one-to-one rows, with four concurrent row requests. There is no presence polling.
-
-Load presence separately from the catalog and preview, for the signed-in user and visible rows only
-(for example with an IntersectionObserver), with bounded concurrency. No background polling.
-Failures leave the list usable and show presence as unavailable.
+person. Both share the service's one-minute cache. Presence loads separately from the catalog and
+preview, for the signed-in user and visible one-to-one rows only (an IntersectionObserver), with four
+concurrent row requests. There is no presence polling. Failures leave the list usable and show
+presence as unavailable.
 
 Own-presence reads are unverified: cover them with tests, and verify live only if separately
 authorized, recording dated findings in the research docs.
@@ -196,8 +196,8 @@ each:
 4. **Preview in the page.** Wire selection and settings to the endpoint; loading, capped and failed
    states; the View entire range button; chunked rendering; request generations; the memory cache.
 5. **Presence and metadata.** Own and peer presence routes, visible-row loading, badges, last-seen
-   subtitles and tooltips (complete).
-6. **Review and fixes.** Review the whole diff and workflow, remove duplication, finish docs (complete).
+   subtitles and tooltips.
+6. **Review and fixes.** Review the whole diff and workflow, remove duplication, finish docs.
 
 Run all four repository checks (`uv run ruff check .`, `uv run ruff format --check .`,
 `uv run pyright`, `uv run pytest`) before every commit, and fix failures without weakening them.

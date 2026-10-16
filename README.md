@@ -115,18 +115,25 @@ uv run teams-connector ui
 It opens a browser on a loopback URL, normally `http://127.0.0.1:8765`, and stops after 30 idle
 minutes. Use `uv run teams-connector ui --help` for `--port`, `--no-browser`, and `--idle-minutes`.
 If the preferred port is busy, the connector selects another free loopback port. The page uses a
-per-run session token and rejects non-local hosts. It supports chat selection, an inclusive date
-range in the browser's time zone, a per-chat message limit, and text or attachment-inclusive
-downloads. Selecting a chat shows its export text in a preview pane; **View entire range** expands
-the preview to all messages in the chosen date range and message limit without downloading a file.
-The preview text follows the export settings, including meeting notes, transcript markers and AI
-summaries, and never downloads binary files. The page keeps up to ten recent previews in memory for
-60 seconds from preview completion. Refresh chats reloads both the conversation list and the active
-preview. The browser shows Teams presence on the signed-in avatar and visible one-to-one rows;
-last-seen details replace the peer's activity subtitle, while conversation type and activity time
-appear in a hover or focus tooltip. Presence failures remain unknown rather than implying offline.
-The browser opens only after
-the server reports ready and prints the selected URL.
+per-run session token and rejects non-local hosts. The browser opens only after the server reports
+ready and prints the selected URL.
+
+The page lists conversations on the left and previews one on the right. Clicking a row ticks it for
+download and previews it; the ticked conversations appear as pills under the list. Above them are an
+inclusive date range in the browser's time zone, a per-chat message limit, and a settings menu (the
+cog) with switches for AI meeting summaries (which also govern the meeting's Loop notes), transcripts
+and attachments. Every setting applies to both the download and the preview.
+
+The preview is the export text itself, opened at its newest messages. It shows the latest 200
+messages (at most 1 MiB of text) of the chosen range; **View entire range** shows all of it. A
+preview never downloads attachment or transcript files, but their markers read as in the download.
+The page keeps up to ten previews in memory for 60 seconds after each one finishes. Refresh chats
+reloads the list and the open preview.
+
+The signed-in avatar and visible one-to-one rows show Teams presence, and a one-to-one row shows when
+the person was last seen. Hovering or focusing a row shows its kind and last activity. Presence that
+cannot be read shows as unknown, never as offline.
+
 The date picker behaves like the Outlook connector's: weeks start on Sunday, future days are
 disabled, two clicks in either order make the range, and the calendar stays open until Done or
 Escape. The × beside the field clears the range.
@@ -135,9 +142,9 @@ ZIP: each conversation's plain file at the top, and its attachments in a folder 
 There is never a ZIP inside the ZIP.
 
 The local store holds the chat catalog and account metadata, and nothing else. Message content is not
-kept: Teams is the record, and every history read goes to Teams. The store is separated by Microsoft
-account and checks its stored owner before use; it is not application-encrypted, so follow the storage
-rules for the device. Generated exports and downloaded message attachments are cleaned up after seven
+kept, apart from the preview's short-lived page memory: Teams is the record, and every history read
+goes to Teams. The store is separated by Microsoft account and checks its stored owner before use; it
+is not application-encrypted, so follow the storage rules for the device. Generated exports and downloaded message attachments are cleaned up after seven
 days the next time their output directory is used. Downloads are cached per source under the data directory's
 `downloads` folder, so a file already there is returned without being fetched again.
 

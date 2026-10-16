@@ -34,7 +34,7 @@ async def test_excerpt_is_the_latest_200_messages_and_entire_range_removes_only_
     complete = await services.exports.preview(_request(), entire_range=True)
 
     assert excerpt.messages == 200 and excerpt.capped
-    assert "Message 10" in excerpt.text and "Message 9</" not in excerpt.text
+    assert "Message 10\n" in excerpt.text and "Message 9\n" not in excerpt.text
     assert excerpt.text.index("Message 10") < excerpt.text.index("Message 209")
     assert complete.messages == 210 and not complete.capped
     assert complete.text.index("Message 0") < complete.text.index("Message 209")
@@ -91,5 +91,5 @@ async def test_preview_honors_user_message_limit_without_marking_it_as_truncated
     preview = await services.exports.preview(_request(message_limit=150))
 
     assert preview.messages == 150 and not preview.capped
-    assert "Message 60" in preview.text and "Message 59</" not in preview.text
+    assert "Message 60\n" in preview.text and "Message 59\n" not in preview.text
     assert "Message 209" in preview.text

@@ -234,8 +234,9 @@ class Exports:
     ) -> tuple[list[Span], dict[str, Attachment], int, dict[str, str | None], bool]:
         """Read the selection from Teams, newest page first, and spool each page's records. Returns the page
         spans, the attachments the messages reference by their final names, the message count, and the
-        meeting-notes pages by link, each with its text or None when it was not read. The chat's own file
-        name is taken first, so no attachment can replace it in the ZIP."""
+        meeting-notes pages by link, each with its text or None when it was not read, and whether
+        ``text_budget`` (preview only, in UTF-8 bytes) stopped the read early, keeping the newest text. The
+        chat's own file name is taken first, so no attachment can replace it in the ZIP."""
         spans: list[Span] = []
         references: dict[str, Attachment] = {}
         names: dict[tuple[str, str], str] = {}
@@ -248,17 +249,13 @@ class Exports:
             async for page in self._history.selection(
                 chat, since=request.since, until=request.until, message_limit=request.message_limit
             ):
-                if text_budget is not None and text_bytes >= text_budget:
-                    text_limited = True
-                    break
                 start = output.tell()
                 records: list[str] = []
                 for message in page:
                     if not request.include_summaries:  # the flag governs the Facilitator's notes too
                         withhold_meeting_notes(message)
-                    if request.include_summaries:
+                    else:
                         await self._add_meeting_notes(message, notes)
-                    if request.include_summaries:
                         await self._summaries.add_to_message(
                             message, include_transcripts=request.include_transcripts
                         )
@@ -306,7 +303,8 @@ class Exports:
                     pages_fetched=state.pages_fetched + 1,
                     messages_retrieved=state.messages_retrieved + len(page),
                 )
-                if text_limited:
+                if text_limited or (text_budget is not None and text_bytes >= text_budget):
+                    text_limited = True  # a full budget stops before reading another page
                     break
         return spans, references, written, notes, text_limited
 

@@ -401,7 +401,7 @@ function loadOwnPresence(accountId) {
 
 function positionChatTooltip(row, tooltip) {
   window.requestAnimationFrame(() => {
-    if (!row.matches(":hover, :focus-within")) return;
+    if (!row.matches(":hover, :focus-visible, :has(:focus-visible)")) return;
     const rect = row.getBoundingClientRect();
     const width = Math.min(340, window.innerWidth - 16);
     tooltip.style.width = width + "px";
@@ -441,7 +441,7 @@ const presenceObserver = new IntersectionObserver((entries) => {
 }, { root: list, rootMargin: "0px" });
 
 function repositionChatTooltip() {
-  const row = list.querySelector(".chat-row:hover, .chat-row:focus-within");
+  const row = list.querySelector(".chat-row:hover, .chat-row:focus-visible, .chat-row:has(:focus-visible)");
   const tooltip = row?.querySelector(".chat-tooltip");
   if (row && tooltip) positionChatTooltip(row, tooltip);
 }
@@ -470,8 +470,6 @@ function updateControls() {
 }
 
 function renderSelection() {
-  count.textContent = selected.size + " selected";
-  downloadButton.disabled = selected.size === 0 || downloadButton.dataset.busy === "true";
   selectedChats.replaceChildren();
   for (const id of selected) {
     const chat = chats.find((item) => item.id === id);
@@ -509,10 +507,11 @@ function renderChatStates() {
   }
 }
 
-function setChatSelection(id, checked, { preview = true } = {}) {
+// Toggling the previewed conversation only changes the selection; its preview, view and scroll stay.
+function setChatSelection(id, checked) {
   if (checked) selected.add(id);
   else selected.delete(id);
-  if (preview) {
+  if (id !== previewConversationId) {
     previewConversationId = id;
     previewEntireRange = false;
     previewIsCapped = false;
@@ -672,8 +671,16 @@ function renderPreviewText(result) {
     element.textContent = block;
     previewContent.appendChild(element);
   }
+  scrollPreviewToEnd();
   previewHasText = true;
   previewIsCapped = Boolean(result.capped);
+}
+
+// Show the newest messages first. Off-screen blocks have estimated heights until rendered, so keep the
+// pane pinned to the end for a few frames while their real heights settle.
+function scrollPreviewToEnd(frames = 4) {
+  previewContent.scrollTop = previewContent.scrollHeight;
+  if (frames > 0) window.requestAnimationFrame(() => scrollPreviewToEnd(frames - 1));
 }
 
 function exportSettingsPayload() {
@@ -792,10 +799,11 @@ async function startPreview({ entireRange = false, forceRefresh = false, keepCur
     loading.append(spinner, label);
     previewContent.appendChild(loading);
   }
+  // An empty pane shows its own loading spinner; the toolbar reports progress only over existing text.
   setPreviewToolbar({
     view: previewIsCapped && !entireRange,
-    status: entireRange ? "Preparing the entire range…" : "Preparing preview…",
-    spinning: true,
+    status: keepCurrent ? (entireRange ? "Preparing the entire range…" : "Refreshing preview…") : "",
+    spinning: keepCurrent,
     cancel: entireRange,
   });
 
@@ -827,8 +835,8 @@ async function startPreview({ entireRange = false, forceRefresh = false, keepCur
       if (job.status === "running") {
         setPreviewToolbar({
           view: previewIsCapped && !entireRange,
-          status: entireRange ? previewProgress(job.progress) : "Preparing preview…",
-          spinning: true,
+          status: keepCurrent ? (entireRange ? previewProgress(job.progress) : "Refreshing preview…") : "",
+          spinning: keepCurrent,
           cancel: entireRange,
         });
         await wait(300);

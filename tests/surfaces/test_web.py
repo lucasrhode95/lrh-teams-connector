@@ -252,7 +252,13 @@ async def test_ui_presence_routes_use_the_active_account_and_conversation_only(
     assert fake.presence_mris == [f"8:orgid:{ME}", f"8:orgid:{PEER}"]
 
 
-def test_settings_switches_are_accessible_and_match_the_visual_reference() -> None:
+def test_avatars_are_round_and_clip_their_photos() -> None:
+    styles = (Path(routes.__file__).parent / "static" / "app.css").read_text(encoding="utf-8")
+    assert ".avatar { display: grid; place-items: center; overflow: hidden;" in styles
+    assert ".avatar img { width: 100%; height: 100%; object-fit: cover; }" in styles
+
+
+def test_settings_switches_are_accessible_and_lay_out_inline() -> None:
     static = Path(routes.__file__).parent / "static"
     page = (static / "index.html").read_text(encoding="utf-8")
     styles = (static / "app.css").read_text(encoding="utf-8")
@@ -260,6 +266,9 @@ def test_settings_switches_are_accessible_and_match_the_visual_reference() -> No
     assert len(switch_labels) == 3
     assert all('type="checkbox" role="switch"' in attrs for attrs in switch_labels)
     assert ".switch input:checked::after { transform: translateX(14px); }" in styles
+    # Field labels stack their control below; that rule must not reach the menu's switch labels.
+    assert ".conversation-controls > label, .export-controls > label { display: grid;" in styles
+    assert ".switch { display: inline-flex;" in styles
     assert "@media (prefers-reduced-motion: reduce)" in styles
 
 
@@ -281,7 +290,7 @@ def test_selection_pills_and_preview_target_are_separate() -> None:
     assert 'id="selected-chats"' in page and 'id="preview-content"' in page
     assert "let previewConversationId = null" in script
     assert "event.stopPropagation();\n      selected.delete(id);" in script
-    assert "if (preview) {\n    previewConversationId = id;" in script
+    assert "if (id !== previewConversationId) {\n    previewConversationId = id;" in script
 
 
 def test_preview_ui_supports_full_range_cancellation_and_page_memory_cache() -> None:
