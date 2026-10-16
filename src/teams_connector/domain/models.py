@@ -283,6 +283,7 @@ class ExportRequest(BaseModel):
     format: ExportFormat = "txt"
     include_attachments: bool = True
     include_transcripts: bool = True
+    include_summaries: bool = True  # Teams' AI summary of each transcribed meeting, in its transcript marker
 
 
 class ExportedChat(Compact):

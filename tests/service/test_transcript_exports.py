@@ -8,10 +8,14 @@ from pathlib import Path
 
 from teams_connector.bootstrap import Services
 from teams_connector.domain.models import ExportRequest
-from tests.fakes.teams_fake import FakeTeams, add_meeting
+from tests.fakes.teams_fake import FakeTeams, add_meeting, synthetic_drive
 
 CHAT = "19:one@unq.gbl.spaces"
-DRIVE = "b!SYNTH-DRIVE"
+DRIVE = synthetic_drive(
+    "11111111-2222-3333-4444-555555555555",
+    "66666666-7777-8888-9999-aaaaaaaaaaaa",
+    "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+)
 DOCUMENT = {
     "entries": [
         {

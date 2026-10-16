@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import json
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -188,6 +189,9 @@ class FakeTeams:
     # meeting transcripts by recording drive item id: {"id", "document" (the JSON), "denied" (Graph refuses)}
     transcripts: dict[str, dict[str, Any]] = field(default_factory=dict)
     videos: list[dict[str, Any]] = field(default_factory=list)  # search hits, in order (see add_meeting)
+    summaries: dict[str, str] = field(default_factory=dict)  # Teams' AI summary by drive item id
+    summary_reads: list[str] = field(default_factory=list)  # entity ids the summary route was asked for
+    summary_status: int | None = None  # when set, the summary route answers this status instead
     token_counter: int = 0
 
     # ------------------------------------------------------------------ routing
@@ -230,6 +234,8 @@ class FakeTeams:
                     return httpx.Response(
                         200, content=data, headers={"content-type": "application/octet-stream"}
                     )
+        if url.hostname == "substrate.office.com" and path == "/search/api/v1/recommendations":
+            return self._summary(request)
         return httpx.Response(404, json={"error": {"code": "NotFound", "message": "no route"}})
 
     # ------------------------------------------------------------------ CSA
@@ -522,6 +528,21 @@ class FakeTeams:
             "moreResultsAvailable": offset + size < len(self.videos),
         }
         return httpx.Response(200, json={"value": [{"searchTerms": [], "hitsContainers": [container]}]})
+
+    def _summary(self, request: httpx.Request) -> httpx.Response:
+        """The meeting summary route: the summary of the meeting the request's entity id names, when the fake
+        holds one. The entity id's last part is the recording's drive item id."""
+        entity = json.loads(request.content)["entityRequests"][0]["context"]["entityId"]
+        self.summary_reads.append(entity)
+        if self.summary_status is not None:
+            return httpx.Response(self.summary_status, json={"error": {"code": "Synthetic", "message": "no"}})
+        text = self.summaries.get(entity.rsplit("_", 1)[-1])
+        if text is None:
+            empty = {"Total": 0, "MoreResultsAvailable": False}
+            return httpx.Response(200, json={"EntitySets": [{"ResultSets": [empty]}]})
+        source = {"MeetingSummary": text, "InsightProcessingStates": {"MeetingSummary": "Completed"}}
+        result_set = {"Results": [{"Source": source}], "Total": 1, "MoreResultsAvailable": False}
+        return httpx.Response(200, json={"EntitySets": [{"ResultSets": [result_set]}]})
 
     def _transcript(self, parts: list[str], query: dict[str, list[str]]) -> httpx.Response:
         """A recording's transcripts: the listing, and the JSON content of the one listed."""
@@ -837,6 +858,13 @@ def recording_card(title: str, drive: str, item: str, transcript_id: str | None)
     )
 
 
+def synthetic_drive(site: str, web: str, library: str) -> str:
+    """A SharePoint drive id, as SharePoint writes one: ``b!`` and the base64url of the site, web and library
+    GUIDs as 16-byte blocks in GUID byte order."""
+    blocks = b"".join(uuid.UUID(guid).bytes_le for guid in (site, web, library))
+    return "b!" + base64.urlsafe_b64encode(blocks).decode("ascii").rstrip("=")
+
+
 def add_meeting(
     fake: FakeTeams,
     *,
@@ -849,6 +877,7 @@ def add_meeting(
     document: dict[str, Any] | None = None,
     denied: bool = False,
     message_id: str | None = None,
+    summary: str | None = None,
 ) -> None:
     """Put one synthetic meeting in the tenant: a recording card in the chat (sent at ``when``), the video
     search finds, and its transcript (``document`` in Teams' JSON form) when there is one."""
@@ -864,3 +893,5 @@ def add_meeting(
     fake.videos.append({"driveId": drive, "itemId": item, "name": f"{title}.mp4", "createdDateTime": when})
     if transcript_id:
         fake.transcripts[item] = {"id": transcript_id, "document": document or {}, "denied": denied}
+    if summary is not None:
+        fake.summaries[item] = summary

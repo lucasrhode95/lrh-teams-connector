@@ -12,6 +12,7 @@ Adapters (wired in bootstrap.py):
   remote/image_readers.py.
 - MessageDeleter: remote/chat_service.py.
 - PresenceReader: remote/presence.py.
+- MeetingSummaryReader: remote/substrate_summaries.py.
 
 Swapping an adapter (another tenant, a policy change) must not change anything above this file.
 """
@@ -250,6 +251,13 @@ class TranscriptReader(Protocol):
     async def default(self, recording: RecordingRef) -> Transcript | None:
         """The default transcript of a recording, read now: None when Teams has none for it. A read Teams
         refuses raises the service's error, which callers report as the transcript being unavailable."""
+        ...
+
+
+class MeetingSummaryReader(Protocol):
+    async def summary(self, recording: RecordingRef) -> str | None:
+        """Teams' AI summary of a meeting, read now: None when Teams has none for the recording. An unreadable
+        answer, or ids the route cannot address, raises the service's error."""
         ...
 
 

@@ -15,6 +15,7 @@ const downloadButton = $("download");
 const cancelButton = $("cancel-export");
 const includeAttachmentsInput = $("include-attachments");
 const includeTranscriptsInput = $("include-transcripts");
+const includeSummariesInput = $("include-summaries");
 const statusText = $("status");
 const authHelp = $("auth-help");
 const accountInfo = $("account-info");
@@ -263,6 +264,7 @@ function updateControls() {
   cancelButton.disabled = !activeExportId;
   includeAttachmentsInput.disabled = busy;
   includeTranscriptsInput.disabled = busy;
+  includeSummariesInput.disabled = busy;
 }
 
 function renderChats() {
@@ -443,6 +445,7 @@ async function downloadSelected() {
         message_limit: limit.value,
         include_attachments: includeAttachmentsInput.checked,
         include_transcripts: includeTranscriptsInput.checked,
+        include_summaries: includeSummariesInput.checked,
       }),
     });
     activeExportId = started.id;
@@ -543,5 +546,6 @@ downloadButton.addEventListener("click", downloadSelected);
 cancelButton.addEventListener("click", cancelExport);
 includeAttachmentsInput.addEventListener("change", updateControls);
 includeTranscriptsInput.addEventListener("change", updateControls);
+includeSummariesInput.addEventListener("change", updateControls);
 setInterval(() => api("/api/heartbeat", { method: "POST" }).catch(() => {}), 60_000);
 loadChats();

@@ -31,6 +31,7 @@ from teams_connector.remote.graph_transcripts import GraphTranscripts, GraphVide
 from teams_connector.remote.image_readers import AmsCredential, AmsImages, GraphHostedImages
 from teams_connector.remote.presence import TeamsPresence
 from teams_connector.remote.substrate_search import SubstrateChatSearch, SubstrateSearch
+from teams_connector.remote.substrate_summaries import SubstrateMeetingSummaries
 from teams_connector.remote.teams_session import TeamsSession
 from teams_connector.remote.transport import Bearer, Transport
 from teams_connector.service.catalog import Catalog
@@ -133,6 +134,11 @@ class AppContext:
             Bearer(account_tokens, "m365.search"),
             anchor_mailbox=f"Oid:{account.object_id}@{account.tenant_id}",
         )
+        summaries = SubstrateMeetingSummaries(
+            transport,
+            Bearer(account_tokens, "m365.search"),
+            anchor_mailbox=f"Oid:{account.object_id}@{account.tenant_id}",
+        )
         shared_files = GraphFiles(graph)
         transcripts = GraphTranscripts(graph)
         files = Files(
@@ -151,7 +157,7 @@ class AppContext:
             catalog=catalog,
             history=history,
             search=Search(store, search_source),
-            exports=Exports(catalog, history, files),
+            exports=Exports(catalog, history, files, summaries),
             sender=Sender(
                 catalog,
                 GraphWriter(graph),
