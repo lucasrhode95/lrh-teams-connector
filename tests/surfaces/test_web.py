@@ -111,13 +111,25 @@ async def test_ui_serves_graph_profile_photo_and_reports_missing_photo(
     assert missing.status_code == 404
 
 
-def test_checkbox_labels_lay_out_inline() -> None:
+def test_settings_switches_are_accessible_and_match_the_visual_reference() -> None:
     static = Path(routes.__file__).parent / "static"
     page = (static / "index.html").read_text(encoding="utf-8")
     styles = (static / "app.css").read_text(encoding="utf-8")
-    checkbox_labels = re.findall(r'<label([^>]*)><input [^>]*type="checkbox"', page)
-    assert checkbox_labels and all('class="check-label"' in attrs for attrs in checkbox_labels)
-    assert ".check-label { display: flex; align-items: center;" in styles
+    switch_labels = re.findall(r'<label class="switch"><input([^>]*)', page)
+    assert len(switch_labels) == 3
+    assert all('type="checkbox" role="switch"' in attrs for attrs in switch_labels)
+    assert ".switch input:checked::after { transform: translateX(14px); }" in styles
+    assert "@media (prefers-reduced-motion: reduce)" in styles
+
+
+def test_web_page_uses_full_panel_layout_and_tracks_system_theme_changes() -> None:
+    static = Path(routes.__file__).parent / "static"
+    page = (static / "index.html").read_text(encoding="utf-8")
+    styles = (static / "app.css").read_text(encoding="utf-8")
+    script = (static / "app.js").read_text(encoding="utf-8")
+    assert "Choose conversations and filters" not in page
+    assert 'class="content-row"' in page and 'class="footer-row"' in page
+    assert "height: 100%;" in styles and 'themePreference.addEventListener("change", applyTheme)' in script
 
 
 def test_date_picker_weeks_start_on_sunday_like_outlook() -> None:

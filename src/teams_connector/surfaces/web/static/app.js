@@ -2,7 +2,14 @@
 // Every /api call carries the per-run session token. Message content is never rendered as HTML.
 
 const TOKEN = document.querySelector('meta[name="session-token"]').content;
-document.documentElement.dataset.theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+const themePreference = window.matchMedia("(prefers-color-scheme: dark)");
+
+function applyTheme() {
+  document.documentElement.dataset.theme = themePreference.matches ? "dark" : "light";
+}
+
+applyTheme();
+themePreference.addEventListener("change", applyTheme);
 
 const chats = [];
 const selected = new Set();
@@ -19,6 +26,8 @@ const includeSummariesInput = $("include-summaries");
 const statusText = $("status");
 const authHelp = $("auth-help");
 const accountInfo = $("account-info");
+const settingsToggle = $("settings-toggle");
+const settingsMenu = $("settings-menu");
 const calendar = $("calendar");
 const calendarDays = $("calendar-days");
 const calendarMonthLabel = $("calendar-month");
@@ -537,10 +546,18 @@ $("today-date").addEventListener("click", () => {
 $("calendar-done").addEventListener("click", () => setCalendarOpen(false, { restoreFocus: true }));
 document.addEventListener("pointerdown", (event) => {
   if (!calendar.hidden && !$("range-picker").contains(event.target)) setCalendarOpen(false);
+  if (!settingsMenu.hidden && !$("settings-wrap")?.contains(event.target)) setSettingsOpen(false);
 });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !calendar.hidden) setCalendarOpen(false, { restoreFocus: true });
+  if (event.key === "Escape" && !settingsMenu.hidden) setSettingsOpen(false, { restoreFocus: true });
 });
+function setSettingsOpen(open, { restoreFocus = false } = {}) {
+  settingsMenu.hidden = !open;
+  settingsToggle.setAttribute("aria-expanded", String(open));
+  if (!open && restoreFocus) settingsToggle.focus();
+}
+settingsToggle.addEventListener("click", () => setSettingsOpen(settingsMenu.hidden));
 $("refresh").addEventListener("click", loadChats);
 downloadButton.addEventListener("click", downloadSelected);
 cancelButton.addEventListener("click", cancelExport);
