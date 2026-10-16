@@ -193,7 +193,14 @@ function browserUtcOffsetMinutes(value, endOfDay) {
 
 const photoUrls = new Map(); // user id -> object URL, or null when the person has no photo
 const photoQueue = [];
+const presenceResults = new Map(); // conversation id -> presence result for the current page
+const presenceQueue = [];
+const presencePending = new Map(); // conversation id -> current presence generation
 let photosInFlight = 0;
+let presenceInFlight = 0;
+let presenceGeneration = 0;
+let ownPresenceKey = null;
+let ownPresenceRequest = null;
 
 function initials(name) {
   const words = String(name || "").replace(/\(.*?\)/g, " ").split(/[\s,]+/).filter(Boolean);
@@ -250,12 +257,159 @@ function pumpPhotos() {
         photoUrls.set(userId, url);
         showImage(box, url);
       })
-      .catch(() => photoUrls.set(userId, null))
+      .catch((error) => {
+        if (error instanceof ApiError && error.status === 401) void showError(error);
+        photoUrls.set(userId, null);
+      })
       .finally(() => {
         photosInFlight -= 1;
         pumpPhotos();
       });
   }
+}
+
+function presenceState(presence) {
+  const value = String(presence?.availability || "").toLowerCase().replace(/[\s_-]/g, "");
+  if (["available", "online"].includes(value)) return "available";
+  if (["busy", "outofoffice"].includes(value)) return "busy";
+  if (["donotdisturb", "dnd"].includes(value)) return "dnd";
+  if (["away", "berightback"].includes(value)) return "away";
+  if (value === "offline") return "offline";
+  return "unknown";
+}
+
+function presenceLabel(presence) {
+  if (!presence) return "Presence unavailable";
+  const state = presenceState(presence);
+  const labels = { available: "Available", busy: "Busy", dnd: "Do not disturb", away: "Away", offline: "Offline", unknown: "Presence unavailable" };
+  const activity = String(presence.activity || "");
+  const activityKey = activity.toLowerCase().replace(/[^a-z]/g, "");
+  const activityLabels = { inacall: "In a call", inconferencecall: "In a conference call", presenting: "Presenting" };
+  const humanActivity = activity.replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase();
+  const knownActivity = activityLabels[activityKey] || (humanActivity ? humanActivity.replace(/^./, (char) => char.toUpperCase()) : "");
+  return labels[state] + (knownActivity && state !== "unknown" ? " · " + knownActivity : "");
+}
+
+function setPresenceBadge(badge, presence) {
+  const state = presenceState(presence);
+  const label = presenceLabel(presence);
+  badge.className = "presence-dot presence-" + state + (badge.classList.contains("chat-presence-dot") ? " chat-presence-dot" : "");
+  badge.setAttribute("role", "img");
+  badge.setAttribute("aria-label", label);
+  badge.title = label;
+}
+
+function lastSeenText(presence) {
+  if (!presence?.last_active_at) return "Last seen: unavailable";
+  const lastActive = new Date(presence.last_active_at);
+  if (Number.isNaN(lastActive.getTime())) return "Last seen: unavailable";
+  const device = String(presence.device_type || "").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ").trim();
+  return "Last seen: " + lastActive.toLocaleString() + (device ? " · " + device : "");
+}
+
+function applyPresenceToRow(row, result) {
+  const presence = result?.presence || null;
+  const metadata = row.querySelector(".chat-meta");
+  const badge = row.querySelector(".chat-presence-dot");
+  if (metadata) metadata.textContent = lastSeenText(presence);
+  if (badge) setPresenceBadge(badge, presence);
+}
+
+function isRowVisible(row) {
+  const rowRect = row.getBoundingClientRect();
+  const listRect = list.getBoundingClientRect();
+  return rowRect.width > 0 && rowRect.height > 0 && rowRect.bottom > listRect.top && rowRect.top < listRect.bottom &&
+    rowRect.right > listRect.left && rowRect.left < listRect.right;
+}
+
+function pumpPresence() {
+  while (presenceInFlight < 4 && presenceQueue.length) {
+    const job = presenceQueue.shift();
+    const { conversationId, generation } = job;
+    if (presencePending.get(conversationId) !== generation) continue;
+    if (generation !== presenceGeneration) {
+      presencePending.delete(conversationId);
+      continue;
+    }
+    let { row } = job;
+    if (!row.isConnected) {
+      row = Array.from(list.querySelectorAll(".chat-row")).find((item) => item.dataset.conversationId === conversationId);
+    }
+    if (!row) {
+      presencePending.delete(conversationId);
+      continue;
+    }
+    if (!isRowVisible(row)) {
+      presencePending.delete(conversationId);
+      presenceObserver.observe(row);
+      continue;
+    }
+    if (presenceResults.has(conversationId)) {
+      presencePending.delete(conversationId);
+      applyPresenceToRow(row, presenceResults.get(conversationId));
+      continue;
+    }
+    presenceInFlight += 1;
+    json("/api/presence/chat?conversation_id=" + encodeURIComponent(conversationId))
+      .catch((error) => {
+        if (generation === presenceGeneration && error instanceof ApiError && error.status === 401) void showError(error);
+        return { presence: null, reason: "Presence unavailable." };
+      })
+      .then((result) => {
+        if (generation !== presenceGeneration) return;
+        presenceResults.set(conversationId, result);
+        for (const current of list.querySelectorAll(".chat-row")) {
+          if (current.dataset.conversationId === conversationId) applyPresenceToRow(current, result);
+        }
+      })
+      .finally(() => {
+        presenceInFlight -= 1;
+        if (presencePending.get(conversationId) === generation) presencePending.delete(conversationId);
+        pumpPresence();
+      });
+  }
+}
+
+function clearPresenceResults() {
+  presenceResults.clear();
+  presenceQueue.length = 0;
+  presencePending.clear();
+  presenceGeneration += 1;
+}
+
+function loadOwnPresence(accountId) {
+  if (!accountId) return;
+  if (ownPresenceKey === accountId && ownPresenceRequest) return;
+  ownPresenceKey = accountId;
+  const badge = $("account-presence");
+  setPresenceBadge(badge, null);
+  ownPresenceRequest = json("/api/presence/me")
+    .then((result) => {
+      if (ownPresenceKey === accountId && currentAccountKey === accountId) setPresenceBadge(badge, result.presence || null);
+    })
+    .catch((error) => {
+      if (ownPresenceKey === accountId && currentAccountKey === accountId && error instanceof ApiError && error.status === 401) {
+        void showError(error);
+      }
+      if (ownPresenceKey === accountId && currentAccountKey === accountId) setPresenceBadge(badge, null);
+    })
+    .finally(() => {
+      if (ownPresenceKey === accountId) ownPresenceRequest = null;
+    });
+}
+
+function positionChatTooltip(row, tooltip) {
+  window.requestAnimationFrame(() => {
+    if (!row.matches(":hover, :focus-within")) return;
+    const rect = row.getBoundingClientRect();
+    const width = Math.min(340, window.innerWidth - 16);
+    tooltip.style.width = width + "px";
+    const height = tooltip.offsetHeight;
+    const top = rect.top > height + 12 ? rect.top - height - 8 : Math.min(window.innerHeight - height - 8, rect.bottom + 8);
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+    tooltip.style.left = left + "px";
+    tooltip.style.top = Math.max(8, top) + "px";
+  });
 }
 
 const avatarObserver = new IntersectionObserver((entries) => {
@@ -266,6 +420,24 @@ const avatarObserver = new IntersectionObserver((entries) => {
     fillAvatar(entry.target, kind, name, user || null);
   }
 }, { root: list, rootMargin: "200px" });
+
+const presenceObserver = new IntersectionObserver((entries) => {
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
+    presenceObserver.unobserve(entry.target);
+    const row = entry.target;
+    const conversationId = row.dataset.presenceConversation;
+    if (!conversationId) continue;
+    if (presenceResults.has(conversationId)) applyPresenceToRow(row, presenceResults.get(conversationId));
+    else {
+      const generation = presenceGeneration;
+      if (presencePending.get(conversationId) === generation) continue;
+      presencePending.set(conversationId, generation);
+      presenceQueue.push({ row, conversationId, generation });
+      pumpPresence();
+    }
+  }
+}, { root: list, rootMargin: "0px" });
 
 // ------------------------------------------------------------------ list
 
@@ -344,6 +516,8 @@ function setChatSelection(id, checked, { preview = true } = {}) {
 function renderChats() {
   const query = search.value.trim().toLocaleLowerCase();
   const visible = chats.filter((chat) => !query || chat.name.toLocaleLowerCase().includes(query));
+  for (const avatar of list.querySelectorAll(".chat-avatar")) avatarObserver.unobserve(avatar);
+  for (const row of list.querySelectorAll(".chat-row")) presenceObserver.unobserve(row);
   list.replaceChildren();
   if (!visible.length) {
     const empty = document.createElement("div");
@@ -352,14 +526,22 @@ function renderChats() {
     list.appendChild(empty);
     return;
   }
-  for (const chat of visible) {
+  for (const [index, chat] of visible.entries()) {
     const row = document.createElement("div");
     row.className = "chat-row";
     row.tabIndex = 0;
     row.setAttribute("role", "group");
     row.dataset.conversationId = chat.id;
-    row.title = chatTypeLabel(chat) + " · " + (chat.last_message_at
+    const tooltipText = chatTypeLabel(chat) + " · " + (chat.last_message_at
       ? new Date(chat.last_message_at).toLocaleString() : "No recent activity shown");
+    const tooltip = document.createElement("span");
+    tooltip.className = "chat-tooltip";
+    tooltip.id = "chat-tooltip-" + index;
+    tooltip.setAttribute("role", "tooltip");
+    tooltip.textContent = tooltipText;
+    row.setAttribute("aria-describedby", tooltip.id);
+    row.addEventListener("mouseenter", () => positionChatTooltip(row, tooltip));
+    row.addEventListener("focusin", () => positionChatTooltip(row, tooltip));
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.setAttribute("aria-label", "Include " + chat.name + " in download");
@@ -367,12 +549,25 @@ function renderChats() {
     checkbox.addEventListener("change", () => {
       setChatSelection(chat.id, checkbox.checked);
     });
+    const avatarWrap = document.createElement("span");
+    avatarWrap.className = "chat-avatar-wrap";
     const avatar = document.createElement("span");
     avatar.className = "chat-avatar avatar";
     avatar.setAttribute("aria-hidden", "true");
     avatar.dataset.kind = chatKind(chat);
     avatar.dataset.name = chat.name;
     if (chat.photo_user_id) avatar.dataset.user = chat.photo_user_id;
+    const personChat = chatKind(chat) === "one_on_one" && chat.photo_user_id && !chat.photo_user_id.startsWith("28:");
+    if (personChat) row.dataset.presenceConversation = chat.id;
+    avatarWrap.appendChild(avatar);
+    if (personChat) {
+      const badge = document.createElement("span");
+      badge.className = "presence-dot presence-unknown chat-presence-dot";
+      badge.setAttribute("role", "img");
+      badge.setAttribute("aria-label", "Presence unavailable");
+      badge.title = "Presence unavailable";
+      avatarWrap.appendChild(badge);
+    }
     avatarObserver.observe(avatar);
     const text = document.createElement("span");
     const name = document.createElement("span");
@@ -380,10 +575,10 @@ function renderChats() {
     name.textContent = chat.name;
     const metadata = document.createElement("span");
     metadata.className = "chat-meta";
-    metadata.textContent = chatKind(chat) === "one_on_one" ? "Last seen: loading presence…"
-      : chat.last_message_at ? new Date(chat.last_message_at).toLocaleString() : "No recent activity shown";
-    text.append(name, metadata);
-    row.append(checkbox, avatar, text);
+    if (personChat) metadata.textContent = "Last seen: loading presence…";
+    text.appendChild(name);
+    if (personChat) text.appendChild(metadata);
+    row.append(checkbox, avatarWrap, text, tooltip);
     row.addEventListener("click", (event) => {
       if (event.target === checkbox) return;
       setChatSelection(chat.id, !selected.has(chat.id));
@@ -396,6 +591,10 @@ function renderChats() {
     row.classList.toggle("selected", selected.has(chat.id));
     row.classList.toggle("previewed", chat.id === previewConversationId);
     list.appendChild(row);
+    if (personChat) {
+      if (presenceResults.has(chat.id)) applyPresenceToRow(row, presenceResults.get(chat.id));
+      else presenceObserver.observe(row);
+    }
   }
 }
 
@@ -403,6 +602,7 @@ async function showError(error) {
   if (error instanceof ApiError && error.status === 401) {
     clearPreviewCache();
     previewGeneration += 1;
+    if (activePreviewJobId) void cancelServerPreview(activePreviewJobId);
     activePreviewJobId = null;
     showPreviewEmpty("Teams sign-in is required to load conversation previews.");
     try {
@@ -466,11 +666,10 @@ function renderPreviewText(result) {
   previewIsCapped = Boolean(result.capped);
 }
 
-function previewPayload(conversationId, entireRange) {
+function exportSettingsPayload() {
   const limit = getMessageLimit();
   if (!limit.valid) return null;
   return {
-    conversation_ids: [conversationId],
     from_date: fromDateInput.value || null,
     to_date: toDateInput.value || null,
     from_utc_offset_minutes: fromDateInput.value ? browserUtcOffsetMinutes(fromDateInput.value, false) : null,
@@ -479,6 +678,15 @@ function previewPayload(conversationId, entireRange) {
     include_attachments: includeAttachmentsInput.checked,
     include_transcripts: includeTranscriptsInput.checked,
     include_summaries: includeSummariesInput.checked,
+  };
+}
+
+function previewPayload(conversationId, entireRange) {
+  const settings = exportSettingsPayload();
+  if (!settings) return null;
+  return {
+    conversation_ids: [conversationId],
+    ...settings,
     entire_range: entireRange,
   };
 }
@@ -664,6 +872,10 @@ function applyCatalog(body) {
   const nextAccountKey = body.account?.photo_user_id || body.account?.email || null;
   if (currentAccountKey && nextAccountKey !== currentAccountKey) {
     clearPreviewCache();
+    clearPresenceResults();
+    ownPresenceKey = null;
+    ownPresenceRequest = null;
+    setPresenceBadge($("account-presence"), null);
     selected.clear();
     previewConversationId = null;
     previewGeneration += 1;
@@ -677,6 +889,7 @@ function applyCatalog(body) {
   $("account-email").textContent = body.account?.email || "";
   fillAvatar($("account-avatar"), "self", body.account?.name, body.account?.photo_user_id);
   accountInfo.hidden = !body.account;
+  loadOwnPresence(body.account?.photo_user_id);
   const known = new Set(chats.map((chat) => chat.id));
   for (const id of Array.from(selected)) if (!known.has(id)) selected.delete(id);
   if (previewConversationId && !known.has(previewConversationId)) {
@@ -697,6 +910,7 @@ async function loadChats() {
   const refreshPreviewId = previewConversationId;
   const refreshPreviewEntireRange = previewEntireRange;
   clearPreviewCache();
+  clearPresenceResults();
   previewGeneration += 1;
   const oldPreviewJobId = activePreviewJobId;
   activePreviewJobId = null;
@@ -782,8 +996,8 @@ async function saveFile(path, filename) {
 
 async function downloadSelected() {
   if (!selected.size) return;
-  const limit = getMessageLimit();
-  if (!limit.valid) {
+  const settings = exportSettingsPayload();
+  if (!settings) {
     messageLimitInput.setCustomValidity("Enter a positive whole number, or leave the field blank for unlimited.");
     messageLimitInput.reportValidity();
     setStatus("Maximum messages per chat must be a positive whole number or blank.", true);
@@ -792,14 +1006,7 @@ async function downloadSelected() {
   messageLimitInput.setCustomValidity("");
   const payload = {
     conversation_ids: Array.from(selected),
-    from_date: fromDateInput.value || null,
-    to_date: toDateInput.value || null,
-    from_utc_offset_minutes: fromDateInput.value ? browserUtcOffsetMinutes(fromDateInput.value, false) : null,
-    to_utc_offset_minutes: toDateInput.value ? browserUtcOffsetMinutes(toDateInput.value, true) : null,
-    message_limit: limit.value,
-    include_attachments: includeAttachmentsInput.checked,
-    include_transcripts: includeTranscriptsInput.checked,
-    include_summaries: includeSummariesInput.checked,
+    ...settings,
   };
   const previewJobId = activePreviewJobId;
   previewGeneration += 1;

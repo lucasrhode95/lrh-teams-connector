@@ -1,4 +1,4 @@
-"""Presence of the other person in a one-on-one chat: read on request, never blocking the chat list.
+"""Presence for a one-on-one peer or signed-in user: read on request, never blocking the chat list.
 
 A successful read is kept for a minute in this process only; nothing is stored. A failed read is not
 cached and does not fail the call: it returns no presence and the reason, so the caller can go on.
@@ -40,6 +40,14 @@ class Presences:
         user_id = _person_id(chat.photo_user_id)
         if user_id is None:
             return PresenceResult(reason="This chat has no person to read presence for.")
+        return await self._for_person(user_id)
+
+    async def for_self(self, user_id: str) -> PresenceResult:
+        """Read the signed-in user's presence; callers must resolve the id from the active account."""
+        return await self._for_person(user_id)
+
+    async def _for_person(self, user_id: str) -> PresenceResult:
+        """Read a server-resolved Entra id through the shared minute cache."""
         cached = self._cache.get(user_id)
         if cached is not None and cached[0] > time.monotonic():
             return _result(cached[1])

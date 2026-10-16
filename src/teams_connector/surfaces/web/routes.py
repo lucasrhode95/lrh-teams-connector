@@ -254,6 +254,18 @@ def create_app(context: AppContext, *, session_token: str, port: int, activity: 
             return Response(status_code=304, headers=headers)
         return Response(content, media_type=content_type, headers=headers)
 
+    async def self_presence(_: Request) -> Response:
+        services = await context.services()
+        result = await services.presence.for_self(services.account.object_id)
+        return JSONResponse(result.model_dump(mode="json"))
+
+    async def chat_presence(request: Request) -> Response:
+        conversation_id = request.query_params.get("conversation_id")
+        if not conversation_id or not conversation_id.strip():
+            raise InvalidRequest("conversation_id is required.")
+        result = await (await context.services()).presence.for_chat(conversation_id)
+        return JSONResponse(result.model_dump(mode="json"))
+
     async def start_export(request: Request) -> Response:
         export = export_request(await request.json())
         if any(job.status == "running" for job in jobs.values()):
@@ -277,6 +289,9 @@ def create_app(context: AppContext, *, session_token: str, port: int, activity: 
             except ConnectorError as exc:
                 job.status = "failed"
                 job.error = {"message": str(exc), "kind": type(exc).__name__}
+            except Exception:
+                job.status = "failed"
+                job.error = {"message": "The export failed unexpectedly.", "kind": "InternalError"}
 
         job.task = asyncio.create_task(run())
         jobs[job.id] = job
@@ -312,6 +327,9 @@ def create_app(context: AppContext, *, session_token: str, port: int, activity: 
             except ConnectorError as exc:
                 job.status = "failed"
                 job.error = {"message": str(exc), "kind": type(exc).__name__}
+            except Exception:
+                job.status = "failed"
+                job.error = {"message": "The preview failed unexpectedly.", "kind": "InternalError"}
 
         job.task = asyncio.create_task(run())
         preview_job = job
@@ -384,6 +402,8 @@ def create_app(context: AppContext, *, session_token: str, port: int, activity: 
         Route("/api/status", api(status)),
         Route("/api/chats", api(chats)),
         Route("/api/photos/{user_id}", api(photo)),
+        Route("/api/presence/me", api(self_presence)),
+        Route("/api/presence/chat", api(chat_presence)),
         Route("/api/preview", api(start_preview), methods=["POST"]),
         Route("/api/preview/{job_id}", api(preview_status)),
         Route("/api/preview/{job_id}/cancel", api(cancel_preview), methods=["POST"]),

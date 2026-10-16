@@ -25,7 +25,7 @@ overview; this document records the rules and contracts they cannot show.
 | `remote/substrate_search.py` | Search v2 message search and named-chat matches, and Teams Web's search-box people suggestions (`substrate.office.com`), all with the `m365.search` token. |
 | `remote/substrate_summaries.py` | Teams' AI meeting summary from the search recommendations route (`substrate.office.com`, `MeetingCatchUp`), with the `m365.search` token; only `service/summaries.py` calls it. |
 | `service/summaries.py` | The one place that reads a meeting's AI summary for exports, `get_messages` and transcript search, each only for the meetings its result returns. Nothing is cached. |
-| `remote/presence.py`, `service/presence.py` | Presence of a one-on-one peer, read at the presence service AuthZ names (`presenceUPS`); the service keeps a result for a minute and fails open. |
+| `remote/presence.py`, `service/presence.py` | Presence of a one-on-one peer or signed-in user, read at the presence service AuthZ names (`presenceUPS`); the service keeps a result for a minute and fails open. |
 | `remote/inline_images.py`, `remote/image_readers.py` | Pasted images: the marker name and attachment record of each image in a message (`inline_images.py`, no network); the AMS full-size and Graph hosted-copy readers (`image_readers.py`). |
 | `remote/*_mapping.py` and `remote/teams_html.py` | Convert wire responses into domain records and readable message text. Wire-format field names remain inside this layer. |
 | `store/db.py` | Account-bound SQLite store for the chat catalog and account metadata only. Holds no message content and no tokens. |
@@ -69,6 +69,7 @@ and the adapters behind them. The split of backends (which private or public ser
 | UI | `GET /api/status` | token status | none | `TokenProvider` |
 | UI | `GET /api/chats` | `Catalog.list` (or `ensure`) | as `list_chats` | as `list_chats` |
 | UI | `GET /api/photos/{user_id}` | `Photos.photo` | `People` | `GraphPeople` |
+| UI | `GET /api/presence/me`, `GET /api/presence/chat` | `Presences.for_self` / `Presences.for_chat` | active account id or catalog conversation | `TeamsPresence` |
 | UI | `POST /api/preview` and its job routes | `Exports.preview` in the single cancellable preview slot | `HistoryReader` (`History.selection`), `MeetingSummaryReader`, `FileReader` (meeting notes only) | `ChatService`, `GraphChannels`, `SubstrateMeetingSummaries`, `GraphFiles` (text conversion only) |
 | UI | `POST /api/exports` and its job routes | `Exports.export` in a background job | as `export_chats` | as `export_chats` |
 
@@ -214,11 +215,13 @@ Example arguments for a bounded history read:
 ### Presence
 
 `get_presence` reads the availability, activity, device type and last-active time of the other person in a
-one-on-one chat. It reads Unified Presence where AuthZ names it for the account (`presenceUPS`, a
-`teams.microsoft.com/ups/<region>` route, as Teams Web does) with the `teams.spaces` bearer, sends only the
-person's id, keeps the result for a minute in the process, and never blocks the chat list. A failed read
-returns no presence and a reason. Other fields Teams returns (calendar, work location, capabilities) are not
-reported.
+one-on-one chat. The local UI also reads the signed-in user's presence for the account avatar and visible
+one-to-one rows for peer badges and last-seen subtitles. The UI routes resolve identities on the server:
+the own-presence route takes the active account id, and the peer route takes a conversation id checked by
+`Catalog`; the page cannot ask for an arbitrary person's presence. Reads use Unified Presence where AuthZ
+names it for the account (`presenceUPS`, a `teams.microsoft.com/ups/<region>` route, as Teams Web does) with
+the `teams.spaces` bearer, and share a one-minute process cache. A failed read returns no presence and a
+reason. Other fields Teams returns (calendar, work location, capabilities) are not reported.
 
 ### Message search
 

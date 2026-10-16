@@ -13,7 +13,8 @@ over one engine:
 
 - **MCP server:** agents find conversations, read history, search message text, discover messages
   online, export conversations, and send a message the user explicitly authorized.
-- **Local UI:** the user exports conversations as text or ZIP bundles without an AI client.
+- **Local UI:** the user exports conversations as text or ZIP bundles without an AI client, with
+  Teams presence for the signed-in user and visible one-to-one peers.
 
 The connector must:
 
@@ -85,7 +86,7 @@ The current split ([research](api-research.md#microsoft-graph-with-the-teams-cli
 | Meeting transcripts (download and search) | Graph `media/transcripts`, JSON content | Verified on one account and tenant (2026-10-16); the route is not in Graph's documentation, and a fresh account is untested (roadmap A1). The recording card names the recording, so no lookup is needed. |
 | Meeting AI summary (exports, `get_messages`, `search_transcripts`) | Search recommendations route, `MeetingCatchUp` entity, `m365.search` sign-in | Verified on one meeting (2026-10-16); the route is private and not in Graph's documentation. The entity id is built from the recording's drive id, so no lookup is needed (roadmap A1). |
 | Online message discovery | Search v2 (`m365.search`) | Graph `chatMessage` search is denied to the tested client |
-| Presence of one-on-one peers | Teams Unified Presence, private, at the route AuthZ names (`presenceUPS`) | Graph presence needs `Presence.Read`, which the client lacks; the AuthZ route answers the `teams.spaces` bearer ([research](api-research.md#unified-presence)) |
+| Presence of the signed-in user and one-on-one peers | Teams Unified Presence, private, at the route AuthZ names (`presenceUPS`) | Graph presence needs `Presence.Read`, which the client lacks; the AuthZ route answers the `teams.spaces` bearer ([research](api-research.md#unified-presence)) |
 
 Teams-native services stay where they are richer than Graph: presence and read state,
 broad heterogeneous search, and AMS media.

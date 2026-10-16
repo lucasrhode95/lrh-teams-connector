@@ -122,7 +122,10 @@ the preview to all messages in the chosen date range and message limit without d
 The preview text follows the export settings, including meeting notes, transcript markers and AI
 summaries, and never downloads binary files. The page keeps up to ten recent previews in memory for
 60 seconds. Refresh chats reloads both the conversation list and the active preview. The browser
-opens only after the server reports ready and prints the selected URL.
+shows Teams presence on the signed-in avatar and visible one-to-one rows; last-seen details replace
+the peer's activity subtitle, while conversation type and activity time appear in a hover or focus
+tooltip. Presence failures remain unknown rather than implying offline. The browser opens only after
+the server reports ready and prints the selected URL.
 The date picker behaves like the Outlook connector's: weeks start on Sunday, future days are
 disabled, two clicks in either order make the range, and the calendar stays open until Done or
 Escape. The × beside the field clears the range.

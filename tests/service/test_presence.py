@@ -40,6 +40,15 @@ async def test_a_successful_read_is_kept_for_a_minute(services: Services, fake: 
     assert again.presence is not None and presence_calls(fake) == 1
 
 
+async def test_signed_in_user_presence_uses_the_server_resolved_account_id(
+    services: Services, fake: FakeTeams
+) -> None:
+    result = await services.presence.for_self(services.account.object_id)
+
+    assert result.presence is not None and result.presence.availability == "Available"
+    assert presence_calls(fake) == 1
+
+
 async def test_a_failed_read_fails_open_and_is_not_kept(services: Services, fake: FakeTeams) -> None:
     fake.presence_fails = True
     failed = await services.presence.for_chat(ONE)

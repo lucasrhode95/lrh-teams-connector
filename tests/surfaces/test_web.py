@@ -11,9 +11,10 @@ import pytest
 from httpx import ASGITransport
 
 from teams_connector.bootstrap import AppContext
+from teams_connector.service.export.orchestrator import Exports
 from teams_connector.surfaces.web import routes
 from teams_connector.surfaces.web.routes import Activity, create_app, export_request, preview_request
-from tests.fakes.teams_fake import PEER, FakeTeams, FakeTokens
+from tests.fakes.teams_fake import ME, PEER, FakeTeams, FakeTokens
 
 SESSION = "synthetic-session-token"
 PORT = 8765
@@ -123,6 +124,45 @@ async def test_ui_runs_a_preview_job_and_returns_text_with_coverage(
     assert (await web_client.get(f"/api/preview/{job_id}", headers=headers)).status_code == 404
 
 
+@pytest.mark.parametrize(
+    ("job_kind", "method_name", "start_path", "status_path"),
+    [
+        ("export", "export", "/api/exports", "/api/exports/"),
+        ("preview", "preview", "/api/preview", "/api/preview/"),
+    ],
+)
+async def test_unexpected_job_errors_become_sanitized_terminal_failures(
+    web_client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    job_kind: str,
+    method_name: str,
+    start_path: str,
+    status_path: str,
+) -> None:
+    async def fail(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("synthetic internal details")
+
+    monkeypatch.setattr(Exports, method_name, fail)
+    headers = {"x-session-token": SESSION}
+    await web_client.get("/api/chats?refresh=1", headers=headers)
+    payload: dict[str, object] = {"conversation_ids": ["19:one@unq.gbl.spaces"]}
+    if job_kind == "preview":
+        payload["entire_range"] = False
+    started = await web_client.post(start_path, headers=headers, json=payload)
+    assert started.status_code == 202
+
+    for _ in range(20):
+        await asyncio.sleep(0)
+        status = await web_client.get(status_path + started.json()["id"], headers=headers)
+        if status.json()["status"] != "running":
+            break
+
+    assert status.json()["status"] == "failed"
+    assert status.json()["error"]["kind"] == "InternalError"
+    assert status.json()["error"]["message"] == f"The {job_kind} failed unexpectedly."
+    assert "synthetic internal details" not in status.text
+
+
 async def test_ui_rejects_invalid_preview_request(web_client: httpx.AsyncClient) -> None:
     headers = {"x-session-token": SESSION}
     multiple = await web_client.post(
@@ -157,6 +197,32 @@ async def test_ui_serves_graph_profile_photo_and_reports_missing_photo(
 
     missing = await web_client.get("/api/photos/66666666-6666-6666-6666-666666666666", headers=headers)
     assert missing.status_code == 404
+
+
+async def test_ui_presence_routes_use_the_active_account_and_conversation_only(
+    web_client: httpx.AsyncClient, fake: FakeTeams
+) -> None:
+    headers = {"x-session-token": SESSION}
+    await web_client.get("/api/chats?refresh=1", headers=headers)
+
+    own = await web_client.get(
+        "/api/presence/me?user_id=33333333-3333-3333-3333-333333333333", headers=headers
+    )
+    peer = await web_client.get(
+        "/api/presence/chat", params={"conversation_id": "19:one@unq.gbl.spaces"}, headers=headers
+    )
+    group = await web_client.get(
+        "/api/presence/chat", params={"conversation_id": "19:group@thread.v2"}, headers=headers
+    )
+    arbitrary_person = await web_client.get(
+        "/api/presence/person/33333333-3333-3333-3333-333333333333", headers=headers
+    )
+
+    assert own.status_code == 200 and own.json()["presence"]["availability"] == "Available"
+    assert peer.status_code == 200 and peer.json()["presence"]["device_type"] == "Desktop"
+    assert group.status_code == 400
+    assert arbitrary_person.status_code == 404
+    assert fake.presence_mris == [f"8:orgid:{ME}", f"8:orgid:{PEER}"]
 
 
 def test_settings_switches_are_accessible_and_match_the_visual_reference() -> None:
@@ -203,6 +269,19 @@ def test_preview_ui_supports_full_range_cancellation_and_page_memory_cache() -> 
     assert "entire_range: entireRange" in script
     assert "overflow-x: hidden; overflow-y: auto" in styles
     assert "content-visibility: auto" in styles
+
+
+def test_presence_is_lazy_accessible_and_never_confuses_unknown_with_offline() -> None:
+    static = Path(routes.__file__).parent / "static"
+    page = (static / "index.html").read_text(encoding="utf-8")
+    styles = (static / "app.css").read_text(encoding="utf-8")
+    script = (static / "app.js").read_text(encoding="utf-8")
+    assert 'id="account-presence"' in page and 'role="img" aria-label="Presence unavailable"' in page
+    assert 'root: list, rootMargin: "0px"' in script
+    assert 'chat.photo_user_id.startsWith("28:")' in script
+    assert '"Last seen: " + lastActive.toLocaleString()' in script
+    assert '"Presence unavailable"' in script and 'value === "offline"' in script
+    assert ".presence-unknown::after" in styles and ".chat-row:focus" in styles
 
 
 def test_date_picker_weeks_start_on_sunday_like_outlook() -> None:

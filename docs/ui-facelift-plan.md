@@ -1,10 +1,11 @@
 # UI facelift implementation plan
 
-Date: 2026-10-16. Status: planned; implementation has not started.
+Date: 2026-10-16. Status: implementation in progress; stages 1–5 are committed, with review and fixes underway.
 
 This plan turns the agreed layout and interactions for the local Teams export UI into incremental
-work. Contributors should be able to implement it from this document alone. The visual sketch it
-came from contains private data and stays outside the repository.
+work. Contributors should be able to implement it from this document alone. Compare the result with
+the user-supplied reference image `Untitled-2026-04-17-1350.png` in the user's Downloads folder;
+the sketch contains private data and stays outside the repository.
 
 ## 1. Intended result
 
@@ -160,9 +161,10 @@ presence's last-active field, never the last message time. Omit a missing device
 last-seen is unavailable. Groups, channels, meetings and bot chats (`28:` peers) get no badge and
 no person subtitle. The self chat may use the signed-in user's presence.
 
-Reuse `service/presence.py` and `remote/presence.py`. Add a service entry point for the signed-in
-account's own presence, sharing the peer lookup and its one-minute cache. Expose UI routes that use
-server-resolved identities only, never arbitrary person lookups from the page.
+Reuse `service/presence.py` and `remote/presence.py`. The own-presence route uses the active account
+id, and the peer route accepts only a catalog conversation id; the page cannot request an arbitrary
+person. Both share the service's one-minute cache. Presence loads separately for the signed-in user
+and visible one-to-one rows, with four concurrent row requests. There is no presence polling.
 
 Load presence separately from the catalog and preview, for the signed-in user and visible rows only
 (for example with an IntersectionObserver), with bounded concurrency. No background polling.
@@ -193,7 +195,7 @@ each:
 4. **Preview in the page.** Wire selection and settings to the endpoint; loading, capped and failed
    states; the View entire range button; chunked rendering; request generations; the memory cache.
 5. **Presence and metadata.** Own and peer presence routes, visible-row loading, badges, last-seen
-   subtitles and tooltips.
+   subtitles and tooltips (complete).
 6. **Review and fixes.** Review the whole diff and workflow, remove duplication, finish docs.
 
 Run all four repository checks (`uv run ruff check .`, `uv run ruff format --check .`,

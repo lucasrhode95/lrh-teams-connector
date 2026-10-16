@@ -66,7 +66,7 @@ class Presence(Compact):
 
 
 class PresenceResult(Compact):
-    """The presence of the other person in a one-on-one chat. ``reason`` says why there is none."""
+    """One person's presence. ``reason`` says why there is none."""
 
     presence: Presence | None = None
     reason: str | None = None
