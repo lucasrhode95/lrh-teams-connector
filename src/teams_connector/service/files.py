@@ -42,9 +42,18 @@ MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
 _UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
 
 
+_RESERVED_NAMES = frozenset(
+    {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
+)
+
+
 def safe_filename(name: str, fallback: str = "file") -> str:
-    cleaned = _UNSAFE.sub("_", name).strip(" .")
-    return cleaned[:150] or fallback
+    """One portable file name for untrusted attachment metadata: no separators or control characters, no
+    dots or spaces at either end, no Windows device names, and at most 150 characters."""
+    cleaned = _UNSAFE.sub("_", name).strip(" .")[:150].rstrip(" .") or fallback
+    if Path(cleaned).stem.casefold() in _RESERVED_NAMES:
+        cleaned = f"_{cleaned}"
+    return cleaned
 
 
 class Files:

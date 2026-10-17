@@ -14,6 +14,7 @@ import os
 import sqlite3
 import time
 import unicodedata
+import uuid
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -89,7 +90,7 @@ class Store:
 
     def _move_aside(self, folder_prefix: str, message: str) -> None:
         """Move the store's files into a timestamped folder next to it. Nothing is deleted."""
-        target = self.path.parent / f"{folder_prefix}-{time.strftime('%Y%m%d-%H%M%S')}"
+        target = self.path.parent / f"{folder_prefix}-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
         target.mkdir(exist_ok=True)
         try:
             for suffix in ("", "-wal", "-shm"):
