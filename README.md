@@ -27,7 +27,8 @@ Run the `auth` command above and it logs you in. All `lrh-*` Microsoft 365 conne
 `status` shows the signed-in account and its cached profiles without touching the network. To switch accounts, run `auth --sign-out`, then `auth` again. Which profile serves which tool is in [architecture](docs/architecture.md#3-authentication-and-account-boundaries).
 
 > Credentials are entered only on Microsoft's sign-in page. Tokens stay in the shared encrypted cache
-> (`~/.lrh-m365-auth`, or `M365_AUTH_HOME`). If encryption is unavailable, sign-in fails closed.
+> (`%USERPROFILE%/.lrh-m365-auth` on Windows, the XDG data folder elsewhere, or `M365_AUTH_HOME`).
+> If encryption is unavailable, sign-in fails closed.
 
 The Teams store and local output files are stored under `%USERPROFILE%/.lrh-teams-connector` on
 Windows, or `~/.local/share/lrh-teams-connector` on other systems. Set `TEAMS_CONNECTOR_HOME` to
@@ -142,7 +143,7 @@ node --test tests/surfaces/export_ui.test.cjs
 `lrh-m365-auth` follows its `main` branch, and `uv.lock` records the exact commit. Run
 `uv lock --upgrade-package lrh-m365-auth` to move to its latest commit.
 
-Logs: each `mcp` and `ui` process writes a daily-rotated file under `<data directory>/logs/`, kept for seven days; the UI also logs to stdout. Set `TEAMS_CONNECTOR_LOG_LEVEL=DEBUG` for request timings ([architecture](docs/architecture.md#7-logging)).
+Logs: each `mcp` and `ui` process writes a daily-rotated file under `<data directory>/logs/`, kept for seven days; the UI also logs to stdout. Each tool call logs its name, duration and outcome; `TEAMS_CONNECTOR_LOG_LEVEL` sets the level ([architecture](docs/architecture.md#7-logging)).
 
 Tests use synthetic accounts and fake HTTP transports. They do not use browser captures or real
 message content.

@@ -34,7 +34,7 @@
   <text class="card-title" x="100" y="203">MCP SERVER</text>
   <text class="card-subtitle" x="100" y="227"><tspan class="code">teams-connector mcp</tspan> · one stdio process per agent session</text>
   <rect x="100" y="260" width="750" height="100" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
-  <text class="detail" x="120" y="292"><tspan class="code">surfaces/mcp_main.py</tspan>: 10 FastMCP tools</text>
+  <text class="detail" x="120" y="292"><tspan class="code">surfaces/mcp_main.py</tspan>: 11 FastMCP tools</text>
   <text class="detail" x="120" y="320">Bounded pages, self-contained cursors, coverage</text>
   <text class="detail" x="120" y="348"><tspan class="code">send_message</tspan> and <tspan class="code">delete_messages</tspan> are the only writes</text>
 
