@@ -142,6 +142,8 @@ node --test tests/surfaces/export_ui.test.cjs
 `lrh-m365-auth` follows its `main` branch, and `uv.lock` records the exact commit. Run
 `uv lock --upgrade-package lrh-m365-auth` to move to its latest commit.
 
+Logs: each `mcp` and `ui` process writes a daily-rotated file under `<data directory>/logs/`, kept for seven days; the UI also logs to stdout. Set `TEAMS_CONNECTOR_LOG_LEVEL=DEBUG` for request timings ([architecture](docs/architecture.md#logging)).
+
 Tests use synthetic accounts and fake HTTP transports. They do not use browser captures or real
 message content.
 

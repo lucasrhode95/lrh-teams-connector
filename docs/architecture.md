@@ -170,14 +170,14 @@ whether to fetch surrounding history or request another page.
 
 ## Logging
 
-The MCP process logs to a per-process daily-rotated file, keeping stdout for protocol traffic. Log
-files are under the Teams data directory's `logs/` folder. UI logs also go to stdout. Operational
-records include timing, status, and counts, not message bodies, search text, chat names, IDs, tokens,
-or authorization headers. Set `TEAMS_CONNECTOR_LOG_LEVEL=DEBUG` to enable safe request and paging
-diagnostics. httpx and httpcore stay at WARNING whatever the level: at INFO httpx logs every full request
-URL, and these URLs carry conversation and team ids, sharing links (Graph share ids encode them) and
-pre-authenticated upload URLs. The transport's own debug line records the method, the path with ids
-replaced, the status and the time instead.
+Each `mcp` or `ui` process writes its own file, `<data directory>/logs/<command>-<start time>-<process id>.log`,
+rotated at midnight and kept seven days ([`logs.py`](../src/teams_connector/logs.py), the same module in every
+`lrh-*` connector). The MCP server logs to its file only, since stdout carries the protocol; the UI also logs to stdout. A filter
+redacts bearer tokens, credential headers, assigned secrets and secret query parameters; `httpx` and
+`httpcore`, which log full request URLs, are held at WARNING. `TEAMS_CONNECTOR_LOG_LEVEL` sets the level (default
+INFO). Records carry operational timings, statuses and counts, never message or file content, search
+terms, names, identifiers or tokens. The shared sign-in library logs through the same handlers. The transport's own debug line records the method, the path with ids
+replaced, the status and the time.
 
 ## MCP tools
 
