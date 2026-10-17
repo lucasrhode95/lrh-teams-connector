@@ -60,7 +60,7 @@ _operation: ContextVar[str | None] = ContextVar("operation", default=None)
 
 @contextlib.contextmanager
 def operation(name: str) -> Iterator[None]:
-    """Name what the code below is doing; errors raised inside it say so ("reading chat history")."""
+    """Name what the code below is doing; errors raised inside it say so."""
     token = _operation.set(name)
     try:
         yield
