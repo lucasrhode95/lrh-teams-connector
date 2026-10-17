@@ -145,6 +145,11 @@ applied: the connection never opened, or the service answered 429 or 503 (requir
 without a complete answer, or answered 504, is never resent: it raises `WriteOutcomeUnknown` so an agent
 can inspect the target before taking another action.
 
+Domain errors are the same in every `lrh-*` connector: `InvalidRequest` (with `DownloadLimitExceeded`: "The file
+exceeds the connector's N MiB download limit."), `NotFound`, `Throttled`, `Upstream`, `PermissionDenied` (HTTP 403:
+access denied for that account or item, never a sign-in problem; a kind of `Upstream`) and, for writes,
+`WriteOutcomeUnknown`, besides `AuthenticationRequired` and `AccountMismatch` from the shared sign-in. The local UI answers 403 for `PermissionDenied`.
+
 Graph file-download endpoints can return a preauthenticated SharePoint redirect. The transport
 allows one HTTPS redirect to a SharePoint download host and does not forward the Graph bearer token
 to that host. Likewise, `Transport.upload_session` calls a Graph upload session's preauthenticated

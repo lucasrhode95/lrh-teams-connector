@@ -5,7 +5,7 @@ from io import BytesIO
 import httpx
 import pytest
 
-from teams_connector.domain.errors import InvalidRequest, Upstream, WriteOutcomeUnknown
+from teams_connector.domain.errors import InvalidRequest, PermissionDenied, Upstream, WriteOutcomeUnknown
 from teams_connector.remote.transport import Transport, describe_failure
 
 
@@ -273,7 +273,7 @@ def test_a_roster_denial_says_the_account_is_not_a_member_without_echoing_identi
 
     error = describe_failure(status=403, code="209", message=details, request="synthetic-request")
 
-    assert isinstance(error, Upstream)
+    assert isinstance(error, PermissionDenied) and isinstance(error, Upstream)
     assert "not a member of this conversation" in str(error)
     assert "AclCheckFailed" in str(error) and "synthetic-request" in str(error)
     assert "8:orgid" not in str(error) and "19:meeting" not in str(error)

@@ -38,12 +38,19 @@ from teams_connector.domain.errors import (
     ConnectorError,
     InvalidRequest,
     NotFound,
+    PermissionDenied,
     Throttled,
 )
 from teams_connector.domain.models import ExportArtifact, ExportProgress, ExportRequest, PreviewOutput
 
 STATIC = resources.files("teams_connector.surfaces.web") / "static"
-_STATUS = {AuthenticationRequired: 401, InvalidRequest: 400, NotFound: 404, Throttled: 429}
+_STATUS = {
+    AuthenticationRequired: 401,
+    InvalidRequest: 400,
+    PermissionDenied: 403,
+    NotFound: 404,
+    Throttled: 429,
+}
 _USER_ID = re.compile(r"^[0-9a-fA-F-]{36}$")
 CSP = (
     "default-src 'none'; img-src 'self' blob:; style-src 'self'; script-src 'self'; connect-src 'self'; "
