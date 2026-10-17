@@ -42,8 +42,9 @@ MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
 _UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
 
 
+# Win32 device names, superscript digits included ("Naming Files, Paths, and Namespaces").
 _RESERVED_NAMES = frozenset(
-    {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
+    {"con", "prn", "aux", "nul", *(f"{port}{digit}" for port in ("com", "lpt") for digit in "0123456789¹²³")}
 )
 
 
