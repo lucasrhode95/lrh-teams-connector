@@ -10,13 +10,14 @@ The repository contains one current application: the `teams-connector` CLI and t
 The classes and who calls whom, in more detail: [code map](diagrams/code-map.svg). The diagrams give the
 overview; this document records the rules and contracts they cannot show.
 
-## Code structure
+## 1. Code structure
 
 | Layer | Responsibility |
 |---|---|
 | `src/teams_connector/__main__.py` | Canonical CLI (`teams-connector`) for shared sign-in, profile status, MCP, and UI. Loads MCP and web dependencies only for those commands. |
 | `surfaces/mcp_main.py` | Typed MCP tools over the service layer. Keeps stdio free of logs; `send_message` and `delete_messages` are the only Teams write tools. |
 | `surfaces/web/` | Starlette app, static local export page, and loopback UI launcher. Uses a per-run session token, Host validation, and an idle timeout. |
+| `surfaces/ui_settings.py` | Defaults for the local UI and its launcher: port 8766 (the Outlook connector uses 8765, so both can run) and a 30-minute idle timeout. |
 | `service/` | Domain behavior for the catalog, message history, exports, attachment downloads, profile photos, and sending. MCP and UI share these operations. |
 | `remote/ports.py` | Interfaces used by services; service code does not depend on concrete HTTP adapters. |
 | `remote/transport.py` | The only general HTTP client. Applies the allowlist, authentication, one-time 401 renewal, bounded idempotent retries, response limits, error mapping, and credential-free download redirects. |
@@ -30,8 +31,9 @@ overview; this document records the rules and contracts they cannot show.
 | `remote/*_mapping.py` and `remote/teams_html.py` | Convert wire responses into domain records and readable message text. Wire-format field names remain inside this layer. |
 | `store/db.py` | Account-bound SQLite store for the chat catalog and account metadata only. Holds no message content and no tokens. |
 | `service/export/` | Text/JSONL formatting and safe output packaging. Exports read Teams page by page and spool to a temporary file, use exclusive temporary paths, and publish only after completion. |
-| `service/passive_html.py` | The passive check for HTML sends: refuses active content, embedded media, declarations and unfinished markup. Its one rewrite points an `<img>` that names an attached image at the hosted copy. |
-| `service/localfiles.py` | Per-user output directories, retention cleanup, and collision-safe file creation. |
+| `service/passive_html.py` | The passive rules every connector applies to HTML it sends (the same text as the Outlook connector): refuses declarations, active content, elements that change how the rest is read, and unfinished markup. |
+| `service/hosted_images.py` | The Teams rule on top of those: an `<img>` is sent only when it names an image attached to the message, and it is rebuilt to point at the hosted copy; any other `<img>` and embedded media are refused. |
+| `service/localfiles.py` | Per-user output directories, retention cleanup (one process at a time, by a lock file beside each folder), and collision-safe file creation. |
 | `src/teams_connector/config.py` | Product CLI/data names and fixed public service URLs. Tenant authority, client IDs, token profiles, scopes, and shared-cache configuration live in `lrh-m365-auth`. |
 
 The service layer receives adapters through the ports and is responsible for decisions and coverage.
@@ -45,7 +47,7 @@ dates with the browser's UTC offset while MCP takes ISO 8601 timestamps; the UI 
 and a session token while MCP runs over stdio; the UI streams downloads while MCP returns local
 paths; each maps domain errors to its own responses.
 
-## Services, ports and adapters
+## 2. Services, ports and adapters
 
 Each surface calls a service. A service depends only on the ports it needs, and `bootstrap.py` wires an adapter to
 each port-typed role. A port can have several adapters in different roles: `HistoryReader` reads chats (`ChatService`)
@@ -55,7 +57,7 @@ and the adapters behind them. The split of backends (which private or public ser
 
 | Surface | Tool or route | Service | Ports | Adapters |
 |---|---|---|---|---|
-| MCP | `auth_status` | `TokenProvider` (shared auth package) | none | `TokenProvider` |
+| MCP | `auth_status` | `status_report` (shared auth package): offline account, profile and expiry report | none | `TokenProvider` |
 | MCP | `list_chats` | `Catalog.list` (a refresh reads the self chat's newest message too) | `ChatCatalog`, `ChannelDirectory`, `HistoryReader` | `CsaCatalog`, `GraphChannels`, `ChatService` |
 | MCP | `search_chats` | `Catalog.search` (with `refresh`, after a catalog refresh as `list_chats`) | `ChatMemberSearch` (named chats and people), and the refresh's ports | `SubstrateChatSearch`, and the refresh's adapters |
 | MCP | `get_messages` | `History.get_messages` | `HistoryReader` (chats and channels), `MeetingSummaryReader` | `ChatService`, `GraphChannels`, `SubstrateMeetingSummaries` |
@@ -73,7 +75,7 @@ and the adapters behind them. The split of backends (which private or public ser
 | UI | `POST /api/preview` and its job routes | `Exports.preview` in the single cancellable preview slot | `HistoryReader` (`History.selection`), `MeetingSummaryReader`, `FileReader` (meeting notes only) | `ChatService`, `GraphChannels`, `SubstrateMeetingSummaries`, `GraphFiles` (text conversion only) |
 | UI | `POST /api/exports` and its job routes | `Exports.export` in a background job | as `export_chats` | as `export_chats` |
 
-## Authentication and account boundaries
+## 3. Authentication and account boundaries
 
 The shared `lrh-m365-auth` package supplies six named profiles shared by the three connectors:
 
@@ -104,7 +106,7 @@ MCP, ordinary UI use, and status reads do not launch interactive login. Encrypte
 mandatory by default. The explicitly selected `--unsecure` mode uses a separate plaintext development
 cache and must never be used as an implicit fallback.
 
-## Requests, caching, and storage
+## 4. Requests, caching, and storage
 
 The MCP server is a stdio process scoped to one client session. It performs no network calls until a
 tool needs them. The UI runs only while explicitly started, binds to loopback, and closes on exit,
@@ -119,7 +121,7 @@ the Chat Service conversation feed is read as well.
 The local store holds the chat and channel catalog (names, kinds, last activity, photo ids, and the
 channels that Graph's team listing omits), the catalog's sync token and refresh time, and the owning
 account. It holds no message content and no chat member lists. Teams is the record: every history read,
-search, export and download reads Teams again ([requirements §6](requirements.md#6-local-data-decided-2026-10-14)).
+search, export and download reads Teams again ([requirements §6](requirements.md#6-local-data-decided-2026-10-14-preview-cache-added-2026-10-16)).
 
 The database lives below `<Teams data directory>/accounts/<account fingerprint>/teams.sqlite3`.
 Owner metadata is verified on open; an account mismatch raises an error instead of reusing another
@@ -135,7 +137,7 @@ days when their folder is next used, subfolders included. Downloads are cached p
 item and version), so a file already there is returned without fetching its content. A failed or cancelled
 export publishes nothing.
 
-## HTTP and safety rules
+## 5. HTTP and safety rules
 
 The shared transport accepts HTTPS only and checks Graph and Teams hosts before sending credentials.
 Regional Chat Service URLs come from the Teams AuthZ response and are checked against the Teams
@@ -144,6 +146,11 @@ honors `Retry-After` within its limit. Writes are retried only when the failure 
 applied: the connection never opened, or the service answered 429 or 503 (requirements §4). A write sent
 without a complete answer, or answered 504, is never resent: it raises `WriteOutcomeUnknown` so an agent
 can inspect the target before taking another action.
+
+Domain errors are the same in every `lrh-*` connector: `InvalidRequest` (with `DownloadLimitExceeded`: "The file
+exceeds the connector's N MiB download limit."), `NotFound`, `Throttled`, `Upstream`, `PermissionDenied` (HTTP 403:
+access denied for that account or item, never a sign-in problem; a kind of `Upstream`) and, for writes,
+`WriteOutcomeUnknown`, besides `AuthenticationRequired` and `AccountMismatch` from the shared sign-in. The local UI answers 403 for `PermissionDenied`.
 
 Graph file-download endpoints can return a preauthenticated SharePoint redirect. The transport
 allows one HTTPS redirect to a SharePoint download host and does not forward the Graph bearer token
@@ -160,7 +167,7 @@ The local UI rejects non-local Host headers and requires a random per-process to
 It uses a restrictive Content Security Policy and renders message content as text. The browser page
 does not receive a Microsoft token.
 
-## Search behavior and boundaries
+## 6. Search behavior and boundaries
 
 `search_messages` is the one Teams message search. It sends one Microsoft Search v2 query on the shared
 Microsoft Search profile for each page. Search reads no history and writes nothing: each hit is a
@@ -168,20 +175,20 @@ pointer, and `get_messages` reads the history around it. Search v2 matches whole
 and a quoted phrase matches its words in order; it does not match the middle of a word. Agents decide
 whether to fetch surrounding history or request another page.
 
-## Logging
+## 7. Logging
 
-The MCP process logs to a per-process daily-rotated file, keeping stdout for protocol traffic. Log
-files are under the Teams data directory's `logs/` folder. UI logs also go to stdout. Operational
-records include timing, status, and counts, not message bodies, search text, chat names, IDs, tokens,
-or authorization headers. Set `TEAMS_CONNECTOR_LOG_LEVEL=DEBUG` to enable safe request and paging
-diagnostics. httpx and httpcore stay at WARNING whatever the level: at INFO httpx logs every full request
-URL, and these URLs carry conversation and team ids, sharing links (Graph share ids encode them) and
-pre-authenticated upload URLs. The transport's own debug line records the method, the path with ids
-replaced, the status and the time instead.
+Each `mcp` or `ui` process writes its own file, `<data directory>/logs/<command>-<start time>-<process id>.log`,
+rotated at midnight and kept seven days ([`logs.py`](../src/teams_connector/logs.py), the same module in every
+`lrh-*` connector). The MCP server logs to its file only, since stdout carries the protocol; the UI also logs to stdout. A filter
+redacts bearer tokens, credential headers, assigned secrets and secret query parameters; `httpx` and
+`httpcore`, which log full request URLs, are held at WARNING. `TEAMS_CONNECTOR_LOG_LEVEL` sets the level (default
+INFO). Records carry operational timings, statuses and counts, never message or file content, search
+terms, names, identifiers or tokens. The shared sign-in library logs through the same handlers. The transport's own debug line records the method, the path with ids
+replaced, the status and the time.
 
-## MCP tools
+## 8. MCP tools
 
-### Find conversations and read messages
+### 8.1 Find conversations and read messages
 
 1. Call `list_chats` to browse current chats and channels. It returns up to 50 items by default,
    supports `limit` up to 200 and opaque continuation `cursor`, and can filter by `kind`. A cached
@@ -216,7 +223,7 @@ Example arguments for a bounded history read:
 }
 ```
 
-### Presence
+### 8.2 Presence
 
 `get_presence` reads the availability, activity, device type and last-active time of the other person in a
 one-on-one chat. The local UI also reads the signed-in user's presence for the account avatar and visible
@@ -228,7 +235,7 @@ the `teams.spaces` bearer, and share a one-minute process cache. A failed read, 
 `20000` (Teams answers `40401` with a placeholder Offline for a user it does not know), returns no presence
 and a reason. Teams omits the device for offline people and the last-active time for available ones. Other fields Teams returns (calendar, work location, capabilities) are not reported.
 
-### Message search
+### 8.3 Message search
 
 `search_messages` takes `terms`: one to 25 phrases, each at most 200 characters, with no double quotes and no
 control characters. A message matches when any term matches. Each term is sent as one quoted phrase, so it
@@ -277,7 +284,7 @@ Example request for one conversation and a month:
 
 This operation does not discover recap or transcript text; those capabilities remain separate.
 
-### Exports
+### 8.4 Exports
 
 `export_chats` writes `.txt` by default or `.jsonl` when requested, with inclusive date bounds and an optional
 latest-message limit per conversation. Each conversation becomes one text or JSONL file, named after the
@@ -361,7 +368,7 @@ keeps the choice in its cursor. `search_transcripts` lists each matched meeting'
 summary that cannot be read leaves the matches and the completeness unchanged. A meeting without a summary keeps its
 marker alone; a failed read is marked as unavailable, and the call goes on.
 
-### Send a message
+### 8.5 Send a message
 
 `send_message` is one of the two Teams write tools, with `delete_messages`. The user must explicitly
 authorize the recipient and the exact content, files and images. Pass the current conversation name from
@@ -410,7 +417,7 @@ in the sender's OneDrive and why, and which upload's outcome is unknown. A membe
 such as a federated user, makes the send fail before anything is uploaded. The result lists each file's
 name, as renamed, and its link.
 
-### Delete messages
+### 8.6 Delete messages
 
 `delete_messages` soft-deletes a set of the user's own messages in one chat (not a channel), by the ids
 `get_messages` returns: up to 100 per call. The agent first lists the set (chat, count, first and last
@@ -430,9 +437,9 @@ attempted, so the result still shows what happened. The result lists `deleted` (
 the names of the files it shared, which stay in the sender's OneDrive, still shared with the chat),
 `skipped` and `uncertain`. `get_messages` then shows a deleted message as `is_deleted` with no text.
 
-## Local export UI
+## 9. Local export UI
 
-`uv run teams-connector ui` serves the page on a loopback URL, normally `http://127.0.0.1:8765`, and
+`uv run teams-connector ui` serves the page on a loopback URL, normally `http://127.0.0.1:8766` (Outlook's UI defaults to 8765, so both can run at once), and
 stops after 30 idle minutes (`--port`, `--no-browser` and `--idle-minutes` change that). A busy port is
 replaced by another free loopback port; the browser opens only after the server reports ready and
 prints the URL it chose. Every API call carries a per-run session token and a loopback Host.
@@ -463,3 +470,25 @@ Escape. The × beside the field clears the range.
 One conversation with no attachment saved downloads as a plain file. Anything else downloads as one
 ZIP: each conversation's plain file at the top, and its attachments in a folder named after that file.
 There is never a ZIP inside the ZIP.
+
+### 9.1 Design rules
+
+Shared by the Outlook and Teams connector UIs; each keeps its own accent color, layout and product
+vocabulary.
+
+- **Type and shape:** the font stack `"Segoe UI", system-ui, sans-serif`; corners of about 4 px on fields
+  and buttons, 8–12 px on cards, menus and dialogs, and round avatars and icon buttons. Pills, chips
+  and badges keep small radii of their own.
+- **Header:** the product name, then the search or filters, with the signed-in account (avatar and name)
+  at the far right.
+- **Settings:** options that apply to the download sit behind a cog beside the filters, as on/off switches
+  (`role="switch"`) or a segmented choice; the menu stays open while they change and closes on an outside
+  click or Escape.
+- **Selection and actions:** the footer holds the selection on the left (a count or pills, with
+  **Clear all**) and the status and actions on the right, the primary action last. Buttons never wrap.
+- **Date range:** the same picker in both UIs: weeks start on Sunday, future days are disabled, two clicks
+  in either order make the range, and × clears it.
+- **States:** one spinner per loading area; empty, loading, ready and failed states are distinct, and a
+  failure offers Retry. Message content is always rendered as text, never as HTML.
+- **Theme:** light and dark follow the system setting and change live, without a reload.
+- **Lifetime:** loopback only, a per-run session token, and a stop after 30 idle minutes.

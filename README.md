@@ -24,12 +24,13 @@ uv run teams-connector status
 
 Run the `auth` command above and it logs you in. All `lrh-*` Microsoft 365 connectors share one login engine (`lrh-m365-auth`), so one login covers them all. Microsoft may ask for more than one approval, because the connectors use different Microsoft clients.
 
-`status` shows the signed-in account and its cached profiles without touching the network. To switch accounts, run `auth --sign-out`, then `auth` again. Which profile serves which tool is in [architecture](docs/architecture.md#authentication-and-account-boundaries).
+`status` shows the signed-in account and its cached profiles without touching the network. To switch accounts, run `auth --sign-out`, then `auth` again. Which profile serves which tool is in [architecture](docs/architecture.md#3-authentication-and-account-boundaries).
 
 > Credentials are entered only on Microsoft's sign-in page. Tokens stay in the shared encrypted cache
-> (`~/.lrh-m365-auth`, or `M365_AUTH_HOME`). If encryption is unavailable, sign-in fails closed.
+> (`%USERPROFILE%/.lrh-m365-auth` on Windows, the XDG data folder elsewhere, or `M365_AUTH_HOME`).
+> If encryption is unavailable, sign-in fails closed.
 
-The Teams store and local output files are stored under `%LOCALAPPDATA%\lrh-teams-connector` on
+The Teams store and local output files are stored under `%USERPROFILE%/.lrh-teams-connector` on
 Windows, or `~/.local/share/lrh-teams-connector` on other systems. Set `TEAMS_CONNECTOR_HOME` to
 override the Teams data directory. If your tenant's region differs from the default, set `TEAMS_CONNECTOR_NOTES_MEDIA_HOSTS` to its Loop media host (comma-separated), so Loop meeting notes can be read.
 
@@ -75,7 +76,7 @@ See the [Codex MCP guide](https://developers.openai.com/codex/mcp/).
 
 Replace the sample path with your clone’s absolute path. In Windows JSON paths, escape backslashes (for example, `C:\\Users\\you\\lrh-teams-connector`). This example requires Copilot Chat’s Agent mode with local MCP support; see [VS Code’s MCP guide](https://code.visualstudio.com/docs/copilot/chat/mcp-servers).
 
-> **Client compatibility:** These examples require a locally running agentic client that can launch a stdio MCP server. Hosted ChatGPT Web, Claude web chat, Copilot web chat, and similar services cannot start this local process. This project does not provide a remote MCP endpoint; hosted clients require one to be deployed separately.
+> **Client compatibility:** These examples require a locally running agentic client that can launch a stdio MCP server. Hosted chat apps cannot start this local process, and this project provides no remote MCP endpoint. ChatGPT can still reach it through OpenAI's [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels), where your plan and workspace allow custom MCP apps; files the server saves stay on the computer running the tunnel.
 
 The UI opens in your browser and stops after 30 minutes without activity:
 
@@ -86,11 +87,11 @@ uv run teams-connector ui
 ![125 percent screenshot of the local Teams connector UI inside a macOS-style browser window. People, chats and messages are synthetic.](https://raw.githubusercontent.com/lucasrhode95/lrh-teams-connector/main/docs/ui-preview.svg)
 
 > The web UI is for manual exports. Its preview is the export's own plain text, built with the same
-> settings as the download; how the page behaves is in [architecture](docs/architecture.md#local-export-ui).
+> settings as the download; how the page behaves is in [architecture](docs/architecture.md#9-local-export-ui).
 
 ## MCP tools
 
-The MCP server exposes the tools below. Each one's inputs, results and caveats are in [architecture](docs/architecture.md#mcp-tools).
+The MCP server exposes the tools below. Each one's inputs, results and caveats are in [architecture](docs/architecture.md#8-mcp-tools).
 
 | MCP tool | Service module | Behavior |
 |---|---|---|
@@ -108,7 +109,7 @@ The MCP server exposes the tools below. Each one's inputs, results and caveats a
 
 Message timestamps are returned in UTC.
 
-Which service backs each tool and route, and which private or public service each capability uses, is in [the architecture](docs/architecture.md#services-ports-and-adapters) and [requirements §4](docs/requirements.md#4-backend-choice).
+Which service backs each tool and route, and which private or public service each capability uses, is in [the architecture](docs/architecture.md#2-services-ports-and-adapters) and [requirements §4](docs/requirements.md#4-backend-choice).
 
 ## Microsoft 365 connectors
 
@@ -138,6 +139,11 @@ uv run pyright
 uv run pytest
 node --test tests/surfaces/export_ui.test.cjs
 ```
+
+`lrh-m365-auth` follows its `main` branch, and `uv.lock` records the exact commit. Run
+`uv lock --upgrade-package lrh-m365-auth` to move to its latest commit.
+
+Logs: each `mcp` and `ui` process writes a daily-rotated file under `<data directory>/logs/`, kept for seven days; the UI also logs to stdout. Set `TEAMS_CONNECTOR_LOG_LEVEL=DEBUG` for request timings; each tool call logs its name, duration and outcome ([architecture](docs/architecture.md#7-logging)).
 
 Tests use synthetic accounts and fake HTTP transports. They do not use browser captures or real
 message content.

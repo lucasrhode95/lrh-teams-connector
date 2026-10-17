@@ -35,8 +35,10 @@ import httpx
 
 from teams_connector.domain.errors import (
     AuthenticationRequired,
+    DownloadLimitExceeded,
     InvalidRequest,
     NotFound,
+    PermissionDenied,
     Throttled,
     Upstream,
     WriteOutcomeUnknown,
@@ -58,7 +60,7 @@ _operation: ContextVar[str | None] = ContextVar("operation", default=None)
 
 @contextlib.contextmanager
 def operation(name: str) -> Iterator[None]:
-    """Name what the code below is doing; errors raised inside it say so ("reading chat history")."""
+    """Name what the code below is doing; errors raised inside it say so."""
     token = _operation.set(name)
     try:
         yield
@@ -316,7 +318,7 @@ async def _stream_into(response: httpx.Response, dest: BinaryIO, max_bytes: int)
     async for chunk in response.aiter_bytes():
         size += len(chunk)
         if size > max_bytes:
-            raise InvalidRequest(f"Download exceeds the {max_bytes // (1024 * 1024)} MiB limit.")
+            raise DownloadLimitExceeded(max_bytes)
         dest.write(chunk)
     return response.headers.get("content-type"), size
 
@@ -441,7 +443,7 @@ def describe_failure(
     if status == 400:
         return InvalidRequest(f"{prefix}{where} rejected the request ({text}).{suffix}")
     if status == 403:  # authorization denied for this item or action; the sign-in itself is fine
-        return Upstream(f"{prefix}{where} denied access ({text}).{suffix}")
+        return PermissionDenied(f"{prefix}{where} denied access ({text}).{suffix}")
     return Upstream(f"{prefix}{where} returned an error ({text}).{suffix}")
 
 

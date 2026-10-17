@@ -45,6 +45,7 @@
 <text class="section-title code" x="459" y="279" style="font-size:20px">teams-connector ui</text>
 <text class="group-title" x="459" y="316">Calls</text>
 <g><title>Starts uvicorn on 127.0.0.1 with a per-run session token, opens the browser, and stops after the idle timeout.</title><text class="detail small" x="459" y="346">• <tspan class="code">web.main.run(...)</tspan></text></g>
+<g><title>Defaults for the UI: port 8766 (the Outlook connector uses 8765, so both can run) and a 30-minute idle timeout.</title><text class="detail small" x="459" y="373">• <tspan class="code">ui_settings.py</tspan></text></g>
 <rect x="786" y="244" width="327" height="170" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
 <text class="section-title code" x="802" y="279" style="font-size:20px">teams-connector auth</text>
 <text class="group-title" x="802" y="316">Calls</text>
@@ -62,7 +63,7 @@
 <rect x="80" y="494" width="850" height="366" rx="14" fill="#f7f9fc" stroke="#c7d5e2" stroke-width="1.5"/>
 <path d="M80 568 V508 Q80 494 94 494 H916 Q930 494 930 508 V568 Z" fill="#183153"/>
 <text class="card-title" x="100" y="527">MCP SERVER</text>
-<text class="card-subtitle" x="100" y="551"><tspan class="code">surfaces/mcp_main.py</tspan> · <tspan class="code">build_server(AppContext)</tspan> · 9 FastMCP tools</text>
+<text class="card-subtitle" x="100" y="551"><tspan class="code">surfaces/mcp_main.py</tspan> · <tspan class="code">build_server(AppContext)</tspan> · 11 FastMCP tools</text>
 <rect x="100" y="588" width="810" height="252" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
 <text class="group-title" x="118" y="626">Conversations</text>
 <g><title>Chats and channels by recent activity, with kind filters and paging. → Catalog.list</title><text class="detail small" x="118" y="656">• <tspan class="code">list_chats</tspan></text></g>
@@ -85,7 +86,7 @@
 <rect x="970" y="494" width="850" height="366" rx="14" fill="#f7f9fc" stroke="#c7d5e2" stroke-width="1.5"/>
 <path d="M970 568 V508 Q970 494 984 494 H1806 Q1820 494 1820 508 V568 Z" fill="#183153"/>
 <text class="card-title" x="990" y="527">LOCAL EXPORT UI</text>
-<text class="card-subtitle" x="990" y="551"><tspan class="code">surfaces/web/main.py</tspan> <tspan class="code">run()</tspan> · <tspan class="code">routes.py</tspan>: Starlette JSON API + static page</text>
+<text class="card-subtitle" x="990" y="551"><tspan class="code">surfaces/web/web_main.py</tspan> <tspan class="code">serve_ui()</tspan> · <tspan class="code">routes.py</tspan>: Starlette JSON API + static page</text>
 <rect x="990" y="588" width="810" height="252" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
 <text class="group-title" x="1008" y="626">Chats</text>
 <g><title>GET. Offline sign-in status. → TokenProvider.status</title><text class="detail" x="1008" y="656">• <tspan class="code">/api/status</tspan></text></g>
@@ -201,7 +202,7 @@
 <text class="muted" x="118" y="2158">uses <tspan class="code">Catalog</tspan> · <tspan class="code">PresenceReader</tspan></text>
 
 <rect x="673" y="1914" width="553" height="260" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
-<text class="section-title" x="691" y="1949"><tspan class="code">check_passive_html</tspan><tspan class="detail" dx="12">passive_html.py</tspan></text>
+<text class="section-title" x="691" y="1949"><tspan class="code">check_hosted_images</tspan><tspan class="detail" dx="12">hosted_images.py</tspan></text>
 <text class="group-title" x="691" y="1986">Refuses</text>
 <g><title>Scripts, frames, forms, event handlers and javascript: URLs.</title><text class="detail" x="691" y="2016">active content</text></g>
 <g><title>Teams shows only images it hosts.</title><text class="detail" x="691" y="2043">images and embedded media</text></g>

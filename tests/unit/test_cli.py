@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-
 from teams_connector.__main__ import EXIT_OK, build_parser, main
 from tests.fakes.teams_fake import FakeTokens
 
@@ -19,9 +17,10 @@ def test_status_reports_the_shared_profile_catalog_without_connecting(capsys) ->
         def __init__(self, **_: object) -> None:
             pass
 
-    assert main(["status", "--json"], provider_factory=Provider) == EXIT_OK
-    status = json.loads(capsys.readouterr().out)
-    assert {profile["profile"] for profile in status["profiles"]} == {
+    assert main(["status"], provider_factory=Provider) == EXIT_OK
+    lines = capsys.readouterr().out.splitlines()
+    headings = {line.split(" ")[0].strip("[]") for line in lines if line.startswith("[")}
+    assert headings == {
         "outlook.graph",
         "outlook.api",
         "m365.search",
@@ -29,5 +28,4 @@ def test_status_reports_the_shared_profile_catalog_without_connecting(capsys) ->
         "teams.csa",
         "teams.graph",
     }
-    assert all(profile["client_credential_cached"] for profile in status["profiles"])
-    assert all(profile["access_token_expires_on"] is None for profile in status["profiles"])
+    assert all("client credential not cached" not in line for line in lines if "client credential" in line)

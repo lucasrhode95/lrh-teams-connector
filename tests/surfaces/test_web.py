@@ -15,12 +15,13 @@ from teams_connector.bootstrap import AppContext
 from teams_connector.domain.models import Chat
 from teams_connector.service.catalog import Catalog
 from teams_connector.service.export.orchestrator import Exports
+from teams_connector.surfaces.ui_settings import DEFAULT_UI_PORT
 from teams_connector.surfaces.web import routes
 from teams_connector.surfaces.web.routes import Activity, create_app, export_request, preview_request
 from tests.fakes.teams_fake import ME, PEER, FakeTeams, FakeTokens
 
 SESSION = "synthetic-session-token"
-PORT = 8765
+PORT = DEFAULT_UI_PORT
 BASE_URL = f"http://127.0.0.1:{PORT}"
 
 
@@ -375,3 +376,20 @@ def test_date_picker_weeks_start_on_sunday_like_outlook() -> None:
     assert weekdays and re.findall(r"<span>(\w)</span>", weekdays.group(1)) == list("SMTWTFS")
     for control in ("today-date", "calendar-done", "clear-dates", "date-filter-clear"):
         assert f'id="{control}"' in page
+
+
+async def test_responses_carry_security_headers(web_client: httpx.AsyncClient) -> None:
+    page = await web_client.get("/")
+    assert page.headers["X-Content-Type-Options"] == "nosniff"
+    assert page.headers["Referrer-Policy"] == "no-referrer"
+
+
+async def test_refused_requests_carry_the_security_headers(web_client: httpx.AsyncClient) -> None:
+    wrong_host = await web_client.get("/", headers={"host": "attacker.example"})
+    assert wrong_host.status_code == 403
+    assert wrong_host.headers["X-Content-Type-Options"] == "nosniff"
+    assert wrong_host.headers["Referrer-Policy"] == "no-referrer"
+    wrong_token = await web_client.get("/api/status", headers={"x-session-token": "not-the-token"})
+    assert wrong_token.status_code == 403
+    assert wrong_token.headers["X-Content-Type-Options"] == "nosniff"
+    assert wrong_token.headers["Referrer-Policy"] == "no-referrer"

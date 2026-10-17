@@ -42,9 +42,20 @@ MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
 _UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
 
 
+# Win32 device names, superscript digits included ("Naming Files, Paths, and Namespaces").
+_RESERVED_NAMES = frozenset(
+    {"con", "prn", "aux", "nul", *(f"{port}{digit}" for port in ("com", "lpt") for digit in "0123456789¹²³")}
+)
+
+
 def safe_filename(name: str, fallback: str = "file") -> str:
-    cleaned = _UNSAFE.sub("_", name).strip(" .")
-    return cleaned[:150] or fallback
+    """One portable file name for untrusted attachment metadata: no separators or control characters, no
+    dots or spaces at either end, no Windows device names, and at most 150 characters."""
+    cleaned = _UNSAFE.sub("_", name).strip(" .")[:150].rstrip(" .") or fallback
+    # Win32 reserves a device name followed by any extension (CON.backup.txt), so check before the first dot.
+    if cleaned.split(".", 1)[0].rstrip(" ").casefold() in _RESERVED_NAMES:
+        cleaned = f"_{cleaned}"
+    return cleaned
 
 
 class Files:

@@ -11,9 +11,10 @@ import functools
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Annotated, Any
 
+from m365_auth import status_report
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
@@ -36,6 +37,7 @@ from teams_connector.domain.models import (
     SendResult,
     TranscriptSearchResult,
 )
+from teams_connector.domain.time import optional_utc
 
 log = logging.getLogger(__name__)
 
@@ -116,12 +118,6 @@ Until = Annotated[datetime | None, Field(description="Inclusive upper bound (ISO
 ConversationId = Annotated[str, Field(description="Conversation id from list_chats or search results.")]
 
 
-def _utc(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
-
-
 def _logged[**P, R](function: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
     """Log tool name, duration and outcome. Never arguments or results."""
 
@@ -149,20 +145,9 @@ def build_server(context: AppContext) -> FastMCP:
     @mcp.tool(annotations=READ_ONLY)
     @_logged
     async def auth_status() -> dict[str, Any]:
-        """Offline status: account, cached client credentials and resource-token expiry by profile."""
-        status = context.tokens.status()
-        return {
-            "account": [a.username for a in status.accounts],
-            "profiles": {
-                p.profile: {
-                    "client_credential_cached": p.client_credential_cached,
-                    "access_token_expires_on": p.access_token_expires_on,
-                    "purpose": p.purpose,
-                }
-                for p in status.profiles
-            },
-            "sign_in_command": context.tokens.sign_in_command(),
-        }
+        """Offline status: the signed-in account, each profile's cached credential and token expiry, and the
+        sign-in command. Makes no network call; use it before a long task to see whether sign-in is needed."""
+        return status_report(context.tokens)
 
     @mcp.tool(annotations=READ_ONLY)
     @_logged
@@ -243,8 +228,8 @@ def build_server(context: AppContext) -> FastMCP:
         followed by Teams' AI summary of it unless include_summaries is false."""
         return await (await services()).history.get_messages(
             conversation_id,
-            since=_utc(since),
-            until=_utc(until),
+            since=optional_utc(since),
+            until=optional_utc(until),
             message_limit=message_limit,
             page_size=page_size,
             max_chars=max_chars,
@@ -281,8 +266,8 @@ def build_server(context: AppContext) -> FastMCP:
         return await (await services()).search.search_messages(
             terms,
             conversation_ids=conversation_ids,
-            since=_utc(since),
-            until=_utc(until),
+            since=optional_utc(since),
+            until=optional_utc(until),
             limit=limit,
             cursor=cursor,
         )
@@ -325,8 +310,8 @@ def build_server(context: AppContext) -> FastMCP:
         return await (await services()).transcript_search.search(
             terms,
             conversation_ids=conversation_ids,
-            since=_utc(since),
-            until=_utc(until),
+            since=optional_utc(since),
+            until=optional_utc(until),
             limit=limit,
             include_summaries=include_summaries,
         )
@@ -369,8 +354,8 @@ def build_server(context: AppContext) -> FastMCP:
         """
         request = ExportRequest(
             conversation_ids=conversation_ids,
-            since=_utc(since),
-            until=_utc(until),
+            since=optional_utc(since),
+            until=optional_utc(until),
             message_limit=message_limit,
             format=format,
             include_attachments=include_attachments,
@@ -438,7 +423,7 @@ def build_server(context: AppContext) -> FastMCP:
         Meeting notes ([Meeting notes]) are read from the live Loop page and saved as text."""
         if (message_id is None) == (sent_at is None):
             raise InvalidRequest("Pass exactly one of message_id or sent_at.")
-        when = _utc(sent_at) if sent_at is not None else None
+        when = optional_utc(sent_at) if sent_at is not None else None
         return await (await services()).files.download_attachments(
             conversation_id,
             message_id=message_id,

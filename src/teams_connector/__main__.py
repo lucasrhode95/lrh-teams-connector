@@ -7,14 +7,14 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import json
 import sys
 from datetime import UTC, datetime
 
-from m365_auth import AccessToken, AuthenticationRequired, CacheStatus, TokenProvider
+from m365_auth import AccessToken, AuthenticationRequired, TokenProvider, check_profiles, status_lines
 
 from teams_connector import config
 from teams_connector.domain.errors import ConnectorError
+from teams_connector.surfaces.ui_settings import DEFAULT_UI_IDLE_MINUTES, DEFAULT_UI_PORT
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -48,7 +48,6 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument(
         "--check", action="store_true", help="Also acquire each profile's token (contacts Microsoft)."
     )
-    status.add_argument("--json", action="store_true", help="Machine-readable output.")
     _add_unsecure(status)
 
     mcp = sub.add_parser("mcp", help="Run the MCP server over stdio (started by your MCP client).")
@@ -56,10 +55,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     ui = sub.add_parser("ui", help="Start the local export UI (stops when idle).")
     ui.add_argument(
-        "--port", type=int, default=8765, help="Preferred port (default 8765; a free one if busy)."
+        "--port",
+        type=int,
+        default=DEFAULT_UI_PORT,
+        help=f"Preferred port (default {DEFAULT_UI_PORT}; a free one if busy).",
     )
     ui.add_argument("--no-browser", action="store_true", help="Do not open a browser window.")
-    ui.add_argument("--idle-minutes", type=float, default=30, help="Stop after this many idle minutes.")
+    ui.add_argument(
+        "--idle-minutes",
+        type=float,
+        default=DEFAULT_UI_IDLE_MINUTES,
+        help=f"Stop after this many idle minutes (default {DEFAULT_UI_IDLE_MINUTES}).",
+    )
     _add_unsecure(ui)
 
     return parser
@@ -90,11 +97,11 @@ def main(argv: list[str] | None = None, *, provider_factory: type[TokenProvider]
         return EXIT_OK
     if args.command == "ui":
         from teams_connector.logs import configure_app_logging
-        from teams_connector.surfaces.web import main as web_main
+        from teams_connector.surfaces.web.web_main import serve_ui
 
         configure_app_logging("ui", stdout=True)
         with contextlib.suppress(KeyboardInterrupt):
-            web_main.run(
+            serve_ui(
                 unsecure=args.unsecure,
                 port=args.port,
                 open_browser=not args.no_browser,
@@ -139,18 +146,8 @@ def _auth(provider: TokenProvider, args: argparse.Namespace) -> int:
 
 
 def _status(provider: TokenProvider, args: argparse.Namespace) -> int:
-    status = provider.status()
-    checks: dict[str, dict[str, object]] = {}
-    if args.check:
-        for name in provider.profile_names:
-            try:
-                checks[name] = {"ok": True, **_token_facts(provider.get_token(name))}
-            except ConnectorError as exc:
-                checks[name] = {"ok": False, "error": str(exc)}
-    if args.json:
-        print(json.dumps(_status_dict(status, checks), indent=2))
-    else:
-        _print_status(status, checks)
+    checks = check_profiles(provider) if args.check else {}
+    print("\n".join(status_lines(provider, checks)))
     return EXIT_OK if all(check["ok"] for check in checks.values()) else EXIT_AUTH_REQUIRED
 
 
@@ -176,48 +173,6 @@ def _print_token_summary(name: str, token: AccessToken) -> None:
     print(f"  [{name}] {facts['audience']}  ({facts['scope_count']} scopes)  via {facts['source']}")
     if scopes:
         print(f"    {' '.join(str(s) for s in scopes)}")  # type: ignore[union-attr]
-
-
-def _status_dict(status: CacheStatus, checks: dict[str, dict[str, object]]) -> dict[str, object]:
-    return {
-        "cache": {"mode": status.mode, "path": str(status.path), "exists": status.exists},
-        "accounts": [{"username": a.username, "fingerprint": a.fingerprint} for a in status.accounts],
-        "data_dir": str(config.data_dir()),
-        "profiles": [
-            {
-                "profile": p.profile,
-                "purpose": p.purpose,
-                "client_id": p.client_id,
-                "scopes": list(p.scopes),
-                "client_credential_cached": p.client_credential_cached,
-                "access_token_expires_on": _iso(p.access_token_expires_on),
-                **({"check": checks[p.profile]} if p.profile in checks else {}),
-            }
-            for p in status.profiles
-        ],
-    }
-
-
-def _print_status(status: CacheStatus, checks: dict[str, dict[str, object]]) -> None:
-    print(f"Token cache: {status.mode}, {status.path}" + ("" if status.exists else " (not created yet)"))
-    print(f"Data:        {config.data_dir()}")
-    if not status.accounts:
-        print("Account:     not signed in")
-    for account in status.accounts:
-        print(f"Account:     {account.username} (fingerprint {account.fingerprint})")
-    for p in status.profiles:
-        state = "cached" if p.client_credential_cached else "not cached"
-        print(f"\n[{p.profile}] {p.purpose}")
-        print(f"  client {p.client_id} -> {' '.join(p.scopes)}")
-        print(
-            f"  client credential {state}; access token valid until {_iso(p.access_token_expires_on) or '-'}"
-        )
-        if p.profile in checks:
-            check = checks[p.profile]
-            if check["ok"]:
-                print(f"  check: ok ({check['source']}, {check['scope_count']} scopes)")
-            else:
-                print(f"  check: FAILED - {check['error']}")
 
 
 def _iso(epoch: int | None) -> str | None:

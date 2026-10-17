@@ -34,7 +34,7 @@ from teams_connector.remote.ports import (
     hosted_image_src,
 )
 from teams_connector.service.catalog import Catalog
-from teams_connector.service.passive_html import check_passive_html, with_hosted_images
+from teams_connector.service.hosted_images import check_hosted_images, with_hosted_images
 
 MAX_TEXT_CHARS = 10_000
 MAX_FILES = 10
@@ -357,5 +357,5 @@ def _check_html(html: str, images: list[tuple[str, HostedImage]]) -> tuple[str, 
     if "\x00" in html:
         raise InvalidRequest("html cannot contain a null character.")
     numbers = {name: hosted_image_src(number) for number, (name, _) in enumerate(images, start=1)}
-    tags = check_passive_html(html, numbers.keys())
+    tags = check_hosted_images(html, numbers.keys())
     return with_hosted_images(html, tags, numbers), {tag.src for tag in tags}
