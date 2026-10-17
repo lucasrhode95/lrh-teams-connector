@@ -139,6 +139,9 @@ uv run pytest
 node --test tests/surfaces/export_ui.test.cjs
 ```
 
+`lrh-m365-auth` follows its `main` branch, and `uv.lock` records the exact commit. Run
+`uv lock --upgrade-package lrh-m365-auth` to move to its latest commit.
+
 Tests use synthetic accounts and fake HTTP transports. They do not use browser captures or real
 message content.
 
