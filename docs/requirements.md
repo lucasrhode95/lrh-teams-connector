@@ -3,7 +3,7 @@
 **Evidence:** [Teams API research](api-research.md) · **How it is built:** [architecture](architecture.md) · **Open work:** [roadmap](roadmap.md)
 
 This document records what the connector must do and the decisions behind it. How each tool behaves
-is in the [architecture's MCP tool reference](architecture.md#mcp-tools); open work is in the
+is in the [architecture's MCP tool reference](architecture.md#8-mcp-tools); open work is in the
 roadmap. Do not resolve an open roadmap item by assumption.
 
 ## 1. Product
@@ -30,13 +30,21 @@ Presence (one-on-one, read only) is part of the reads. Outlook, Teams and
 SharePoint are separately installed connectors that share one sign-in (`lrh-m365-auth`); each keeps
 its own product logic.
 
-## 2. Ownership (2026-10-11)
+## 2. Ownership (2026-10-17)
 
-Outlook owns Exchange calendar events: schedule, agenda, organizer, invitees, event attachments and
-the join link. Teams owns a Teams meeting's chat, recordings, transcripts, recap and meeting notes.
-Only verified identifiers connect the two. General OneDrive and SharePoint file discovery belongs to
-the SharePoint connector, and email to the Outlook connector. Which product hosts a shared search
-endpoint does not change who owns a resource.
+The same in every `lrh-*` connector. Each connector owns one product, and all share one sign-in
+(`lrh-m365-auth`):
+
+- **Outlook** owns Exchange mail and its attachments, and calendar events: schedule, recurrence, agenda,
+  organizer, invitees, event attachment metadata and any join link.
+- **Teams** owns chats and channels, message attachments, and a Teams meeting's chat, recordings,
+  transcripts, recap and notes.
+- **SharePoint** owns discovery and retrieval of general OneDrive and SharePoint files.
+
+A file linked from an email or a Teams message stays part of that message; the stored file itself is
+retrieved through SharePoint. Only verified identifiers connect records across products. A shared
+search endpoint, or a similar name, does not change who owns a resource, and a meeting on another
+platform does not become a Teams meeting.
 
 ## 3. Non-goals
 
@@ -127,7 +135,7 @@ A small local cache of the chat list stays, holding no message text: the catalog
 names worked out for untitled chats, the channels Graph's listing omits, and photo ids. It holds no
 chat member lists; participant matches come from Teams' chat search. A damaged store is moved aside,
 not deleted, and the catalog is rebuilt from Teams
-([architecture](architecture.md#requests-caching-and-storage)). Downloaded attachments are kept per source for a week, so a repeat download is served from disk; they are files Teams shares, not message text.
+([architecture](architecture.md#4-requests-caching-and-storage)). Downloaded attachments are kept per source for a week, so a repeat download is served from disk; they are files Teams shares, not message text.
 
 ## 7. Search
 

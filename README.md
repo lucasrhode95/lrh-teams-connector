@@ -24,7 +24,7 @@ uv run teams-connector status
 
 Run the `auth` command above and it logs you in. All `lrh-*` Microsoft 365 connectors share one login engine (`lrh-m365-auth`), so one login covers them all. Microsoft may ask for more than one approval, because the connectors use different Microsoft clients.
 
-`status` shows the signed-in account and its cached profiles without touching the network. To switch accounts, run `auth --sign-out`, then `auth` again. Which profile serves which tool is in [architecture](docs/architecture.md#authentication-and-account-boundaries).
+`status` shows the signed-in account and its cached profiles without touching the network. To switch accounts, run `auth --sign-out`, then `auth` again. Which profile serves which tool is in [architecture](docs/architecture.md#3-authentication-and-account-boundaries).
 
 > Credentials are entered only on Microsoft's sign-in page. Tokens stay in the shared encrypted cache
 > (`~/.lrh-m365-auth`, or `M365_AUTH_HOME`). If encryption is unavailable, sign-in fails closed.
@@ -86,11 +86,11 @@ uv run teams-connector ui
 ![125 percent screenshot of the local Teams connector UI inside a macOS-style browser window. People, chats and messages are synthetic.](https://raw.githubusercontent.com/lucasrhode95/lrh-teams-connector/main/docs/ui-preview.svg)
 
 > The web UI is for manual exports. Its preview is the export's own plain text, built with the same
-> settings as the download; how the page behaves is in [architecture](docs/architecture.md#local-export-ui).
+> settings as the download; how the page behaves is in [architecture](docs/architecture.md#9-local-export-ui).
 
 ## MCP tools
 
-The MCP server exposes the tools below. Each one's inputs, results and caveats are in [architecture](docs/architecture.md#mcp-tools).
+The MCP server exposes the tools below. Each one's inputs, results and caveats are in [architecture](docs/architecture.md#8-mcp-tools).
 
 | MCP tool | Service module | Behavior |
 |---|---|---|
@@ -108,7 +108,7 @@ The MCP server exposes the tools below. Each one's inputs, results and caveats a
 
 Message timestamps are returned in UTC.
 
-Which service backs each tool and route, and which private or public service each capability uses, is in [the architecture](docs/architecture.md#services-ports-and-adapters) and [requirements §4](docs/requirements.md#4-backend-choice).
+Which service backs each tool and route, and which private or public service each capability uses, is in [the architecture](docs/architecture.md#2-services-ports-and-adapters) and [requirements §4](docs/requirements.md#4-backend-choice).
 
 ## Microsoft 365 connectors
 
@@ -142,7 +142,7 @@ node --test tests/surfaces/export_ui.test.cjs
 `lrh-m365-auth` follows its `main` branch, and `uv.lock` records the exact commit. Run
 `uv lock --upgrade-package lrh-m365-auth` to move to its latest commit.
 
-Logs: each `mcp` and `ui` process writes a daily-rotated file under `<data directory>/logs/`, kept for seven days; the UI also logs to stdout. Set `TEAMS_CONNECTOR_LOG_LEVEL=DEBUG` for request timings ([architecture](docs/architecture.md#logging)).
+Logs: each `mcp` and `ui` process writes a daily-rotated file under `<data directory>/logs/`, kept for seven days; the UI also logs to stdout. Set `TEAMS_CONNECTOR_LOG_LEVEL=DEBUG` for request timings ([architecture](docs/architecture.md#7-logging)).
 
 Tests use synthetic accounts and fake HTTP transports. They do not use browser captures or real
 message content.

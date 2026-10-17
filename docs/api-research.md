@@ -50,7 +50,7 @@ record or in fixtures. Example ids are synthetic.
 ## Credentials by service
 
 The connector signs in once with the shared `lrh-m365-auth` profiles
-([architecture](architecture.md#authentication-and-account-boundaries)). The Teams profiles use the Teams
+([architecture](architecture.md#3-authentication-and-account-boundaries)). The Teams profiles use the Teams
 first-party public client (`1fec8e78-bce4-4aaf-ab1b-5451cc387264`). Each Teams service expects its own
 credential:
 

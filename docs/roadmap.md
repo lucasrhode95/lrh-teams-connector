@@ -30,7 +30,7 @@ None open.
 #### P1.5 — Send files to channels and meeting chats
 
 Files and inline images work in one-on-one and group chats and the self chat, including files of 250 MiB
-or more through upload sessions ([architecture](architecture.md#send-a-message),
+or more through upload sessions ([architecture](architecture.md#85-send-a-message),
 [research](api-research.md#sending-files)). Channels and meeting chats refuse them today: channels store
 files in the team's SharePoint folder instead, and meeting chats are untried.
 

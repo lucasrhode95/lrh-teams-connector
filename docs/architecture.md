@@ -10,7 +10,7 @@ The repository contains one current application: the `teams-connector` CLI and t
 The classes and who calls whom, in more detail: [code map](diagrams/code-map.svg). The diagrams give the
 overview; this document records the rules and contracts they cannot show.
 
-## Code structure
+## 1. Code structure
 
 | Layer | Responsibility |
 |---|---|
@@ -45,7 +45,7 @@ dates with the browser's UTC offset while MCP takes ISO 8601 timestamps; the UI 
 and a session token while MCP runs over stdio; the UI streams downloads while MCP returns local
 paths; each maps domain errors to its own responses.
 
-## Services, ports and adapters
+## 2. Services, ports and adapters
 
 Each surface calls a service. A service depends only on the ports it needs, and `bootstrap.py` wires an adapter to
 each port-typed role. A port can have several adapters in different roles: `HistoryReader` reads chats (`ChatService`)
@@ -73,7 +73,7 @@ and the adapters behind them. The split of backends (which private or public ser
 | UI | `POST /api/preview` and its job routes | `Exports.preview` in the single cancellable preview slot | `HistoryReader` (`History.selection`), `MeetingSummaryReader`, `FileReader` (meeting notes only) | `ChatService`, `GraphChannels`, `SubstrateMeetingSummaries`, `GraphFiles` (text conversion only) |
 | UI | `POST /api/exports` and its job routes | `Exports.export` in a background job | as `export_chats` | as `export_chats` |
 
-## Authentication and account boundaries
+## 3. Authentication and account boundaries
 
 The shared `lrh-m365-auth` package supplies six named profiles shared by the three connectors:
 
@@ -104,7 +104,7 @@ MCP, ordinary UI use, and status reads do not launch interactive login. Encrypte
 mandatory by default. The explicitly selected `--unsecure` mode uses a separate plaintext development
 cache and must never be used as an implicit fallback.
 
-## Requests, caching, and storage
+## 4. Requests, caching, and storage
 
 The MCP server is a stdio process scoped to one client session. It performs no network calls until a
 tool needs them. The UI runs only while explicitly started, binds to loopback, and closes on exit,
@@ -119,7 +119,7 @@ the Chat Service conversation feed is read as well.
 The local store holds the chat and channel catalog (names, kinds, last activity, photo ids, and the
 channels that Graph's team listing omits), the catalog's sync token and refresh time, and the owning
 account. It holds no message content and no chat member lists. Teams is the record: every history read,
-search, export and download reads Teams again ([requirements §6](requirements.md#6-local-data-decided-2026-10-14)).
+search, export and download reads Teams again ([requirements §6](requirements.md#6-local-data-decided-2026-10-14-preview-cache-added-2026-10-16)).
 
 The database lives below `<Teams data directory>/accounts/<account fingerprint>/teams.sqlite3`.
 Owner metadata is verified on open; an account mismatch raises an error instead of reusing another
@@ -135,7 +135,7 @@ days when their folder is next used, subfolders included. Downloads are cached p
 item and version), so a file already there is returned without fetching its content. A failed or cancelled
 export publishes nothing.
 
-## HTTP and safety rules
+## 5. HTTP and safety rules
 
 The shared transport accepts HTTPS only and checks Graph and Teams hosts before sending credentials.
 Regional Chat Service URLs come from the Teams AuthZ response and are checked against the Teams
@@ -165,7 +165,7 @@ The local UI rejects non-local Host headers and requires a random per-process to
 It uses a restrictive Content Security Policy and renders message content as text. The browser page
 does not receive a Microsoft token.
 
-## Search behavior and boundaries
+## 6. Search behavior and boundaries
 
 `search_messages` is the one Teams message search. It sends one Microsoft Search v2 query on the shared
 Microsoft Search profile for each page. Search reads no history and writes nothing: each hit is a
@@ -173,7 +173,7 @@ pointer, and `get_messages` reads the history around it. Search v2 matches whole
 and a quoted phrase matches its words in order; it does not match the middle of a word. Agents decide
 whether to fetch surrounding history or request another page.
 
-## Logging
+## 7. Logging
 
 Each `mcp` or `ui` process writes its own file, `<data directory>/logs/<command>-<start time>-<process id>.log`,
 rotated at midnight and kept seven days ([`logs.py`](../src/teams_connector/logs.py), the same module in every
@@ -184,9 +184,9 @@ INFO). Records carry operational timings, statuses and counts, never message or 
 terms, names, identifiers or tokens. The shared sign-in library logs through the same handlers. The transport's own debug line records the method, the path with ids
 replaced, the status and the time.
 
-## MCP tools
+## 8. MCP tools
 
-### Find conversations and read messages
+### 8.1 Find conversations and read messages
 
 1. Call `list_chats` to browse current chats and channels. It returns up to 50 items by default,
    supports `limit` up to 200 and opaque continuation `cursor`, and can filter by `kind`. A cached
@@ -221,7 +221,7 @@ Example arguments for a bounded history read:
 }
 ```
 
-### Presence
+### 8.2 Presence
 
 `get_presence` reads the availability, activity, device type and last-active time of the other person in a
 one-on-one chat. The local UI also reads the signed-in user's presence for the account avatar and visible
@@ -233,7 +233,7 @@ the `teams.spaces` bearer, and share a one-minute process cache. A failed read, 
 `20000` (Teams answers `40401` with a placeholder Offline for a user it does not know), returns no presence
 and a reason. Teams omits the device for offline people and the last-active time for available ones. Other fields Teams returns (calendar, work location, capabilities) are not reported.
 
-### Message search
+### 8.3 Message search
 
 `search_messages` takes `terms`: one to 25 phrases, each at most 200 characters, with no double quotes and no
 control characters. A message matches when any term matches. Each term is sent as one quoted phrase, so it
@@ -282,7 +282,7 @@ Example request for one conversation and a month:
 
 This operation does not discover recap or transcript text; those capabilities remain separate.
 
-### Exports
+### 8.4 Exports
 
 `export_chats` writes `.txt` by default or `.jsonl` when requested, with inclusive date bounds and an optional
 latest-message limit per conversation. Each conversation becomes one text or JSONL file, named after the
@@ -366,7 +366,7 @@ keeps the choice in its cursor. `search_transcripts` lists each matched meeting'
 summary that cannot be read leaves the matches and the completeness unchanged. A meeting without a summary keeps its
 marker alone; a failed read is marked as unavailable, and the call goes on.
 
-### Send a message
+### 8.5 Send a message
 
 `send_message` is one of the two Teams write tools, with `delete_messages`. The user must explicitly
 authorize the recipient and the exact content, files and images. Pass the current conversation name from
@@ -415,7 +415,7 @@ in the sender's OneDrive and why, and which upload's outcome is unknown. A membe
 such as a federated user, makes the send fail before anything is uploaded. The result lists each file's
 name, as renamed, and its link.
 
-### Delete messages
+### 8.6 Delete messages
 
 `delete_messages` soft-deletes a set of the user's own messages in one chat (not a channel), by the ids
 `get_messages` returns: up to 100 per call. The agent first lists the set (chat, count, first and last
@@ -435,7 +435,7 @@ attempted, so the result still shows what happened. The result lists `deleted` (
 the names of the files it shared, which stay in the sender's OneDrive, still shared with the chat),
 `skipped` and `uncertain`. `get_messages` then shows a deleted message as `is_deleted` with no text.
 
-## Local export UI
+## 9. Local export UI
 
 `uv run teams-connector ui` serves the page on a loopback URL, normally `http://127.0.0.1:8766` (Outlook's UI defaults to 8765, so both can run at once), and
 stops after 30 idle minutes (`--port`, `--no-browser` and `--idle-minutes` change that). A busy port is
