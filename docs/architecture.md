@@ -33,7 +33,7 @@ overview; this document records the rules and contracts they cannot show.
 | `service/export/` | Text/JSONL formatting and safe output packaging. Exports read Teams page by page and spool to a temporary file, use exclusive temporary paths, and publish only after completion. |
 | `service/passive_html.py` | The passive rules every connector applies to HTML it sends (the same text as the Outlook connector): refuses declarations, active content, elements that change how the rest is read, and unfinished markup. |
 | `service/hosted_images.py` | The Teams rule on top of those: an `<img>` is sent only when it names an image attached to the message, and it is rebuilt to point at the hosted copy; any other `<img>` and embedded media are refused. |
-| `service/localfiles.py` | Per-user output directories, retention cleanup, and collision-safe file creation. |
+| `service/localfiles.py` | Per-user output directories, retention cleanup (one process at a time, by a lock file beside each folder), and collision-safe file creation. |
 | `src/teams_connector/config.py` | Product CLI/data names and fixed public service URLs. Tenant authority, client IDs, token profiles, scopes, and shared-cache configuration live in `lrh-m365-auth`. |
 
 The service layer receives adapters through the ports and is responsible for decisions and coverage.
