@@ -45,6 +45,7 @@
 <text class="section-title code" x="459" y="279" style="font-size:20px">teams-connector ui</text>
 <text class="group-title" x="459" y="316">Calls</text>
 <g><title>Starts uvicorn on 127.0.0.1 with a per-run session token, opens the browser, and stops after the idle timeout.</title><text class="detail small" x="459" y="346">• <tspan class="code">web.main.run(...)</tspan></text></g>
+<g><title>Defaults for the UI: port 8766 (the Outlook connector uses 8765, so both can run) and a 30-minute idle timeout.</title><text class="detail small" x="459" y="373">• <tspan class="code">ui_settings.py</tspan></text></g>
 <rect x="786" y="244" width="327" height="170" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
 <text class="section-title code" x="802" y="279" style="font-size:20px">teams-connector auth</text>
 <text class="group-title" x="802" y="316">Calls</text>

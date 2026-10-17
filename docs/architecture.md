@@ -17,6 +17,7 @@ overview; this document records the rules and contracts they cannot show.
 | `src/teams_connector/__main__.py` | Canonical CLI (`teams-connector`) for shared sign-in, profile status, MCP, and UI. Loads MCP and web dependencies only for those commands. |
 | `surfaces/mcp_main.py` | Typed MCP tools over the service layer. Keeps stdio free of logs; `send_message` and `delete_messages` are the only Teams write tools. |
 | `surfaces/web/` | Starlette app, static local export page, and loopback UI launcher. Uses a per-run session token, Host validation, and an idle timeout. |
+| `surfaces/ui_settings.py` | Defaults for the local UI and its launcher: port 8766 (the Outlook connector uses 8765, so both can run) and a 30-minute idle timeout. |
 | `service/` | Domain behavior for the catalog, message history, exports, attachment downloads, profile photos, and sending. MCP and UI share these operations. |
 | `remote/ports.py` | Interfaces used by services; service code does not depend on concrete HTTP adapters. |
 | `remote/transport.py` | The only general HTTP client. Applies the allowlist, authentication, one-time 401 renewal, bounded idempotent retries, response limits, error mapping, and credential-free download redirects. |
@@ -476,7 +477,8 @@ Shared by the Outlook and Teams connector UIs; each keeps its own accent color, 
 vocabulary.
 
 - **Type and shape:** the font stack `"Segoe UI", system-ui, sans-serif`; corners of about 4 px on fields
-  and buttons, 8–12 px on cards, menus and dialogs, and round avatars and icon buttons.
+  and buttons, 8–12 px on cards, menus and dialogs, and round avatars and icon buttons. Pills, chips
+  and badges keep small radii of their own.
 - **Header:** the product name, then the search or filters, with the signed-in account (avatar and name)
   at the far right.
 - **Settings:** options that apply to the download sit behind a cog beside the filters, as on/off switches
