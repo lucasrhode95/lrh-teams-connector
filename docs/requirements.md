@@ -99,8 +99,13 @@ broad heterogeneous search, and AMS media.
 - Untitled chats get a name: a one-on-one takes the other person's name, or a verified app's name;
   an unnamed group takes its members' sorted names, cut at 87 characters with ` +N`. An opaque id is
   shown only when no name resolves.
-- The exact rules and the evidence behind them are in the research's
-  [naming rules](api-research.md#chat-rows).
+- Naming rules (decided 2026-10-01): an explicit meeting type wins over `isOneOnOne`, and a complete
+  roster of more than two members is never a one-on-one. An app's name names a chat only when the chat is
+  untitled, its complete roster is the user and one `28:` peer, and that peer sent the latest message. An
+  untitled group is named from its complete roster without the user: names sorted case-insensitively,
+  joined with ` | ` up to 87 characters (the first cut at 80 with an ellipsis if none fits), then `+N` for
+  every participant not shown, the user included. The fields behind them are in the research's
+  [chat rows](api-research.md#chat-rows).
 - The catalog answers from the local store for up to ten minutes; an explicit refresh waits for
   Teams.
 

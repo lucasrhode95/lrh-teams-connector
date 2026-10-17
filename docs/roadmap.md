@@ -1,71 +1,56 @@
 # Teams Connector Roadmap
 
-Open bugs, improvements, enhancements and validation only. What the connector must do is in the
-[requirements](requirements.md); how it is built is in the [architecture](architecture.md); dated
-evidence is in the [research record](api-research.md). Delete an item once it is done. Codes are
-never reused.
+Open work only. What the connector must do is in the [requirements](requirements.md); how it is built is
+in the [architecture](architecture.md); dated evidence is in the [research record](api-research.md).
+Delete an item once it is done. Codes are never reused.
 
-Snapshot **2026-10-16**.
+Work is split by what it needs: **implementation** is code still to write; **decisions** wait for the
+user; **live verification** checks behavior that is already built against a real tenant, and becomes
+implementation only if a check fails.
 
-## Bugs
+Snapshot **2026-10-17**.
+
+## Implementation
+
+### Bugs
 
 Write each bug as **Seen** (a synthetic example: the call and what came back), **Expected**,
 **Cause** and **Fix**.
 
 None open.
 
-## Improvements
+### Improvements
 
 Working behavior that could be cheaper, simpler or better informed.
 
 None open.
 
-## Enhancements
+### Enhancements
 
-### P1.5 — Send host files as attachments
+#### P1.5 — Send files to channels and meeting chats
 
 Files and inline images work in one-on-one and group chats and the self chat, including files of 250 MiB
 or more through upload sessions ([architecture](architecture.md#send-a-message),
-[research](api-research.md#sending-files)). Still open:
+[research](api-research.md#sending-files)). Channels and meeting chats refuse them today: channels store
+files in the team's SharePoint folder instead, and meeting chats are untried.
 
-- **Channels and meeting chats:** files and images are refused there today. Channels store files in the
-  team's SharePoint folder instead; meeting chats are untried.
+#### P2.2f — Meeting recaps
 
-### N9 — Meeting notes from Loop pages
+The AI summary of each transcribed meeting is in exports, `get_messages` and transcript search
+(architecture, "Meeting transcripts"; [research](api-research.md#meeting-summary)). The rest of the recap,
+its mentions and tasks, is not built.
 
-The meeting app's notes link reads as a marker, and exports and `download_attachment` read the page as
-text ([architecture](architecture.md#exports)). Still open:
+## Decisions
 
-- **Pasted Loop components:** do they use the same embed? A person's message with one keeps its text and
-  link today; handle it like the notes if the page converts the same way.
-- **Page name in the marker:** the app's message carries no page name, so reading shows
-  `[Meeting notes] <link>`; the title appears only once the page is read. Is there a name to show without
-  reading the page?
-- Decided 2026-10-16: the downloaded file is text, not the PDF (`?format=pdf`).
-- Done 2026-10-16: notes are recognized by the allowlisted Facilitator sender, not by the meeting-ended record, and
-  the converted page's media host is named in config for that one read (api-research, "Meeting notes" live
-  findings). Checked live on the standup's rundown page. The flag that governs the AI summaries governs these notes too.
+### P2.2h — Transcript download default
 
-### P2.2f — Meeting recaps, and transcripts beyond the first version
+Exports download transcripts by default (`include_transcripts`). Whether to keep that is left to the user,
+once agents have used the AI summaries to judge when a full transcript is needed.
 
-Transcripts are implemented: the `[Transcript: title]` marker, exports and downloads, and
-`search_transcripts` (architecture, "Meeting transcripts"; [research](api-research.md#transcripts)). Exports, `get_messages` and transcript search
-also carry Teams' AI summary of each transcribed meeting (`include_summaries`, on by default;
-architecture, "Meeting transcripts"; [research](api-research.md#meeting-summary), 2026-10-16). Still open:
+## Live verification
 
-- **Recaps:** mentions and tasks are not built. The AI summary is in exports, `get_messages` and transcript
-  search.
-- **Transcript download default:** whether exports download transcripts by default is left to the user, once
-  agents have used the summaries to judge whether a full transcript is needed.
-- **Channel recordings:** their transcripts are untested. Search skips channel conversations with a note.
-- **Across meetings:** each video costs a few chat reads (at most 25 chats, 20 pages each), so a video old
-  enough that many chats were active since is reported as unverified. Measure on a busy tenant before raising
-  the bound.
-- **Group chats and calls:** a recording posted in a group chat or a one-on-one call is verified the same
-  way, but no such recording has been checked live.
-- **Other tenants:** the transcript route is verified on one account. Reassess it per deployment (A1).
-
-## Validation
+Built behavior not yet checked on a live tenant. Each check needs the user's authorization for the live
+read or write it makes; record the dated result in the research record.
 
 ### P1.1 — Catalog against the Teams UI
 
@@ -87,8 +72,33 @@ Graph sends to the self chat, a one-on-one and a group chat were verified on 202
 disposable, user-approved message to each, then check that the returned id matches history and that
 a refusal is reported clearly.
 
-### A1 — Fresh-account sign-in
+### N9 — Loop pages beyond the meeting notes
+
+The Facilitator's meeting notes are read and checked live (2026-10-16; architecture, "Exports"). Still to
+check:
+
+- **Pasted Loop components:** does a person's pasted component use the same embed? Such a message keeps
+  its text and link today; if the page converts the same way, handling it like the notes becomes an
+  enhancement.
+- **Page name in the marker:** the app's message carries no page name, so it reads as
+  `[Meeting notes] <link>` until the page is read. Is there a name to show without reading the page?
+
+### P2.2g — Transcripts beyond meeting chats
+
+Transcripts in meeting chats are verified live (2026-10-16; [research](api-research.md#transcripts)).
+Still to check:
+
+- **Channel recordings:** their transcripts are untested; transcript search skips channel conversations
+  with a note.
+- **Group chats and calls:** a recording posted in a group chat or a one-on-one call is verified the same
+  way in code, but none has been checked live.
+- **Across meetings:** each video costs a few chat reads (at most 25 chats, 20 pages each), so a video old
+  enough that many chats were active since is reported as unverified. Measure on a busy tenant before
+  raising the bound.
+
+### A1 — Fresh accounts and other tenants
 
 The 2026-10-12 shared-auth check reused existing grants
-([research](api-research.md#credentials-by-service)). A new account's consent for the
-Teams profiles and `m365.search` has not been tried.
+([research](api-research.md#credentials-by-service)). A new account's consent for the Teams profiles and
+`m365.search` has not been tried, and the transcript and meeting-summary routes are verified on one
+account only. Reassess them per deployment.

@@ -113,7 +113,9 @@ refresh process.
 Each authenticated UI API request, including presence reads and preview-status polling, counts as
 activity for the idle timeout.
 
-The chat catalog may be reused for up to ten minutes. Explicit refresh waits for the remote read.
+The chat catalog may be reused for up to ten minutes. Explicit refresh waits for the remote read. A rejected
+or expired catalog sync token makes the read take the full snapshot instead. When CSA reports a partial catalog,
+the Chat Service conversation feed is read as well.
 The local store holds the chat and channel catalog (names, kinds, last activity, photo ids, and the
 channels that Graph's team listing omits), the catalog's sync token and refresh time, and the owning
 account. It holds no message content and no chat member lists. Teams is the record: every history read,
@@ -337,7 +339,8 @@ they can export.
 **Meeting transcripts.** A recording's message card names the recording's drive item and, when Teams made a
 transcript, the transcript (`remote/recording_cards.py`; no request is made to read the card). Its marker is
 `[Transcript: title]`, and it carries a `transcript` attachment named by the title, with the recording it
-belongs to kept out of serialization. Exports and `download_attachment` fetch the default transcript with
+belongs to kept out of serialization. A `RichText/Media_CallTranscript` notice reads as `[Transcript saved]`;
+its JSON document of storage ids is never shown. Exports and `download_attachment` fetch the default transcript with
 `GET …/media/transcripts/{id}/content?format=json` (`remote/graph_transcripts.py`, parsed by
 `remote/transcript_json.py`) and write it as text (`service/transcript_text.py`): a header, then utterances grouped
 by speaker with their times. An export writes it into the `transcripts/` folder beside the conversation's file.
@@ -418,7 +421,7 @@ so the rule lives in the tool description and the MCP instructions. The service 
 1. Reads the message again (`History.message`). A message it cannot read, someone else's, a system event
    or an already deleted message is skipped with the reason.
 2. Sends Chat Service `DELETE …/messages/{id}?behavior=softDelete` with the Skype token
-   ([research](api-research.md#writes-not-used-by-the-connector)). Teams Web's Delete does the same, and
+   ([research](api-research.md#writes)). Teams Web's Delete does the same, and
    it can be undone in Teams.
 
 A refused delete is skipped and the rest continue; an ambiguous one (no response, or HTTP 504) is listed

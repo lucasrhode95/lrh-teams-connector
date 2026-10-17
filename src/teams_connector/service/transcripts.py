@@ -1,6 +1,6 @@
 """Searching meeting transcripts: the words in the transcripts of meeting recordings.
 
-Two ways in, one result shape (docs/requirements.md §8, docs/roadmap.md P2.2f):
+Two ways in, one result shape (docs/requirements.md §8; live checks still open in docs/roadmap.md P2.2g):
 
 - **In conversations** (conversation_ids given, optionally with dates): the recording messages of those chats
   are read, and each recording's transcript is searched. The result is complete within the scope unless a
