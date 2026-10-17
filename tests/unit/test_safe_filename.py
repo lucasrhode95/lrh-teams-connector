@@ -13,6 +13,8 @@ from teams_connector.service.files import safe_filename
         ("CON", "_CON"),
         ("nul.txt", "_nul.txt"),
         ("lpt9.log", "_lpt9.log"),
+        ("CON.backup.txt", "_CON.backup.txt"),
+        ("aux .tar.gz", "_aux .tar.gz"),
         ("...", "file"),
         ("", "file"),
         ("trailing dot. ", "trailing dot"),
