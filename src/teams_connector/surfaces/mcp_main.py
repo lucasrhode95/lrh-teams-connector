@@ -11,7 +11,7 @@ import functools
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Annotated, Any
 
 from m365_auth import status_report
@@ -37,6 +37,7 @@ from teams_connector.domain.models import (
     SendResult,
     TranscriptSearchResult,
 )
+from teams_connector.domain.time import optional_utc
 
 log = logging.getLogger(__name__)
 
@@ -115,12 +116,6 @@ SEND = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=
 Since = Annotated[datetime | None, Field(description="Inclusive lower bound (ISO 8601; UTC if no offset).")]
 Until = Annotated[datetime | None, Field(description="Inclusive upper bound (ISO 8601; UTC if no offset).")]
 ConversationId = Annotated[str, Field(description="Conversation id from list_chats or search results.")]
-
-
-def _utc(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
 
 
 def _logged[**P, R](function: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
@@ -233,8 +228,8 @@ def build_server(context: AppContext) -> FastMCP:
         followed by Teams' AI summary of it unless include_summaries is false."""
         return await (await services()).history.get_messages(
             conversation_id,
-            since=_utc(since),
-            until=_utc(until),
+            since=optional_utc(since),
+            until=optional_utc(until),
             message_limit=message_limit,
             page_size=page_size,
             max_chars=max_chars,
@@ -271,8 +266,8 @@ def build_server(context: AppContext) -> FastMCP:
         return await (await services()).search.search_messages(
             terms,
             conversation_ids=conversation_ids,
-            since=_utc(since),
-            until=_utc(until),
+            since=optional_utc(since),
+            until=optional_utc(until),
             limit=limit,
             cursor=cursor,
         )
@@ -315,8 +310,8 @@ def build_server(context: AppContext) -> FastMCP:
         return await (await services()).transcript_search.search(
             terms,
             conversation_ids=conversation_ids,
-            since=_utc(since),
-            until=_utc(until),
+            since=optional_utc(since),
+            until=optional_utc(until),
             limit=limit,
             include_summaries=include_summaries,
         )
@@ -359,8 +354,8 @@ def build_server(context: AppContext) -> FastMCP:
         """
         request = ExportRequest(
             conversation_ids=conversation_ids,
-            since=_utc(since),
-            until=_utc(until),
+            since=optional_utc(since),
+            until=optional_utc(until),
             message_limit=message_limit,
             format=format,
             include_attachments=include_attachments,
@@ -428,7 +423,7 @@ def build_server(context: AppContext) -> FastMCP:
         Meeting notes ([Meeting notes]) are read from the live Loop page and saved as text."""
         if (message_id is None) == (sent_at is None):
             raise InvalidRequest("Pass exactly one of message_id or sent_at.")
-        when = _utc(sent_at) if sent_at is not None else None
+        when = optional_utc(sent_at) if sent_at is not None else None
         return await (await services()).files.download_attachments(
             conversation_id,
             message_id=message_id,
