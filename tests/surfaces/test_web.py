@@ -15,12 +15,13 @@ from teams_connector.bootstrap import AppContext
 from teams_connector.domain.models import Chat
 from teams_connector.service.catalog import Catalog
 from teams_connector.service.export.orchestrator import Exports
+from teams_connector.surfaces.ui_settings import DEFAULT_UI_PORT
 from teams_connector.surfaces.web import routes
 from teams_connector.surfaces.web.routes import Activity, create_app, export_request, preview_request
 from tests.fakes.teams_fake import ME, PEER, FakeTeams, FakeTokens
 
 SESSION = "synthetic-session-token"
-PORT = 8765
+PORT = DEFAULT_UI_PORT
 BASE_URL = f"http://127.0.0.1:{PORT}"
 
 

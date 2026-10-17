@@ -432,7 +432,7 @@ the names of the files it shared, which stay in the sender's OneDrive, still sha
 
 ## Local export UI
 
-`uv run teams-connector ui` serves the page on a loopback URL, normally `http://127.0.0.1:8765`, and
+`uv run teams-connector ui` serves the page on a loopback URL, normally `http://127.0.0.1:8766` (Outlook's UI defaults to 8765, so both can run at once), and
 stops after 30 idle minutes (`--port`, `--no-browser` and `--idle-minutes` change that). A busy port is
 replaced by another free loopback port; the browser opens only after the server reports ready and
 prints the URL it chose. Every API call carries a per-run session token and a loopback Host.

@@ -15,6 +15,7 @@ from m365_auth import AccessToken, AuthenticationRequired, CacheStatus, TokenPro
 
 from teams_connector import config
 from teams_connector.domain.errors import ConnectorError
+from teams_connector.surfaces.ui_settings import DEFAULT_UI_IDLE_MINUTES, DEFAULT_UI_PORT
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -56,10 +57,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     ui = sub.add_parser("ui", help="Start the local export UI (stops when idle).")
     ui.add_argument(
-        "--port", type=int, default=8765, help="Preferred port (default 8765; a free one if busy)."
+        "--port",
+        type=int,
+        default=DEFAULT_UI_PORT,
+        help=f"Preferred port (default {DEFAULT_UI_PORT}; a free one if busy).",
     )
     ui.add_argument("--no-browser", action="store_true", help="Do not open a browser window.")
-    ui.add_argument("--idle-minutes", type=float, default=30, help="Stop after this many idle minutes.")
+    ui.add_argument(
+        "--idle-minutes",
+        type=float,
+        default=DEFAULT_UI_IDLE_MINUTES,
+        help=f"Stop after this many idle minutes (default {DEFAULT_UI_IDLE_MINUTES}).",
+    )
     _add_unsecure(ui)
 
     return parser

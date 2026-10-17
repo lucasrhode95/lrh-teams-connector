@@ -14,9 +14,8 @@ import webbrowser
 import uvicorn
 
 from teams_connector.bootstrap import AppContext
+from teams_connector.surfaces.ui_settings import DEFAULT_UI_IDLE_MINUTES, DEFAULT_UI_PORT
 from teams_connector.surfaces.web.routes import Activity, create_app
-
-DEFAULT_PORT = 8765
 
 
 def _free_port(preferred: int) -> int:
@@ -31,7 +30,11 @@ def _free_port(preferred: int) -> int:
 
 
 def run(
-    *, unsecure: bool, port: int = DEFAULT_PORT, open_browser: bool = True, idle_minutes: float = 30
+    *,
+    unsecure: bool,
+    port: int = DEFAULT_UI_PORT,
+    open_browser: bool = True,
+    idle_minutes: float = DEFAULT_UI_IDLE_MINUTES,
 ) -> None:
     port = _free_port(port)
     token = secrets.token_urlsafe(24)
