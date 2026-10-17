@@ -124,7 +124,7 @@ async def test_the_self_chat_takes_images(services: Services, fake: FakeTeams, c
         ('<img src="https://example.com/remote.png">', "Embedded media"),
         ('<img src="other.png">', "Embedded media"),
         ('<img src="chart.png" srcset="https://example.com/remote.png 2x">', "only alt, title"),
-        ('<img src="chart.png" onerror="alert(1)">', "only alt, title"),
+        ('<img src="chart.png" onerror="alert(1)">', "event handlers"),
         ('<img src="chart.png" style="x" title="javascript:alert(1)">', "Active HTML"),
     ],
 )

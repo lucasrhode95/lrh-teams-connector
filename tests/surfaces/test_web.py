@@ -376,3 +376,9 @@ def test_date_picker_weeks_start_on_sunday_like_outlook() -> None:
     assert weekdays and re.findall(r"<span>(\w)</span>", weekdays.group(1)) == list("SMTWTFS")
     for control in ("today-date", "calendar-done", "clear-dates", "date-filter-clear"):
         assert f'id="{control}"' in page
+
+
+async def test_responses_carry_security_headers(web_client: httpx.AsyncClient) -> None:
+    page = await web_client.get("/")
+    assert page.headers["X-Content-Type-Options"] == "nosniff"
+    assert page.headers["Referrer-Policy"] == "no-referrer"

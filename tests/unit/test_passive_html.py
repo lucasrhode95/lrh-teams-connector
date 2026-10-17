@@ -8,7 +8,7 @@ from __future__ import annotations
 import pytest
 
 from teams_connector.domain.errors import InvalidRequest
-from teams_connector.service.passive_html import check_passive_html, with_hosted_images
+from teams_connector.service.hosted_images import check_hosted_images, with_hosted_images
 
 PASSIVE = [
     "<p><strong>Due Friday</strong></p><ul><li>review the <code>budget</code> sheet</li>"
@@ -46,19 +46,19 @@ ACTIVE = [
 
 @pytest.mark.parametrize("value", PASSIVE)
 def test_passive_markup_passes(value: str) -> None:
-    check_passive_html(value)
+    check_hosted_images(value)
 
 
 @pytest.mark.parametrize(("value", "reason"), ACTIVE)
 def test_active_or_unfinished_markup_is_refused(value: str, reason: str) -> None:
     with pytest.raises(InvalidRequest, match=reason):
-        check_passive_html(value)
+        check_hosted_images(value)
 
 
 def test_named_images_are_returned_and_rebuilt_while_the_rest_stays_as_written() -> None:
     html = "<p>a&amp;b</p>\n<div>\n  <IMG Src='chart.png' ALT=\"x &quot;y&quot;\"/> tail</div>"
 
-    tags = check_passive_html(html, {"chart.png"})
+    tags = check_hosted_images(html, {"chart.png"})
 
     assert [tag.src for tag in tags] == ["chart.png"]
     rebuilt = with_hosted_images(html, tags, {"chart.png": "../hostedContents/1/$value"})
@@ -69,4 +69,4 @@ def test_named_images_are_returned_and_rebuilt_while_the_rest_stays_as_written()
 
 def test_without_named_images_every_img_is_refused() -> None:
     with pytest.raises(InvalidRequest, match="Embedded media"):
-        check_passive_html('<img src="chart.png">')
+        check_hosted_images('<img src="chart.png">')

@@ -30,7 +30,8 @@ overview; this document records the rules and contracts they cannot show.
 | `remote/*_mapping.py` and `remote/teams_html.py` | Convert wire responses into domain records and readable message text. Wire-format field names remain inside this layer. |
 | `store/db.py` | Account-bound SQLite store for the chat catalog and account metadata only. Holds no message content and no tokens. |
 | `service/export/` | Text/JSONL formatting and safe output packaging. Exports read Teams page by page and spool to a temporary file, use exclusive temporary paths, and publish only after completion. |
-| `service/passive_html.py` | The passive check for HTML sends: refuses active content, embedded media, declarations and unfinished markup. Its one rewrite points an `<img>` that names an attached image at the hosted copy. |
+| `service/passive_html.py` | The passive rules every connector applies to HTML it sends (the same text as the Outlook connector): refuses declarations, active content, elements that change how the rest is read, and unfinished markup. |
+| `service/hosted_images.py` | The Teams rule on top of those: an `<img>` is sent only when it names an image attached to the message, and it is rebuilt to point at the hosted copy; any other `<img>` and embedded media are refused. |
 | `service/localfiles.py` | Per-user output directories, retention cleanup, and collision-safe file creation. |
 | `src/teams_connector/config.py` | Product CLI/data names and fixed public service URLs. Tenant authority, client IDs, token profiles, scopes, and shared-cache configuration live in `lrh-m365-auth`. |
 

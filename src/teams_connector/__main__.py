@@ -97,11 +97,11 @@ def main(argv: list[str] | None = None, *, provider_factory: type[TokenProvider]
         return EXIT_OK
     if args.command == "ui":
         from teams_connector.logs import configure_app_logging
-        from teams_connector.surfaces.web import main as web_main
+        from teams_connector.surfaces.web.web_main import serve_ui
 
         configure_app_logging("ui", stdout=True)
         with contextlib.suppress(KeyboardInterrupt):
-            web_main.run(
+            serve_ui(
                 unsecure=args.unsecure,
                 port=args.port,
                 open_browser=not args.no_browser,
