@@ -68,9 +68,8 @@ credential:
 | OneDrive file sends | Teams Web client bearer for `https://<tenant>-my.sharepoint.com/.default`; not tried with the connector's client | Capture, 2026-10-15 |
 
 **Shared sign-in, live 2026-10-12:** `teams-connector auth` reused existing grants: no device code, no MFA
-prompt. Every Teams profile then acquired a token silently. A fresh account's consent has not been tried
-(roadmap A1). In the offline `status` output, `client_credential_cached=false` for a Teams profile did not
-mean its token was missing.
+prompt. Every Teams profile then acquired a token silently. In the offline `status` output,
+`client_credential_cached=false` for a Teams profile did not mean its token was missing.
 
 ## AuthZ
 
@@ -109,9 +108,8 @@ The chat catalog with UI state. Base `https://teams.microsoft.com/api/csa/api/v1
 
 - `metadata` carries `syncToken`, `forwardSyncToken`, `isPartialData` and `hasMoreChats`; every snapshot seen
   had both flags false (958 chats on 2026-10-12).
-- The bundle declares a `SyncTokenExpired` error category (Source). The connector treats a rejected or expired
-  token as a request for the full snapshot.
-- Channel rows (`channels`) carry activity only; the connector's channel list comes from Graph.
+- The bundle declares a `SyncTokenExpired` error category (Source).
+- Channel rows (`channels`) carry activity only.
 - The self chat `48:notes` is never in CSA: not in the startup, snapshot or delta responses.
 - Reading history, downloading a file or exporting through the connector did not change a chat's `isRead`
   (live, 2026-10-15, on unread meeting chats).
@@ -142,13 +140,6 @@ Live 2026-10-01 unless dated otherwise:
 - An untitled one-on-one with an app has a `28:` peer, and `lastMessage.properties.fromAppMetadata.name`
   names the app. Its `fromAppMetadata.id` is not the `28:` id.
 - `isSticky` did not consistently match the Favorites section (2026-09-29).
-
-**Connector naming rules** (decided 2026-10-01): an explicit meeting type wins over `isOneOnOne`, and a
-complete roster of more than two members is never a one-on-one. An app's name names a chat only when the
-chat is untitled, its complete roster is the user and one `28:` peer, and that peer sent the latest message.
-An untitled group is named from its complete roster without the user: names sorted case-insensitively,
-joined with ` | ` up to 87 characters (the first cut at 80 with an ellipsis if none fits), then `+N` for
-every participant not shown, the user included.
 
 ### Sidebar order
 
@@ -187,22 +178,20 @@ conversation id URL-encoded. Live unless dated otherwise:
   opaque `syncState`. Consecutive pages can overlap, so de-duplicate by message id.
 - `startTime` is an inclusive lower bound; `startTime=0` reads all history. `since=` and `$filter` are
   ignored.
-- `endTime` did not reliably include ordinary messages at the edge, so it is not used for ranges. An equal
+- `endTime` did not reliably include ordinary messages at the edge. An equal
   `startTime` and `endTime` returns exactly the message sent at that time, in chats and channels
   (2026-10-15).
 - `_metadata` can also carry `lastCompleteSegmentStartTime` and `lastCompleteSegmentEndTime`; their meaning
   is unverified.
-- A message id equalled its arrival time in epoch milliseconds in every message checked. The connector does
-  not rely on it.
+- A message id equalled its arrival time in epoch milliseconds in every message checked.
 - Teams Web opens a search hit by reading forward from about 72 minutes before it:
   `view=msnp24Equivalent|supportsMessageProperties&pageSize=200&startTime=<epoch ms>` (Capture, 2026-10-14).
 - The Teams Web bundle also has GraphQL `messages(convId, replyChainId, cursor)` and
   `fetchRecentMessagesAfter`; neither takes a date range (Source, 2026-09-28).
 - A meeting chat in the catalog whose roster does not include the account answers 403 with `errorCode`
   209 and a `message` holding `{"subCode":"AclCheckFailed","details":…}`. The details name the account's
-  MRI and the thread (2026-10-16, local UI preview). The connector reports that the account is not a
-  member and leaves out the details. Why the catalog lists such a chat (for example a meeting the account
-  was invited to but never joined) is unverified.
+  MRI and the thread (2026-10-16). Why the catalog lists such a chat (for example a meeting the account was
+  invited to but never joined) is unverified.
 
 ### One message
 
@@ -219,8 +208,7 @@ fails for `48:notes`.
 
 ### Conversation feed
 
-`GET /v1/users/ME/conversations?view=mychats&pageSize=<n>`, paged by `_metadata.backwardLink`. The connector
-reads it only when CSA reports a partial catalog. Live 2026-09-30: 961 rows over three pages of 500; every
+`GET /v1/users/ME/conversations?view=mychats&pageSize=<n>`, paged by `_metadata.backwardLink`. Live 2026-09-30: 961 rows over three pages of 500; every
 CSA chat was in it, plus `48:notes`, teams, channels and service streams (`StreamOfNotifications`,
 `StreamOfMentions`, `StreamOfCallLogs`, `StreamOfAnnotations`, `StreamOfGeneric`). No server-side filter by
 name, type or date was found, and its order is not the sidebar's. A row carries `id`, `version`,
@@ -235,10 +223,9 @@ name, type or date was found, and its order is not the sidebar's. A row carries 
 signed-in account and identifies the user's own messages without comparing names. Third-party clients use
 the same id ([msgvault](https://pkg.go.dev/go.kenn.io/msgvault%40v0.20.0/internal/teams)).
 
-### Writes (not used by the connector)
+### Writes
 
-The connector sends through Graph, which returns the new id in its body. Chat Service writes, for later work
-(except the soft delete, which `delete_messages` uses since 2026-10-15):
+Chat Service writes; only the soft delete is used (by `delete_messages`):
 
 | Route | Shape | Evidence |
 |---|---|---|
@@ -318,8 +305,6 @@ Meeting chats hold service records that history returns as messages (12 meeting 
 | `ThreadActivity/MeetingPolicyUpdated`, `AddCustomApp`, `DeleteMember` | 5 | not read (`ChatEnabled` marks meeting chat switched on) |
 
 `eventtime` is epoch milliseconds. In one meeting chat, 8 of 15 consecutive messages were such records.
-Graph exposes the same events as `systemEventMessage` with `eventDetail`; Azure Communication Services
-documents the same `addmember` and `topicupdate` envelopes.
 
 ### Recording cards
 
@@ -338,10 +323,9 @@ The type name carries no `Html`, so the card is plain text to a reader that keys
 **Transcript identifiers in the card** (live, 2026-10-16): the `onedriveForBusinessVideo` item carries the
 recording's `driveId` and `driveItemId`. The `onedriveForBusinessTranscript` item carries the same drive and
 item ids and the transcript's `id`, which equals the id of the default transcript that `media/transcripts`
-lists. The card's `amsTranscript` item has no drive ids. Transcripts
-also appear as `RichText/Media_CallTranscript` messages. Such a message is a notice: its content is a JSON document of
-  identifiers and storage flags (`scopeId`, `storageId`, `callId`, `isExportedToOdsp`, and others). The connector
-  renders it as `[Transcript saved]` and never shows the document (2026-10-16).
+lists. The card's `amsTranscript` item has no drive ids. Transcripts also appear as
+`RichText/Media_CallTranscript` messages: a notice whose content is a JSON document of identifiers and storage
+flags (`scopeId`, `storageId`, `callId`, `isExportedToOdsp`, and others).
 
 ## AMS (Async Media Service)
 
@@ -362,8 +346,7 @@ Source), but the header alone works. Live 2026-10-15, one self-chat image and on
 
 - Every image listed `imgo`, `imgpsh_fullsize` and `imgpsh_fullsize_anim`; some also `img_small`, `imgpsh`
   and `imgpsh_thumbnail_sx`. The bundle names more views (`imgt1`, `imgpsh_mobile_save`, …).
-- Teams Web saves every image as `MicrosoftTeams-image.png` (Source), so the connector names images by
-  object id instead.
+- Teams Web saves every image as `MicrosoftTeams-image.png` (Source).
 
 **Second host, live 2026-10-15** (read-only, the 25 most recent chats; no ids, bodies or bytes kept). The 172
 pasted images in those chats: 171 on the first host, 1 on the second. With `Authorization: skype_token <token>`:
@@ -398,7 +381,7 @@ The capture strips credentials, so the upload's auth isn't shown; Source points 
 
 - Answers one row per MRI: `mri`, `etag`, `etagMatch`, `status`, and `presence` with `availability`,
   `activity`, `deviceType`, `lastActiveTime`, `calendarData`, `workLocation`, `forcedAvailability`,
-  `capabilities` and `sourceNetwork`. The connector keeps the first four.
+  `capabilities` and `sourceNetwork`.
 - Which fields come back depends on the person's state. Probe of 60 one-on-one peers and the account in one
   request, 2026-10-16, cross-checked with Capture and Source:
   - `deviceType` is absent for every peer whose availability and activity are both `Offline` (11 of 11): no
@@ -409,10 +392,9 @@ The capture strips credentials, so the upload's auth isn't shown; Source points 
     for away, be right back, offline and out of office, and only within a year (Source).
   - The row `status` is `20000` for a real reading. Six peers answered `40401` with a placeholder `Offline`
     and `sourceNetwork` `Unknown`; Teams Web names that code `UserNotFound`, beside `20200` Pending, `40300`
-    Forbidden, `40400` NotFound, `40402` NoData and `5000x` failures (Source). The connector treats any
-    status other than `20000` as no presence, so these do not show as offline.
-  - Other fields seen and not kept: `calendarData.isOutOfOffice` (with an `outOfOfficeNote`), a status
-    `note`, `capabilities`, and `forcedAvailability` for the account.
+    Forbidden, `40400` NotFound, `40402` NoData and `5000x` failures (Source).
+  - Other fields seen: `calendarData.isOutOfOffice` (with an `outOfOfficeNote`), a status `note`,
+    `capabilities`, and `forcedAvailability` for the account.
 - The global host (`unifiedPresence`) answers 301 to the regional one; the Skype token gets 401 on both.
 - Teams Web takes its base from `regionGtm("unifiedPresence")` (or an AFD route) and also subscribes at
   `v1/pubsub/subscriptions/` (Source; Capture of `/ups/{region}/…`, where a global `/ups/global/` alias
@@ -437,8 +419,7 @@ that differed from the documentation. Live.
 | Search `chatMessage` (v1.0 and beta) | refused |
 
 Asking for `Chat.Read` explicitly returned `AADSTS65002`. The token held `Files.ReadWrite.All` and
-`Sites.ReadWrite.All`. This table is why chats come from CSA and Chat Service while Graph serves channels,
-people, sending and files ([requirements](requirements.md#4-backend-choice)).
+`Sites.ReadWrite.All`.
 
 ### Behavior beyond the documentation
 
@@ -542,8 +523,8 @@ Live, 2026-10-15:
   `PeopleSubtype`, `PropertyHits`, `QueryText`, `ReferenceId`, `Text` and `Id`.
 - The Chat group (Teams token only) carries `ThreadId`, `ThreadType`, `Name`, `ChatMembers`,
   `MatchingMembers`, `TotalChatMembersCount` and `LastMessageTime`, matched by member.
-- Connector use: on three one-on-ones, a query of given then family name missed the chat name (stored family
-  name first) in 3 of 3 and found the chat through the suggested person in 3 of 3.
+- On three one-on-ones, a query of given then family name missed the chat name (stored family name first)
+  in 3 of 3 and found the chat through the suggested person in 3 of 3.
 - Third-party clients use `scenario=peoplepicker.newChat` with a simpler body. It answered 400 with a
   Substrate token (2026-09-29) and with `m365.search` (2026-10-15).
 
@@ -555,14 +536,10 @@ Capture and Source, 2026-10-10 and 2026-10-11:
   through `AnswerEntityRequests` (answers in `AnswerEntitySets`). File hits carry SharePoint pointers
   (`UniqueId`, `SiteId`, `WebId`, `ListId`, `SpWebUrl`, `Path`, `LinkingUrl`); Event hits `EventId`,
   `Subject`, `Start`, `End`, `OrganizerName`, `Attendees`, `OnlineMeeting`. No later page was captured.
-- `POST /search/api/v2/query` with `EntityType=Transcript`, `ContentSources=Teams`: three 200s, one with zero
-  results and two not interpretable, so transcript search is neither shown nor ruled out.
 - The Meet app's `searchEvents` posts lower-camel `entityRequests` for `Event` on `Exchange` with ISO
   `startDateTime`/`endDateTime`, `sort: [{"Time": "Proximity"}]`, `from=0`, `size=30` to
   `https://substrate.office.com/search/api/v2/query`, and reads
   `EntitySets[0].ResultSets[0].Results[].Source`. Not tied to the global Meetings tab.
-- `POST /search/api/v1/recommendations` with a `MeetingCatchUp` request returns
-  `EntitySets[].MeetingInsights`; a `PaginationSessionId` appears, but no follow-up request using it.
 - `/search/api/v1/init` and `/search/api/v2/init` exist (Source); `/search/api/v1/events` is telemetry.
 - Teams Web's search token is configured with token URL `https://outlook.office.com/` and base
   `https://substrate.office.com`; Copilot routes use `https://substrate.office.com/M365.Access` (Source,
@@ -571,8 +548,7 @@ Capture and Source, 2026-10-10 and 2026-10-11:
 ## SharePoint and OneDrive files
 
 Shared files live in SharePoint or OneDrive; a message names them in `properties.files`
-([shared files](#shared-files)). The connector downloads them through Graph's documented `/shares` route.
-Beyond the documentation (live, 2026-10-15): a SharePoint site page (`.aspx`, such as a news post) shared in
+([shared files](#shared-files)). Live, 2026-10-15: a SharePoint site page (`.aspx`, such as a news post) shared in
 a message is refused by `/shares` with HTTP 400, so it is a link, not a file.
 
 ### Loop pages and meeting notes
@@ -587,7 +563,7 @@ Live, 2026-10-15, read-only, one meeting chat.
 - `content` is one `RichText/Html` paragraph ("Everyone—that's a wrap…"). In it, an empty
   `<a href="…/:fl:/p/<owner>/…" itemtype="http://schema.skype.com/FluidAutoEmbedLink" itemid="<guid>">`
   carries the link; the `/:fl:/` path marks a Loop file. `properties.atp` repeats the URL.
-- There is no `properties.files`, so the connector reads the message as text plus a link today.
+- There is no `properties.files`.
 
 **The page.** The link resolves through Graph `/shares/{u!…}/driveItem` with the `teams.graph` token. The
 item is a `.loop` file in the meeting organizer's OneDrive (about 95 KB, `application/octet-stream`).
@@ -615,16 +591,14 @@ access to the organizer's file, which an attendee had in this case.
 3. loads the page as a live Fluid document: `opStream/snapshots/trees/latest`, `opStream` ops,
    `opStream/joinSession` and a push socket.
 
-That is a collaborative editing session; the connector's HTML conversion needs none of it. The connector
-reads meeting notes through `?format=html` since 2026-10-15 (exports and downloads only).
+That is a collaborative editing session; Graph's `?format=html` conversion needs none of it.
 `canExport`/`canExtract` are where a page would say it forbids export; whether Graph's conversion honors
-them is untested. The connector does not check them, by design (decided 2026-10-16).
-Loop components that people paste into a chat may use the same `FluidAutoEmbedLink` embed; untested.
+them is untested.
 
 **Live, 2026-10-16** (the standup's rundown message, the connector's read, and a browser capture of a reload):
-- The browser loads the page as a live Fluid document from SharePoint: `POST …/_api/v2.1/drives/{drive}/items/{item}/opStream/snapshots/trees/latest` (`application/ms-fluid`; two responses of about 97 KB and 149 KB, both containing the page's wording). The HAR strips credential headers, so the capture does not show which credential it used. The connector has no SharePoint-audience token, so it does not use this route.
-- The connector's read, `GET /shares/{share}/driveItem/content?format=html` with the Teams client's Graph token, answered with a redirect to a regional Fluid media host, `francecentral1-mediap.svc.ms` for this tenant. The browser capture has no request to that host. The read followed the redirect once, without credentials, once the host was named in the notes media-host setting (`TEAMS_CONNECTOR_NOTES_MEDIA_HOSTS`; the default is this tenant's region); the converted page then parsed into headings and bullets, and the AI disclaimer was dropped as before.
-- The rundown's sender is the Facilitator app: one sender id across its three messages in the standup chat. `config.NOTES_SENDER_IDS` allowlists that Microsoft app's id, so a link from it is read whether or not the meeting-ended record is present. The rundown message has the embed but no meeting-ended metadata.
+- The browser loads the page as a live Fluid document from SharePoint: `POST …/_api/v2.1/drives/{drive}/items/{item}/opStream/snapshots/trees/latest` (`application/ms-fluid`; two responses of about 97 KB and 149 KB, both containing the page's wording). The capture does not show which credential it used; it needs a SharePoint-audience token.
+- The connector's read, `GET /shares/{share}/driveItem/content?format=html` with the Teams client's Graph token, answered with a redirect to a regional Fluid media host, `francecentral1-mediap.svc.ms` for this tenant. The browser capture has no request to that host. Following the redirect once, without credentials, returned the converted page.
+- The rundown's sender is the Facilitator app: one sender id across its three messages in the standup chat. The rundown message has the embed but no meeting-ended metadata.
 
 ### Sending files
 
@@ -712,11 +686,11 @@ once):
   - A 300 MiB file went up in 10 MiB `PUT`s with `Content-Range` in about 47 s. Each chunk answered 202
     with `nextExpectedRanges`; the last answered 201 with the drive item (`id`, `eTag`, `webUrl`,
     `parentReference.driveId`, `name`), as a single PUT returns.
-  - Chunks must be multiples of 320 KiB.
 
 ## Meeting recaps and transcripts
 
-Not used by the connector; the starting point for roadmap P2.2f.
+Transcripts and the AI summary are read by the connector; the recap's mentions and tasks are not
+(roadmap P2.2f).
 
 ### Transcripts
 
@@ -724,29 +698,24 @@ Not used by the connector; the starting point for roadmap P2.2f.
   (the default flagged `isDefault`). Content is `…/media/transcripts/{id}/content` (`?format=docx`, or `?is=1`
   for VTT), or `{site}/_api/v2.1/drives/{drive}/items/{item}/versions/current/media/transcripts/{id}/streamContent`
   (Source, 2026-10-14).
-- Meeting chats carry a `URIObject` referencing that last route; its two extra segments are
-  `versions/current`. Recording cards carry an `amsTranscript` item on the AMS v2 host
-  ([recording cards](#recording-cards)). No reference was followed (2026-10-10).
-- Teams Web also loaded `GET /_api_cached/v2.1/drives/{drive}/items/{item}/cdnmedia/transcripts` with keys
-  `cTag`, `P1`–`P4`, `isformatjson`, `transcriptkey`, `applyhighlights`, `applymediaedits`, `kid` (Capture,
-  three 200s). Older families: AMS `/v1/objects/{id}/views/transcript[/status]` and
+- Older families: AMS `/v1/objects/{id}/views/transcript[/status]` and
   `/MeetingIntelligence/TranscriptService/storage/{storage}/scope/{scope}/` (`isChannel=true` for channel
   meetings) (Source).
 - In the Recaps app, both known recaps showed a searchable transcript tab; for one, Download was disabled by
   the meeting's permissions (live UI, 2026-10-10). Viewing is not permission to download.
-- Graph's own transcript API needs `OnlineMeetingTranscript.Read.All`, which requires admin consent.
 
 **Live, 2026-10-16, one recording, read-only with the Teams client's Graph token** (no transcript text kept):
 - `GET /shares/{share}/driveItem` resolves the recording (`video/mp4`).
 - `GET /v1.0/drives/{drive}/items/{item}/media/transcripts` answers 200 with `value[]`, and `beta` the same.
-  This works **without** `OnlineMeetingTranscript.Read.All` and without a SharePoint token.
+  This works **without** `OnlineMeetingTranscript.Read.All` (the permission Graph's meeting transcript API
+  needs) and without a SharePoint token.
 - The SharePoint host `_api/v2.0/.../media/transcripts` answers 401 to the Graph token, so Teams' private
   SharePoint route needs its own token.
 - A transcript's fields: `id`, `displayName`, `cTag`, `size`, `languageTag`, `transcriptType`, `source`,
   `isAutoGenerated`, `isDefault`, `isVisible`.
 - `GET …/media/transcripts/{id}/content` answers 200 `text/vtt` (also 206 for a byte range). The file is WebVTT:
-  66 cues over about 5 min 42 s, with no `<v>` speaker tags and no `NOTE` blocks.
-  The VTT cues hold only an id, the timing and the text, with no speaker.
+  66 cues over about 5 min 42 s; each cue holds only an id, the timing and the text, with no `<v>` speaker
+  tags and no `NOTE` blocks.
 - `?format=json` on the same route answers 200 `application/json`, about 20 KB for that meeting:
   - `entries[]`: `id`, `speechServiceResultId`, `text`, `rawText`, `speakerId`, `speakerDisplayName`,
     `confidence`, `startOffset`, `endOffset`, `hasBeenEdited`, `roomId`, `spokenLanguageTag`. 41 entries came
@@ -763,8 +732,6 @@ Not used by the connector; the starting point for roadmap P2.2f.
   not identify one either.
 - Search v2's Message index does not find a recording card by its file name, nor by the word "Recording". A
   meeting's title matches 87 messages across many meetings, so it cannot locate one card.
-- The connector therefore verifies a video by reading the chats active from an hour before its creation,
-  quietest first, for a recording card naming its drive item, at most 25 chats per video.
 
 **Searching transcript text** (2026-10-16):
 - **Search v2:** `EntityType: Transcript` with `ContentSources: ["Teams"]` answered 200 with no result set
@@ -782,7 +749,6 @@ Not used by the connector; the starting point for roadmap P2.2f.
   - Each hit has `resource` (the recording `driveItem`) and `summary`, a snippet of about 140 characters with
     `<c0>` highlights but no speaker or offset.
   - A hit may match the file name instead of the speech.
-  - This matches Microsoft's description of Microsoft Search indexing transcribed recordings by what was said.
 
 ### Meeting summary
 
@@ -792,10 +758,9 @@ sign-in (the summary text is not kept):
 - `POST https://substrate.office.com/search/api/v1/recommendations?setflight=AiTasksV2,AiNotesV2,AllowResultsWithoutMeeting,PeopleMentionsV2`
   answers 200 with the summary. The body is `{"entityRequests": [{"context": {"entityId": …}, "queryParameters":
   [{"entityType": "MeetingCatchUp"}]}], "scenario": {"name": "MeetingCatchup"}}`. Teams Web's capture of the same
-  call has this shape. Its captured request carried no `X-AnchorMailbox`; the connector sends one, as its other
-  substrate calls do, and the answer matched the capture.
-- The summary is `EntitySets[0].ResultSets[0].Results[0].Source.MeetingSummary`, a JSON document, not plain text
-  (corrected 2026-10-16; an earlier note said plain text). Its `KeyTopics` list holds, per topic, a `Headline`, a
+  call has this shape. Its captured request carried no `X-AnchorMailbox`; a request with one answered the same.
+- The summary is `EntitySets[0].ResultSets[0].Results[0].Source.MeetingSummary`, a JSON document, not plain
+  text. Its `KeyTopics` list holds, per topic, a `Headline`, a
   `Summary` and `DetailedSummaries` (`topic` and `text` pairs), with `Citations` (utterance ids) and model fields
   alongside. About 2,300 characters for the probed meeting. The same name under `InsightProcessingStates` is a
   processing state (`ProcessedSuccessfully`), not the text.
@@ -806,11 +771,10 @@ sign-in (the summary text is not kept):
 - Teams Web's client code (a saved copy of its scripts, captured 2026-10-14) builds the same id and sends the
   same route and scenario.
 - In the same probe, the web client's other body shape (`Context.EntityId`, scenario `MeetingCatchUp.MeetingRecap`)
-  answered with an upstream failure, so the connector sends the captured shape.
+  answered with an upstream failure.
 - Limits: the route is private and undocumented, and its flights are Teams Web's and may change. A meeting
-  without a summary gets an answer without one. One meeting on one account is verified; reassess per deployment
-  (roadmap A1). The Recaps route `meetingcatchup/multilingual/aicontent` below answers related content with
-  `MeetingInsights` and is not used.
+  without a summary gets an answer without one. One meeting on one account is verified. The Recaps route
+  `meetingcatchup/multilingual/aicontent` below answers related content with `MeetingInsights`.
 
 ### Recaps and meeting resources
 
@@ -870,11 +834,7 @@ Source unless stated; module numbers change between builds.
 - Teams Web production bundles collected on 2026-09-28 and 2026-10-10, and build `26091712222` (2026-10-14).
 - Teams Web captures of 2026-10-10 (global search, Recaps) and 2026-10-14 (search, sends, edits, deletes),
   read outside the repository.
-- Live calls through the connector's sign-in from 2026-09-29 to 2026-10-15.
+- Live calls through the connector's sign-in from 2026-09-29 to 2026-10-16.
 - Third party: [Maxim-Mazurok/teams-api](https://github.com/Maxim-Mazurok/teams-api),
   [gediz/teams-web-chat-exporter](https://github.com/gediz/teams-web-chat-exporter), AADInternals,
   purple-teams and SkPy discussions.
-- Microsoft: [Teams system messages](https://learn.microsoft.com/en-us/graph/system-messages),
-  [Azure Communication Services chat messages](https://learn.microsoft.com/en-us/rest/api/communication/chat/list-chat-messages/list-chat-messages?view=rest-communication-chat-2020-09-21-preview),
-  [send chatMessage](https://learn.microsoft.com/en-us/graph/api/chatmessage-post?view=graph-rest-1.0),
-  [transcript permissions](https://learn.microsoft.com/en-us/graph/permissions-reference?view=graph-rest-1.0).
