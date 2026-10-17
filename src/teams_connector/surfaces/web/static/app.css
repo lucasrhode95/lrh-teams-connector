@@ -21,7 +21,7 @@
   --switch-off: #8999a7;
   --switch-knob: #fff;
   --shadow: 0 12px 36px #1e293b24;
-  font: 15px/1.45 system-ui, sans-serif;
+  font: 15px/1.45 "Segoe UI", system-ui, sans-serif;
   color: var(--text);
 }
 

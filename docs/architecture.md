@@ -468,3 +468,24 @@ Escape. The × beside the field clears the range.
 One conversation with no attachment saved downloads as a plain file. Anything else downloads as one
 ZIP: each conversation's plain file at the top, and its attachments in a folder named after that file.
 There is never a ZIP inside the ZIP.
+
+### 9.1 Design rules
+
+Shared by the Outlook and Teams connector UIs; each keeps its own accent color, layout and product
+vocabulary.
+
+- **Type and shape:** the font stack `"Segoe UI", system-ui, sans-serif`; corners of about 4 px on fields
+  and buttons, 8–12 px on cards, menus and dialogs, and round avatars and icon buttons.
+- **Header:** the product name, then the search or filters, with the signed-in account (avatar and name)
+  at the far right.
+- **Settings:** options that apply to the download sit behind a cog beside the filters, as on/off switches
+  (`role="switch"`) or a segmented choice; the menu stays open while they change and closes on an outside
+  click or Escape.
+- **Selection and actions:** the footer holds the selection on the left (a count or pills, with
+  **Clear all**) and the status and actions on the right, the primary action last. Buttons never wrap.
+- **Date range:** the same picker in both UIs: weeks start on Sunday, future days are disabled, two clicks
+  in either order make the range, and × clears it.
+- **States:** one spinner per loading area; empty, loading, ready and failed states are distinct, and a
+  failure offers Retry. Message content is always rendered as text, never as HTML.
+- **Theme:** light and dark follow the system setting and change live, without a reload.
+- **Lifetime:** loopback only, a per-run session token, and a stop after 30 idle minutes.
