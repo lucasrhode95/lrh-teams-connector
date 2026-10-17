@@ -47,17 +47,23 @@ MAX_SEND_FILE_BYTES = 2 * 1024**3
 
 
 def data_dir() -> Path:
-    """Per-user application data directory. ``TEAMS_CONNECTOR_HOME`` overrides it (tests, portability)."""
+    """Per-user application data directory. ``TEAMS_CONNECTOR_HOME`` overrides it (tests, portability).
+
+    On Windows it is the .lrh-teams-connector folder in the user profile, outside AppData: Windows
+    redirects files that packaged apps (such as the Claude desktop app, and the MCP servers it starts)
+    create under AppData into a private per-app copy, which a terminal and Explorer never see.
+    """
     override = os.environ.get("TEAMS_CONNECTOR_HOME")
     if override:
         return Path(override).expanduser().resolve()
-    if os.name == "nt":
-        root = os.environ.get("LOCALAPPDATA")
-        base = Path(root) if root else Path.home() / "AppData" / "Local"
-    else:
-        root = os.environ.get("XDG_DATA_HOME")
-        base = Path(root) if root else Path.home() / ".local" / "share"
-    return base / APP_NAME
+    if _windows():
+        return Path.home() / f".{APP_NAME}"
+    root = os.environ.get("XDG_DATA_HOME")
+    return (Path(root) if root else Path.home() / ".local" / "share") / APP_NAME
+
+
+def _windows() -> bool:
+    return os.name == "nt"
 
 
 def notes_media_hosts() -> frozenset[str]:
