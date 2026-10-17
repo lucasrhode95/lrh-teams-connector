@@ -55,7 +55,7 @@ and the adapters behind them. The split of backends (which private or public ser
 
 | Surface | Tool or route | Service | Ports | Adapters |
 |---|---|---|---|---|
-| MCP | `auth_status` | `TokenProvider` (shared auth package) | none | `TokenProvider` |
+| MCP | `auth_status` | `status_report` (shared auth package): offline account, profile and expiry report | none | `TokenProvider` |
 | MCP | `list_chats` | `Catalog.list` (a refresh reads the self chat's newest message too) | `ChatCatalog`, `ChannelDirectory`, `HistoryReader` | `CsaCatalog`, `GraphChannels`, `ChatService` |
 | MCP | `search_chats` | `Catalog.search` (with `refresh`, after a catalog refresh as `list_chats`) | `ChatMemberSearch` (named chats and people), and the refresh's ports | `SubstrateChatSearch`, and the refresh's adapters |
 | MCP | `get_messages` | `History.get_messages` | `HistoryReader` (chats and channels), `MeetingSummaryReader` | `ChatService`, `GraphChannels`, `SubstrateMeetingSummaries` |

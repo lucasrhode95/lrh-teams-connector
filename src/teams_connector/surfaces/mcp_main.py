@@ -14,6 +14,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
+from m365_auth import status_report
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
@@ -149,20 +150,9 @@ def build_server(context: AppContext) -> FastMCP:
     @mcp.tool(annotations=READ_ONLY)
     @_logged
     async def auth_status() -> dict[str, Any]:
-        """Offline status: account, cached client credentials and resource-token expiry by profile."""
-        status = context.tokens.status()
-        return {
-            "account": [a.username for a in status.accounts],
-            "profiles": {
-                p.profile: {
-                    "client_credential_cached": p.client_credential_cached,
-                    "access_token_expires_on": p.access_token_expires_on,
-                    "purpose": p.purpose,
-                }
-                for p in status.profiles
-            },
-            "sign_in_command": context.tokens.sign_in_command(),
-        }
+        """Offline status: the signed-in account, each profile's cached credential and token expiry, and the
+        sign-in command. Makes no network call; use it before a long task to see whether sign-in is needed."""
+        return status_report(context.tokens)
 
     @mcp.tool(annotations=READ_ONLY)
     @_logged
