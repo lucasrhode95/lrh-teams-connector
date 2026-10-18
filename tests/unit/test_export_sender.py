@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from teams_connector.domain.models import Message, RecordingRef
+from teams_connector.remote import chat_service_mapping
 from teams_connector.service.export import formatter
 
 WHEN = datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
@@ -52,3 +53,13 @@ def test_any_other_message_without_a_name_reads_unknown_sender() -> None:
     message = Message(id="4", conversation_id="c", sent_at=WHEN, text="Hello.")
 
     assert _head(message) == f"[{formatter.timestamp(WHEN)}] Unknown sender"
+
+
+def test_a_rich_text_message_that_looks_like_a_recording_reads_unknown_sender() -> None:
+    message = chat_service_mapping.to_message(
+        {"id": "5", "messagetype": "RichText", "content": "[Recording: user-authored text]"},
+        "c",
+    )
+
+    assert not message.is_recording_card
+    assert _head(message) == f"[{formatter.timestamp(message.sent_at)}] Unknown sender"

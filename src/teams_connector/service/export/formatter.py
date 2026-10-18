@@ -37,15 +37,13 @@ def txt_header(chat: Chat, *, messages: int, request: ExportRequest, exported_at
 
 
 def _sender(message: Message) -> str:
-    """The name a text export shows for a message. Teams' own events and meeting cards have no sender and read
-    Teams. Recording cards use the rendered marker while their video reference is not ready; other nameless
-    messages read Unknown sender."""
+    """The name a text export shows for a message. Teams' own events and recording cards read Teams; any other
+    message with no name reads Unknown sender."""
     if message.author:
         return message.author
-    is_recording_card = (message.text or "").lstrip().startswith(("[Recording]", "[Recording:"))
     return (
         "Teams"
-        if message.system_event or message.recording is not None or is_recording_card
+        if message.system_event or message.recording is not None or message.is_recording_card
         else "Unknown sender"
     )
 

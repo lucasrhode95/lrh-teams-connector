@@ -21,6 +21,7 @@ _OBJECT_ID = re.compile(r"(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 _ORDINARY_TYPES = ("richtext", "text")  # message types that carry user content (prefixes)
 _DELETE_TYPES = {"messagedelete"}
 _NOTICE_TYPES = {"richtext/media_calltranscript"}  # rich-text types that are system notices, not user content
+_RECORDING_CARD_TYPE = "richtext/media_callrecording"
 
 
 def mapping(value: Any) -> dict[str, Any]:
@@ -152,6 +153,7 @@ def to_message(raw: dict[str, Any], conversation_id: str) -> Message:
     props = properties(raw)
     content = _first_string(raw, "content", "body", "text") or ""
     lowered = kind.casefold()
+    is_recording_card = lowered == _RECORDING_CARD_TYPE
     deleted_at = parse_time(props.get("deletetime") or raw.get("deletetime"))
     is_deleted = lowered in _DELETE_TYPES or deleted_at is not None
     system_event = None
@@ -208,6 +210,7 @@ def to_message(raw: dict[str, Any], conversation_id: str) -> Message:
         attachments=[*inline, *files, *notes, *transcripts],
         reply_to_id=str(root) if root and str(root) != str(message_id) else None,
         recording=recording,
+        is_recording_card=is_recording_card,
         text_without_notes=text_without_notes,
     )
 

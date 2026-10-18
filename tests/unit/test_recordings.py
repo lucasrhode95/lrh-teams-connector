@@ -34,4 +34,6 @@ def test_a_recording_without_a_link_yet_shows_its_title_only() -> None:
     message = chat_service_mapping.to_message(_recording("Initial", link=False), "19:meeting@thread.v2")
     assert message.text == "[Recording: Weekly sync & review]"
     assert "asyncgw" not in message.text
+    assert message.is_recording_card
+    assert "is_recording_card" not in message.model_dump()
     assert formatter.txt_message(message).splitlines()[0].endswith(" Teams")
