@@ -460,9 +460,8 @@ reloads the list and the open preview.
 
 The signed-in avatar and visible one-to-one rows show Teams presence. A one-to-one row also shows the
 person's device and, as in Teams, when they were last seen if they are away, out of office or offline;
-each part appears only when Teams reports it. Hovering or focusing a row shows its kind and last
-activity. Presence that cannot be read, or a person Teams does not know, shows as unknown, never as
-offline.
+each part appears only when Teams reports it. Presence that cannot be read, or a person Teams does not
+know, shows as unknown, never as offline.
 
 The date picker behaves like the Outlook connector's: weeks start on Sunday, future days are
 disabled, two clicks in either order make the range, and the calendar stays open until Done or

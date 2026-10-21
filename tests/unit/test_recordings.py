@@ -6,6 +6,7 @@ Synthetic fixtures only: the hosts, ids and titles are invented.
 from __future__ import annotations
 
 from teams_connector.remote import chat_service_mapping
+from teams_connector.service.export import formatter
 
 AMS = "https://eu-prod.asyncgw.teams.microsoft.com/v1/objects/0-weu-d1-0123456789abcdef0123456789abcdef"
 PLAY = "https://contoso-my.sharepoint.com/:v:/p/mia/recording-1"
@@ -33,3 +34,6 @@ def test_a_recording_without_a_link_yet_shows_its_title_only() -> None:
     message = chat_service_mapping.to_message(_recording("Initial", link=False), "19:meeting@thread.v2")
     assert message.text == "[Recording: Weekly sync & review]"
     assert "asyncgw" not in message.text
+    assert message.is_recording_card
+    assert "is_recording_card" not in message.model_dump()
+    assert formatter.txt_message(message).splitlines()[0].endswith(" Teams")
