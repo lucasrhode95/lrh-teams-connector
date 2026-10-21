@@ -23,7 +23,16 @@ None open.
 
 Working behavior that could be cheaper, simpler or better informed.
 
-None open.
+#### H1 — Revisit HTML-to-text conversion
+
+Review the custom message and Loop HTML converters, especially table structure. A synthetic ordinary
+message table with cells `Name`, `Role` and `Sam`, `Host` currently becomes `NameRole\n\nSamHost`:
+row boundaries survive, but cells run together. Loop notes use a separate row/task converter.
+
+Preserve cell boundaries, links, lists, code, mentions and image references in the text agents receive.
+Compare library conversion and minimal HTML for complex tables with the existing parsers; consolidate
+where it reduces code without losing Teams-specific source metadata. Cover merged/nested tables and
+malformed HTML with synthetic examples, and decide whether readers need an HTML option.
 
 ### Enhancements
 
