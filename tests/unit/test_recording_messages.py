@@ -57,6 +57,33 @@ def test_a_recording_without_a_transcript_has_no_transcript_marker_or_attachment
     assert message.recording is not None and message.recording.item_id == "01SYNTHITEM"
 
 
+def test_recording_markup_in_an_ordinary_message_does_not_create_recording_metadata() -> None:
+    raw = _record(VIDEO, TRANSCRIPT)
+    raw["messagetype"] = "RichText"
+
+    message = mapping.to_message(raw, CONVERSATION)
+
+    assert message.recording is None
+    assert all(item.source != "transcript" for item in message.attachments)
+    assert "[Transcript:" not in message.text
+
+
+def test_generated_message_id_does_not_depend_on_rendered_body_text() -> None:
+    raw = {
+        "sequenceId": 17,
+        "from": "8:orgid:00000000-0000-4000-8000-000000000001",
+        "imdisplayname": "Synthetic Organizer",
+        "messagetype": "RichText",
+        "content": "First body",
+    }
+    first = mapping.to_message(raw, CONVERSATION)
+    raw["content"] = "Different body"
+
+    second = mapping.to_message(raw, CONVERSATION)
+
+    assert first.id == second.id
+
+
 def test_serialized_messages_do_not_expose_the_recording_reference() -> None:
     message = mapping.to_message(_record(VIDEO, TRANSCRIPT), CONVERSATION)
 

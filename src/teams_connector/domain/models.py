@@ -158,6 +158,9 @@ class Message(Compact):
     deleted_at: datetime | None = None
     attachments: list[Attachment] = Field(default_factory=list)
     recording: RecordingRef | None = Field(default=None, exclude=True)  # a recording card: its meeting
+    is_recording_card: bool = Field(
+        default=False, exclude=True
+    )  # source type, including before its video is ready
     # the text with the meeting notes withheld: the message's own text and markers; set only for notes
     text_without_notes: str | None = Field(default=None, exclude=True)
 

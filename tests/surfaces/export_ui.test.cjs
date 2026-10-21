@@ -127,9 +127,9 @@ function matchesSimple(node, selector) {
 // ------------------------------------------------------------------ page harness
 
 const CHATS = [
-  { id: '19:alpha@unq.gbl.spaces', name: 'Ava Example', kind: 'one_on_one', last_message_at: '2026-10-16T10:00:00Z' },
-  { id: '19:crew@thread.v2', name: 'Release crew', kind: 'group', last_message_at: '2026-10-16T09:00:00Z' },
-  { id: '19:meeting_review@thread.v2', name: 'Go-live review', kind: 'meeting', last_message_at: '2026-10-15T09:00:00Z' },
+  { id: '19:alpha@unq.gbl.spaces', name: 'Ava Example', kind: 'one_on_one' },
+  { id: '19:crew@thread.v2', name: 'Release crew', kind: 'group' },
+  { id: '19:meeting_review@thread.v2', name: 'Go-live review', kind: 'meeting' },
 ];
 
 async function loadPage({ preview = () => ({ status: 'complete', result: { text: 'Header\n\n[2026-10-16] Ava\nHello', messages: 1, capped: false } }) } = {}) {
@@ -198,6 +198,13 @@ test('a row click previews without selecting, and the add button selects without
   assert.equal(ui.run('JSON.stringify([...selected])'), JSON.stringify([CHATS[1].id]));
   assert.equal(ui.run('previewConversationId'), CHATS[0].id, 'the add button leaves the preview alone');
   assert.equal(ui.row('Release crew').querySelector('.select-toggle').getAttribute('aria-pressed'), 'true');
+});
+
+test('conversation rows have no chat type or last activity tooltip', async () => {
+  const ui = await loadPage();
+  const row = ui.row('Release crew');
+  assert.equal(row.querySelector('[role="tooltip"]'), null);
+  assert.equal(row.getAttribute('aria-describedby'), null);
 });
 
 test('ctrl+click previews a row and toggles its selection', async () => {

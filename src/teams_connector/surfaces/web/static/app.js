@@ -407,20 +407,6 @@ function loadOwnPresence(accountId) {
     });
 }
 
-function positionChatTooltip(row, tooltip) {
-  window.requestAnimationFrame(() => {
-    if (!row.matches(":hover, :focus-visible, :has(:focus-visible)")) return;
-    const rect = row.getBoundingClientRect();
-    const width = Math.min(340, window.innerWidth - 16);
-    tooltip.style.width = width + "px";
-    const height = tooltip.offsetHeight;
-    const top = rect.top > height + 12 ? rect.top - height - 8 : Math.min(window.innerHeight - height - 8, rect.bottom + 8);
-    const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-    tooltip.style.left = left + "px";
-    tooltip.style.top = Math.max(8, top) + "px";
-  });
-}
-
 const avatarObserver = new IntersectionObserver((entries) => {
   for (const entry of entries) {
     if (!entry.isIntersecting) continue;
@@ -448,25 +434,11 @@ const presenceObserver = new IntersectionObserver((entries) => {
   }
 }, { root: list, rootMargin: "0px" });
 
-function repositionChatTooltip() {
-  const row = list.querySelector(".chat-row:hover, .chat-row:focus-visible, .chat-row:has(:focus-visible)");
-  const tooltip = row?.querySelector(".chat-tooltip");
-  if (row && tooltip) positionChatTooltip(row, tooltip);
-}
-
-list.addEventListener("scroll", repositionChatTooltip);
-window.addEventListener("resize", repositionChatTooltip);
-
 // ------------------------------------------------------------------ list
 
 function setStatus(message, isError) {
   statusText.textContent = message;
   statusText.classList.toggle("error", Boolean(isError));
-}
-
-function chatTypeLabel(chat) {
-  const labels = { self: "Notes to self", meeting: "Meeting", group: "Group", one_on_one: "One-to-one", channel: "Channel" };
-  return labels[chatKind(chat)] || "Conversation";
 }
 
 function updateControls() {
@@ -569,23 +541,13 @@ function renderChats() {
     list.appendChild(empty);
     return;
   }
-  for (const [index, chat] of visible.entries()) {
+  for (const chat of visible) {
     const row = document.createElement("div");
     row.className = "chat-row";
     row.tabIndex = 0;
     row.setAttribute("role", "group");
     row.dataset.conversationId = chat.id;
     row.dataset.name = chat.name;
-    const tooltipText = chatTypeLabel(chat) + " · " + (chat.last_message_at
-      ? new Date(chat.last_message_at).toLocaleString() : "No recent activity shown");
-    const tooltip = document.createElement("span");
-    tooltip.className = "chat-tooltip";
-    tooltip.id = "chat-tooltip-" + index;
-    tooltip.setAttribute("role", "tooltip");
-    tooltip.textContent = tooltipText;
-    row.setAttribute("aria-describedby", tooltip.id);
-    row.addEventListener("mouseenter", () => positionChatTooltip(row, tooltip));
-    row.addEventListener("focusin", () => positionChatTooltip(row, tooltip));
     const toggle = document.createElement("button");
     toggle.type = "button";
     toggle.className = "select-toggle";
@@ -623,7 +585,7 @@ function renderChats() {
     metadata.hidden = true;
     text.appendChild(name);
     if (personChat) text.appendChild(metadata);
-    row.append(avatarWrap, text, toggle, tooltip);
+    row.append(avatarWrap, text, toggle);
     row.addEventListener("click", (event) => {
       previewChat(chat.id);
       if (event.ctrlKey || event.metaKey) toggleChatSelection(chat.id); // Ctrl/Cmd+click also selects
