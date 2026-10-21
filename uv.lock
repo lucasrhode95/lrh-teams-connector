@@ -439,7 +439,7 @@ wheels = [
 [[package]]
 name = "lrh-m365-auth"
 version = "0.1.0"
-source = { git = "https://github.com/lucasrhode95/lrh-m365-auth.git?branch=main#088cd97173757d38a3249ea2ae9caa698c05c7b4" }
+source = { git = "https://github.com/lucasrhode95/lrh-m365-auth.git?branch=main#655b02cc695191b9d9c5316db1925f6d1ab6ca0a" }
 dependencies = [
     { name = "msal" },
     { name = "msal-extensions", extra = ["portalocker"] },
