@@ -36,12 +36,12 @@ malformed HTML with synthetic examples, and decide whether readers need an HTML 
 
 ### Enhancements
 
-#### P1.5 — Send files to channels and meeting chats
+#### P1.5 — Send files to meeting chats
 
 Files and inline images work in one-on-one and group chats and the self chat, including files of 250 MiB
 or more through upload sessions ([architecture](architecture.md#85-send-a-message),
-[research](api-research.md#sending-files)). Channels and meeting chats refuse them today: channels store
-files in the team's SharePoint folder instead, and meeting chats are untried.
+[research](api-research.md#sending-files)). Extend this support to meeting chats, which currently refuse
+these sends and have not yet been tried live.
 
 #### P2.2f — Meeting recaps
 

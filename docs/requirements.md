@@ -206,7 +206,8 @@ unverified; message search alone never counts as broad Microsoft 365 search. Tra
   returned. Verified live for the self chat, one-on-one and group chats
   (2026-10-14); channels and meeting chats are roadmap S3.
 - **Images and files** (decided and implemented 2026-10-15) go to one-on-one and group chats and the
-  self chat; channels and meeting chats are roadmap P1.5. Images and files may share a message.
+  self chat; meeting chats are roadmap P1.5. Sending images and files to channels is unsupported.
+  Images and files may share a message.
   - Images are PNG or JPEG only, sent inline in the same request; `<img src="file name">` in `html`
     places one, and the others follow the text. A file that is not PNG or JPEG, or images that would
     push the request past about 4 MiB (about 3 MB of images), are refused before anything is sent, with
