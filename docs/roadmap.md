@@ -51,10 +51,7 @@ its mentions and tasks, is not built.
 
 ## Decisions
 
-### P2.2h — Transcript download default
-
-Exports download transcripts by default (`include_transcripts`). Whether to keep that is left to the user,
-once agents have used the AI summaries to judge when a full transcript is needed.
+None open.
 
 ## Live verification
 

@@ -368,6 +368,11 @@ keeps the choice in its cursor. `search_transcripts` lists each matched meeting'
 summary that cannot be read leaves the matches and the completeness unchanged. A meeting without a summary keeps its
 marker alone; a failed read is marked as unavailable, and the call goes on.
 
+The MCP server instructions and the export tool's `include_transcripts` description guide agents to read
+summaries before opening full transcript files to save context tokens. Export defaults remain enabled
+for both transcripts and summaries; agents can explicitly omit transcripts while retaining summaries,
+then retrieve a full transcript through `download_attachment` when needed.
+
 ### 8.5 Send a message
 
 `send_message` is one of the two Teams write tools, with `delete_messages`. The user must explicitly

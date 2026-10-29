@@ -193,7 +193,10 @@ unverified; message search alone never counts as broad Microsoft 365 search. Tra
 - **Meeting AI summaries** (decided 2026-10-16, implemented): exports, `get_messages` and `search_transcripts` put
   Teams' AI summary of each transcribed meeting in the text or result they return (`include_summaries`, on by
   default), labeled as AI-generated and possibly inaccurate. Each reads it only for the meetings it returns, and
-  nothing is cached. The same flag governs the Facilitator's Loop notes, which a read without the flag leaves out. Whether transcripts download by default is left open until the summaries have been used.
+  nothing is cached. The same flag governs the Facilitator's Loop notes, which a read without the flag leaves out.
+  Transcript downloads remain enabled by default (decided 2026-10-29). Agent instructions explain how to
+  save context tokens by reading summaries first, retrieving full transcripts when detail or verification
+  is needed, and exporting with `include_transcripts=false` and `include_summaries=true` when summaries suffice.
 - **Meeting and membership events** read as one short line each, never as their raw markup. The
   line keeps what Teams shows (a meeting's subject, duration and participants, members who joined or
   left, a new topic) and drops identifiers and flags.
