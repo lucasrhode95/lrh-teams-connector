@@ -193,7 +193,10 @@ unverified; message search alone never counts as broad Microsoft 365 search. Tra
 - **Meeting AI summaries** (decided 2026-10-16, implemented): exports, `get_messages` and `search_transcripts` put
   Teams' AI summary of each transcribed meeting in the text or result they return (`include_summaries`, on by
   default), labeled as AI-generated and possibly inaccurate. Each reads it only for the meetings it returns, and
-  nothing is cached. The same flag governs the Facilitator's Loop notes, which a read without the flag leaves out. Whether transcripts download by default is left open until the summaries have been used.
+  nothing is cached. The same flag governs the Facilitator's Loop notes, which a read without the flag leaves out.
+  Transcript downloads remain enabled by default (decided 2026-10-29). Agent instructions explain how to
+  save context tokens by reading summaries first, retrieving full transcripts when detail or verification
+  is needed, and exporting with `include_transcripts=false` and `include_summaries=true` when summaries suffice.
 - **Meeting and membership events** read as one short line each, never as their raw markup. The
   line keeps what Teams shows (a meeting's subject, duration and participants, members who joined or
   left, a new topic) and drops identifiers and flags.
@@ -206,7 +209,8 @@ unverified; message search alone never counts as broad Microsoft 365 search. Tra
   returned. Verified live for the self chat, one-on-one and group chats
   (2026-10-14); channels and meeting chats are roadmap S3.
 - **Images and files** (decided and implemented 2026-10-15) go to one-on-one and group chats and the
-  self chat; channels and meeting chats are roadmap P1.5. Images and files may share a message.
+  self chat; meeting chats are roadmap P1.5. Sending images and files to channels is unsupported.
+  Images and files may share a message.
   - Images are PNG or JPEG only, sent inline in the same request; `<img src="file name">` in `html`
     places one, and the others follow the text. A file that is not PNG or JPEG, or images that would
     push the request past about 4 MiB (about 3 MB of images), are refused before anything is sent, with
