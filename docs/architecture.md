@@ -31,7 +31,7 @@ overview; this document records the rules and contracts they cannot show.
 | `remote/*_mapping.py` and `remote/teams_html.py` | Convert wire responses into domain records and readable message text. Wire-format field names remain inside this layer. |
 | `store/db.py` | Account-bound SQLite store for the chat catalog and account metadata only. Holds no message content and no tokens. |
 | `service/export/` | Text/JSONL formatting and safe output packaging. Exports read Teams page by page and spool to a temporary file, use exclusive temporary paths, and publish only after completion. |
-| `service/passive_html.py` | The passive rules every connector applies to HTML it sends (the same text as the Outlook connector): refuses declarations, active content, elements that change how the rest is read, and unfinished markup. |
+| `service/passive_html.py` | The passive rules every connector applies to HTML it sends (the same text as the Outlook connector): refuses declarations, active content, elements that change how the rest is read, `base` (it changes where every relative link points), and unfinished markup. |
 | `service/hosted_images.py` | The Teams rule on top of those: an `<img>` is sent only when it names an image attached to the message, and it is rebuilt to point at the hosted copy; any other `<img>` and embedded media are refused. |
 | `service/localfiles.py` | Per-user output directories, retention cleanup (one process at a time, by a lock file beside each folder), and collision-safe file creation. |
 | `src/teams_connector/config.py` | Product CLI/data names and fixed public service URLs. Tenant authority, client IDs, token profiles, scopes, and shared-cache configuration live in `lrh-m365-auth`. |
@@ -381,7 +381,7 @@ authorize the recipient and the exact content, files and images. Pass the curren
 channel's name from its team), then checks the name before sending. Pass exactly one of `text` (plain
 text; HTML characters are escaped) or `html` (HTML sent as written, after a passive check that refuses
 scripts, frames, form controls, event-handler attributes, `javascript:` and `vbscript:` URLs, embedded
-media, declarations and CDATA sections, and unfinished markup); with files or images both may be omitted.
+media, `base`, declarations and CDATA sections, and unfinished markup); with files or images both may be omitted.
 The message is never resent after an uncertain outcome: a network failure after the request may leave the
 result uncertain, so inspect the conversation before deciding whether another send is needed. A search result or request to
 analyze a conversation does not authorize a send.
