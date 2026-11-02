@@ -30,6 +30,7 @@ ACTIVE = [
     ('<p onclick="alert(1)">x</p>', "event handlers"),
     ("<title>x</title>", "changes how"),
     ("<noscript><p>x</p></noscript>", "changes how"),
+    ('<base href="https://other.example.test/"><a href="invoice">x</a>', "where the message's links point"),
     ("<p>unfinished <b", "ends inside"),
     ('<p><a href="https://example.com/x', "ends inside"),
     ("<p>unfinished <!-- comment", "ends inside"),
