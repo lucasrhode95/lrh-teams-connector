@@ -8,7 +8,7 @@ Work is split by what it needs: **implementation** is code still to write; **dec
 user; **live verification** checks behavior that is already built against a real tenant, and becomes
 implementation only if a check fails.
 
-Snapshot **2026-10-17**.
+Snapshot **2026-11-03**.
 
 ## Implementation
 
@@ -42,6 +42,23 @@ Files and inline images work in one-on-one and group chats and the self chat, in
 or more through upload sessions ([architecture](architecture.md#85-send-a-message),
 [research](api-research.md#sending-files)). Extend this support to meeting chats, which currently refuse
 these sends and have not yet been tried live.
+
+#### P1.8 — Edit the user's own messages
+
+Requested 2026-11-03, to revise a draft posted in the self chat instead of deleting it and sending it again.
+Not implemented: edits are a non-goal today ([requirements §3](requirements.md#3-non-goals)), and
+`send_message` and `delete_messages` are the only write tools. Implementing this makes editing a third
+write path. That needs the requirements and the agent instructions changed, with the same safeguards as
+sending: explicit authorization for the message and for its new content, the user's own messages only
+(`is_self`), one attempt and no automatic retry.
+
+- **Route:** Chat Service `PUT …/messages/{messageId}`, sending the whole message with new `content` and
+  `properties.edittime`, was captured but never called ([research](api-research.md#writes)). Graph edits
+  were refused with the current grants ([research](api-research.md#grants-2026-10-01)). Try the Chat
+  Service route on one disposable self-chat message first.
+- **Scope:** decide whether an edit may change files and inline images, or only the text.
+- **Result:** confirm with `get_messages`, which shows the newest text and `edited_at`. Teams keeps no
+  readable copy of the replaced text ([research](api-research.md#edits-and-deletes)).
 
 #### P2.2f — Meeting recaps
 
