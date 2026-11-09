@@ -16,7 +16,9 @@ from teams_connector.domain.errors import InvalidRequest
 from teams_connector.service.passive_html import passive_start_tags
 
 # A browser reads <image> as <img>, and inline SVG can hold its own <image>.
-UNSUPPORTED_TAGS = frozenset({"img", "image", "svg", "picture", "source", "video", "audio"})
+UNSUPPORTED_TAGS = frozenset(
+    {"img", "image", "svg", "picture", "source", "video", "audio", "attachment", "uriobject", "swift"}
+)
 # An <img> naming an image sent with the message keeps only these attributes; srcset and the like could
 # still load a remote picture.
 IMAGE_ATTRIBUTES = frozenset({"src", "alt", "title", "width", "height", "style"})

@@ -25,6 +25,8 @@ MEETING_SUMMARY_URL = (
     "?setflight=AiTasksV2,AiNotesV2,AllowResultsWithoutMeeting,PeopleMentionsV2"
 )
 AUTHZ_URL = "https://authsvc.teams.microsoft.com/v1.0/authz"
+# AMS uses this protocol-version header when creating an inline image (live, 2026-11-09).
+AMS_CLIENT_VERSION = "0/0.0.0.0"
 CSA_UPDATES_URL = "https://teams.microsoft.com/api/csa/api/v1/teams/users/me/updates"
 
 # Loop meeting notes: only these senders' messages are read for notes. Facilitator is the meeting's bot app.

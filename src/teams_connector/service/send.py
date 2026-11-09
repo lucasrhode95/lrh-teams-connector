@@ -82,8 +82,8 @@ class Sender:
         inline ``images`` (absolute paths). Without files or images exactly one of text or html is
         required; with them, at most one. Every argument is validated here, image sizes included; nothing
         is uploaded or sent until all of it is valid."""
-        local_files = _check_files(files or [])
-        inline = _check_images(images or [])
+        local_files = check_files(files or [])
+        inline = check_images(images or [])
         if (text is not None and html is not None) or (
             text is None and html is None and not local_files and not inline
         ):
@@ -93,7 +93,7 @@ class Sender:
             )
         named: set[str] = set()
         if text is not None:
-            _check_text(text)
+            check_text(text)
             body = _paragraphs(text)
         elif html is not None:
             body, named = _check_html(html, inline)
@@ -208,7 +208,7 @@ class Sender:
         return deleted, kept
 
 
-def _check_files(files: Sequence[str]) -> list[Path]:
+def check_files(files: Sequence[str]) -> list[Path]:
     """Local files to send: absolute paths of readable regular files within config.MAX_SEND_FILE_BYTES."""
     if len(files) > MAX_FILES:
         raise InvalidRequest(f"Send at most {MAX_FILES} files with one message.")
@@ -230,7 +230,7 @@ def _check_files(files: Sequence[str]) -> list[Path]:
     return paths
 
 
-def _check_images(images: Sequence[str]) -> list[tuple[str, HostedImage]]:
+def check_images(images: Sequence[str]) -> list[tuple[str, HostedImage]]:
     """Inline images: absolute paths of PNG or JPEG files (by their content), with distinct file names,
     since the HTML names them by file name. Returns (file name, image) in the order given."""
     if len(images) > MAX_IMAGES:
@@ -338,7 +338,7 @@ def normalized_name(value: str) -> str:
     return " ".join(value.split()).casefold()
 
 
-def _check_text(text: str) -> None:
+def check_text(text: str) -> None:
     if not text or not text.strip():
         raise InvalidRequest("text must be a non-empty string.")
     if len(text) > MAX_TEXT_CHARS:

@@ -112,10 +112,10 @@
   <text class="detail" x="116" y="847">MCP only · no cache</text>
 
   <rect x="366" y="720" width="515" height="160" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
-  <text class="section-title" x="382" y="756">helpers</text>
+  <text class="section-title" x="382" y="756">helpers · message edits</text>
   <text class="detail" x="382" y="791"><tspan class="code">cursors.py</tspan>: self-contained continuation</text>
   <text class="detail" x="382" y="819"><tspan class="code">localfiles.py</tspan>: output folders, cleanup</text>
-  <text class="detail" x="382" y="847"><tspan class="code">logs.py</tspan>: daily file, no message content</text>
+  <text class="detail" x="382" y="847"><tspan class="code">edit.py</tspan>: body, files and inline images</text>
 
   <rect x="899" y="720" width="781" height="160" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
   <text class="section-title" x="915" y="756">coverage, not completeness</text>
@@ -184,8 +184,8 @@
   <text class="detail" x="1437" y="1262" style="font-size:18px">wire JSON → models</text>
 
   <rect x="660" y="1286" width="245" height="64" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
-  <text class="section-title code" x="672" y="1310" style="font-size:20px">ports.py</text>
-  <text class="detail" x="672" y="1336" style="font-size:18px">adapter interfaces</text>
+  <text class="section-title code" x="672" y="1310" style="font-size:20px">chat_edit.py</text>
+  <text class="detail" x="672" y="1336" style="font-size:18px">edits · AMS images</text>
 
   <rect x="915" y="1286" width="245" height="64" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
   <text class="section-title code" x="927" y="1310" style="font-size:20px">graph_org.py</text>

@@ -187,6 +187,11 @@ class FakeTeams:
     loop_pages: dict[str, str | int] = field(default_factory=dict)
     loop_reads: list[str] = field(default_factory=list)
     fail_deletes: dict[str, str] = field(default_factory=dict)  # message id -> "network", "403" or "401"
+    edits: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    fail_edits: str | None = None
+    fail_edit_readback: bool = False
+    ams_created: list[str] = field(default_factory=list)
+    ams_deleted: list[str] = field(default_factory=list)
     partial_invites: bool = False  # invites answer 207 with an error for the last recipient
     # meeting transcripts by recording drive item id: {"id", "document" (the JSON), "denied" (Graph refuses)}
     transcripts: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -210,7 +215,12 @@ class FakeTeams:
                 200,
                 json={
                     "tokens": {"skypeToken": "skype-token", "expiresIn": 86400},
-                    "regionGtms": {"chatService": CHAT_SERVICE, "presenceUPS": PRESENCE},
+                    "regionGtms": {
+                        "chatService": CHAT_SERVICE,
+                        "presenceUPS": PRESENCE,
+                        "ams": "https://eu-api.asm.skype.com",
+                        "amsV2": "https://eu-prod.asyncgw.teams.microsoft.com",
+                    },
                 },  # fmt: skip
             )
         if url.hostname == "teams.microsoft.com" and path.endswith("/users/me/updates"):
@@ -311,6 +321,20 @@ class FakeTeams:
                 return httpx.Response(403, json={"errorCode": "Forbidden"})
             if request.method == "DELETE":
                 return self._delete(request, parts[4], rows[0], query)
+            if request.method == "PUT":
+                payload = json.loads(request.content)
+                self.edits.append((parts[4], payload))
+                if self.fail_edits == "connect":
+                    raise httpx.ConnectError("synthetic", request=request)
+                if self.fail_edits and self.fail_edits != "network":
+                    return httpx.Response(int(self.fail_edits), json={"errorCode": "SyntheticRefusal"})
+                rows[0].clear()
+                rows[0].update(payload)
+                if self.fail_edits == "network":
+                    raise httpx.ReadError("synthetic", request=request)
+                return httpx.Response(200)
+            if self.fail_edit_readback and any(p[1].get("id") == parts[6] for p in self.edits):
+                return httpx.Response(403, json={"errorCode": "Forbidden"})
             return httpx.Response(200, json=rows[0])
         if parts[:2] == ["v1", "threads"] and parts[-1] == "members":
             chat = self.chats.get(parts[2])
@@ -405,6 +429,19 @@ class FakeTeams:
         if not request.headers.get("authorization", "").startswith("skype_token "):
             return httpx.Response(401, json={"error": "unauthorized"})
         parts = path.strip("/").split("/")
+        if request.method == "POST" and parts == ["v1", "objects"]:
+            if request.headers.get("X-Client-Version") != "0/0.0.0.0":
+                return httpx.Response(400, json={"error": "missing client version"})
+            identifier = f"0-test-d1-{len(self.ams_created) + 1:032x}"
+            self.ams_created.append(identifier)
+            return httpx.Response(201, json={"id": identifier})
+        if request.method == "PUT" and len(parts) == 5 and parts[3:] == ["content", "imgpsh"]:
+            self.images[parts[2]] = request.content
+            return httpx.Response(201)
+        if request.method == "DELETE" and len(parts) == 3:
+            self.ams_deleted.append(parts[2])
+            self.images.pop(parts[2], None)
+            return httpx.Response(204)
         if len(parts) == 5 and parts[:2] == ["v1", "objects"] and parts[3:] == ["views", "imgpsh_fullsize"]:
             data = self.images.get(parts[2])
             if data is not None:

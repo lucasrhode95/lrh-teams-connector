@@ -186,10 +186,11 @@
 <text class="muted" x="118" y="1878">uses <tspan class="code">History</tspan> · <tspan class="code">FileReader</tspan> · <tspan class="code">People</tspan></text>
 
 <rect x="673" y="1634" width="1127" height="260" fill="#eff8f6" stroke="#c7d5e2" stroke-width="1.5"/>
-<text class="group-title" x="691" y="1672">Helpers</text>
+<text class="group-title" x="691" y="1672">Helpers · edits</text>
 <g><title>Self-contained continuation cursors: everything needed to continue travels in the cursor.</title><text class="detail" x="691" y="1702">• <tspan class="code">cursors.py</tspan></text></g>
 <g><title>Output folders under the data directory; files older than a week are removed; exclusive file creation.</title><text class="detail" x="691" y="1729">• <tspan class="code">localfiles.py</tspan></text></g>
-<g><title>A per-process, daily-rotated log file; timing, status and counts only, never message content.</title><text class="detail" x="691" y="1756">• <tspan class="code">logs.py</tspan></text></g>
+<g><title>service/edit.py: Editor validates ownership and the live chat name, adds new files/images, removes named references, retains other attachments and rolls back new uploads only after a definite failure. Uses MessageEditor and FileSharer.</title><text class="detail" x="691" y="1756">• <tspan class="code">Editor</tspan> · <tspan class="code">edit.py</tspan></text></g>
+<g><title>remote/chat_edit.py: ChatEditor implements MessageEditor. Chat Service PUT is attempted once and read back; AMS uploads use regional AuthZ routes. Snapshot checks stop intervening edits.</title><text class="detail" x="691" y="1783">• <tspan class="code">ChatEditor</tspan> · <tspan class="code">MessageEditor</tspan></text></g>
 <text class="group-title" x="1100" y="1672">Domain</text>
 <g><title>Pydantic models: the single schema for the service, the MCP tools and the web API.</title><text class="detail" x="1100" y="1702">• <tspan class="code">domain/models.py</tspan></text></g>
 <g><title>ConnectorError and its kinds; surfaces map them to their protocol.</title><text class="detail" x="1100" y="1729">• <tspan class="code">domain/errors.py</tspan></text></g>
