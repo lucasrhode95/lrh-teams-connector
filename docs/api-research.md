@@ -465,6 +465,22 @@ Public contracts: [manager](https://learn.microsoft.com/en-us/graph/api/user-lis
 [direct reports](https://learn.microsoft.com/en-us/graph/api/user-list-directreports?view=graph-rest-1.0),
 [user search](https://learn.microsoft.com/en-us/graph/api/user-list?view=graph-rest-1.0).
 
+**Live through the installed MCP server, 2026-11-09:** all four organization tools passed with the existing
+encrypted sign-in. Name, email, UPN and object-id searches resolved the same user. A bounded name-prefix
+search returned one candidate with `complete=false`; an unknown email returned an empty complete result,
+and a malformed hierarchy id was rejected. The six-manager chain matched Teams' expanded Organization
+view, in reverse display order (MCP is nearest first). The subject had no direct reports. Its manager's
+seven direct users included the subject; `list_peers` returned exactly the other six with `derived=true`.
+The root returned an empty manager chain and an explained empty peer list. Teams showed the manager's
+seven-report count but omitted a peer list on the subject's card; its "works with" section remained separate.
+
+**Live pagination probe, 2026-11-09:** the production `GraphOrgDirectory` adapter, using the same
+account-bound `teams.graph` credential, followed real continuation links after a probe-only `$top=2` on
+the initial direct-reports request. Four pages (2, 2, 2, 1 rows) returned all seven users with `complete=true`,
+matching the normal service result. The probe emitted counts and comparisons only. No fresh account,
+second tenant, denied grant or contact-bearing report page was exercised; those cases retain synthetic
+coverage, and fresh-account/tenant checks remain under roadmap A1. No external writes were made.
+
 ## Search v2 and Substrate suggestions
 
 ### Message search

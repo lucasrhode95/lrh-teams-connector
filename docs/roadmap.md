@@ -124,12 +124,6 @@ Still to check:
 The 2026-10-12 shared-auth check reused existing grants
 ([research](api-research.md#credentials-by-service)). A new account's consent for the Teams profiles and
 `m365.search` has not been tried, and the transcript and meeting-summary routes are verified on one
-account only. Reassess them per deployment.
-
-### Organization tools through MCP
-
-The routes for manager chains and reports were checked on 2026-11-09 before implementation
-([research](api-research.md#organization-lookups)). The four built tools have synthetic transport and MCP
-coverage. With authorization, check person lookup by name, email, UPN and id, a root with no manager,
-paged reports and derived peers through the installed MCP server. Compare relationships, allowing for
-Teams' card hiding peers. Check manager access in a fresh tenant under A1; a denial must remain an error.
+account only. Organization tools passed live on the existing account on 2026-11-09
+([research](api-research.md#organization-lookups)); recheck manager access with fresh-account/tenant grants,
+keeping denials distinct from empty hierarchies. Reassess these capabilities per deployment.
