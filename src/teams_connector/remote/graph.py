@@ -71,9 +71,17 @@ class Graph:
             return path_or_url
         return GRAPH_ROOT + path_or_url
 
-    async def get(self, path: str, params: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    async def get(
+        self,
+        path: str,
+        params: Mapping[str, Any] | None = None,
+        *,
+        headers: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
         url = self._absolute(relative(path, params) if not path.startswith("https://") else path)
-        data = await self._transport.json("GET", url, credential=self._credential, headers=PREFER)
+        data = await self._transport.json(
+            "GET", url, credential=self._credential, headers={**PREFER, **(headers or {})}
+        )
         return data if isinstance(data, dict) else {}
 
     async def post(

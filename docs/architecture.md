@@ -23,6 +23,7 @@ overview; this document records the rules and contracts they cannot show.
 | `remote/transport.py` | The only general HTTP client. Applies the allowlist, authentication, one-time 401 renewal, bounded idempotent retries, response limits, error mapping, and credential-free download redirects. |
 | `remote/chat_service.py`, `remote/csa.py` | Private Teams service adapters for the chat catalog, chat history, chat members, and CSA updates. Their endpoints are undocumented and described as private in the research record. |
 | `remote/graph.py`, `remote/graph_teams.py` | Microsoft Graph paging, batching, channel history, people/photos, file download, and the explicitly authorized message-send request. |
+| `remote/graph_org.py` | `OrgDirectory` adapter for directory search, expanded manager chains and paged direct reports, using `teams.graph`. Filters report collections to users, keeps limited profiles, and reports bounded reads as incomplete. |
 | `remote/substrate_search.py` | Search v2 message search and named-chat matches, and Teams Web's search-box people suggestions (`substrate.office.com`), all with the `m365.search` token. |
 | `remote/substrate_summaries.py` | Teams' AI meeting summary from the search recommendations route (`substrate.office.com`, `MeetingCatchUp`), with the `m365.search` token; only `service/summaries.py` calls it. |
 | `service/summaries.py` | The one place that reads a meeting's AI summary for exports, `get_messages` and transcript search, each only for the meetings its result returns. Nothing is cached. |
