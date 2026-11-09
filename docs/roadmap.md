@@ -66,37 +66,6 @@ The AI summary of each transcribed meeting is in exports, `get_messages` and tra
 (architecture, "Meeting transcripts"; [research](api-research.md#meeting-summary)). The rest of the recap,
 its mentions and tasks, is not built.
 
-#### P3.1 — Org lookups
-
-Requested 2026-11-09: read-only person lookup, manager chain, direct reports and peers, as Teams shows
-them on a profile's Organization tab. Not built.
-
-- **Teams' route (do not use):** the profile card calls Loki (`<region>.loki.delve.office.com`), an
-  undocumented Microsoft 365 profile service. One GraphQL `OrganizationQuery` returns the whole chain
-  (`managerChainTopToBottom`), cursor-paged `directs` and `peers`, `workingWith` and report counts.
-  Its tokens are issued to Teams for the Loki resource, headers travel inside a `POST` body, and the
-  query can change with any card release. Observed 2026-11-09 from request URLs and shipped JavaScript;
-  no request or response bodies were captured.
-- **Route:** Graph v1.0 with the existing `teams.graph` token (`User.ReadBasic.All`), checked live
-  2026-11-09 with no new consent:
-  - `GET /users/{id}?$expand=manager($levels=max;$select=…)` with `ConsistencyLevel: eventual` returned
-    the full chain in one call. `/manager` answers 404 at the top of the chain; that is a result, not
-    an error.
-  - `GET /users/{id}/directReports` returned every report through `@odata.nextLink`. Keep
-    `#microsoft.graph.user` entries only; `orgContact` objects can appear.
-  - The docs name `User.Read.All` as least privilege for the manager. `User.ReadBasic.All` worked on
-    this tenant; recheck per tenant ([A1](#a1--fresh-accounts-and-other-tenants)).
-- **Tools:** `find_person` (name, email, UPN or object id), `get_manager_chain`, `list_direct_reports`
-  and `list_peers`. Graph has no peers call: peers are the manager's direct reports minus the person,
-  labeled as derived. Teams may hide peers that exist (seen 2026-11-09: a card showed none while its
-  manager had other direct reports).
-- **Works with is not hierarchy:** Teams' "works with" list is collaboration ranking. Its Graph
-  equivalent, `/users/{id}/people`, answered 403 with `teams.graph` and 200 with the Outlook profile
-  (`People.Read.All`), and the People API is in maintenance mode. Leave it out unless asked.
-- **Scope:** decide whether this stays here or moves to its own directory connector; org data is not
-  Teams data. Report counts have no Graph field: direct counts are list lengths, and transitive counts
-  need a tree walk, so leave them out at first.
-
 ## Decisions
 
 None open.
@@ -156,3 +125,11 @@ The 2026-10-12 shared-auth check reused existing grants
 ([research](api-research.md#credentials-by-service)). A new account's consent for the Teams profiles and
 `m365.search` has not been tried, and the transcript and meeting-summary routes are verified on one
 account only. Reassess them per deployment.
+
+### Organization tools through MCP
+
+The routes for manager chains and reports were checked on 2026-11-09 before implementation
+([research](api-research.md#organization-lookups)). The four built tools have synthetic transport and MCP
+coverage. With authorization, check person lookup by name, email, UPN and id, a root with no manager,
+paged reports and derived peers through the installed MCP server. Compare relationships, allowing for
+Teams' card hiding peers. Check manager access in a fresh tenant under A1; a denial must remain an error.

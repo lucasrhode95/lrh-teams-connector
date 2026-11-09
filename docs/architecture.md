@@ -59,6 +59,7 @@ and the adapters behind them. The split of backends (which private or public ser
 | Surface | Tool or route | Service | Ports | Adapters |
 |---|---|---|---|---|
 | MCP | `auth_status` | `status_report` (shared auth package): offline account, profile and expiry report | none | `TokenProvider` |
+| MCP | `find_person`, `get_manager_chain`, `list_direct_reports`, `list_peers` | `Organization` | `OrgDirectory` | `GraphOrgDirectory` |
 | MCP | `list_chats` | `Catalog.list` (a refresh reads the self chat's newest message too) | `ChatCatalog`, `ChannelDirectory`, `HistoryReader` | `CsaCatalog`, `GraphChannels`, `ChatService` |
 | MCP | `search_chats` | `Catalog.search` (with `refresh`, after a catalog refresh as `list_chats`) | `ChatMemberSearch` (named chats and people), and the refresh's ports | `SubstrateChatSearch`, and the refresh's adapters |
 | MCP | `get_messages` | `History.get_messages` | `HistoryReader` (chats and channels), `MeetingSummaryReader` | `ChatService`, `GraphChannels`, `SubstrateMeetingSummaries` |
@@ -442,6 +443,41 @@ as uncertain and never resent. If sign-in fails after some deletes, the rest are
 attempted, so the result still shows what happened. The result lists `deleted` (each message's time and
 the names of the files it shared, which stay in the sender's OneDrive, still shared with the chat),
 `skipped` and `uncertain`. `get_messages` then shows a deleted message as `is_deleted` with no text.
+
+### 8.7 Organization lookups
+
+`service/org.py` validates plain queries (1–200 characters without control characters), search limits
+(1–100, default 25) and Entra object ids at its public boundary. `bootstrap.py` wires its `Organization`
+service to `GraphOrgDirectory` through `OrgDirectory`, using the existing account-bound `teams.graph`
+credential. No new scope, Loki token, Outlook profile, chat lookup or cached directory copy is used.
+
+| Tool | Input | Result |
+|---|---|---|
+| `find_person` | `query`, optional `limit` | `items` and `complete`; object ids are exact reads, email/UPN match exactly, other text is a display-name prefix. All candidates are returned within the limit; narrow an ambiguous or incomplete search. |
+| `get_manager_chain` | `person_id` | `person` and `managers`, immediate manager first, root last, excluding the person. No manager is an empty array. |
+| `list_direct_reports` | `person_id` | `person`, user `items`, `complete`, `derived=false`. Only immediate reports are read. |
+| `list_peers` | `person_id` | `person`, `manager` when assigned, user `items`, `complete`, `derived=true`. With no manager, returns an empty array and a reason. |
+
+People carry `id` plus available `name`, `email` and `user_principal_name`. Limited-information profiles
+may carry only an id; missing fields are not inferred. Each call reads Graph now. An unknown subject is
+an error in hierarchy tools, while a search with no matches is an empty complete result. HTTP 403 remains
+a permission error, never an empty hierarchy or a sign-in request. A non-user manager is reported as
+unsupported instead of silently cutting off the chain.
+
+The adapter escapes OData string literals and uses Graph v1.0:
+
+- Search: `/users` with `$filter` and `$select`; one extra candidate detects a cut result.
+- Chain: `/users/{id}?$expand=manager($levels=max;$select=…)`, with `ConsistencyLevel: eventual`, in one
+  read. A cyclic, malformed or oversized chain is an error (1,000 managers maximum).
+- Reports: `/users/{id}/directReports`, following opaque `@odata.nextLink` URLs on the Graph host,
+  retaining only `#microsoft.graph.user` entries and deduplicating by object id. Repeated links are errors.
+  Reads stop at 100 pages or 10,000 users with `complete=false` when more remain.
+- Peers: resolve the subject, read `/users/{id}/manager`, then that manager's direct reports and exclude
+  the subject by object id. A manager 404 after resolving the subject means no assigned manager.
+
+Peers are derived directory relationships, not Teams' card visibility or collaboration ranking. No
+transitive report counts are computed. Manager access with `User.ReadBasic.All` is a dated tenant finding,
+not a portable permission promise ([research](api-research.md#organization-lookups)).
 
 ## 9. Local export UI
 

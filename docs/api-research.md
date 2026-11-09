@@ -440,6 +440,31 @@ Asking for `Chat.Read` explicitly returned `AADSTS65002`. The token held `Files.
   ([sending files](#sending-files)).
 - **`/me/joinedTeams` (2026-10-12):** `$top` is refused with 400 (`Query option 'Top' is not allowed`).
 
+### Organization lookups
+
+**Live, 2026-11-09 (recorded from the P3.1 roadmap investigation, not re-probed during implementation):**
+Graph v1.0 with the existing Teams client's `teams.graph` token (`User.ReadBasic.All`) returned a complete
+expanded manager chain using `GET /users/{id}?$expand=manager($levels=max;$select=…)` and
+`ConsistencyLevel: eventual`, and direct reports through every `@odata.nextLink` page of
+`GET /users/{id}/directReports`. `/manager` returned 404 at the root. Contacts can occur among reports.
+Microsoft documents `User.Read.All` as the manager route's least privilege; the weaker grant working on
+one tenant does not establish that it works elsewhere. Reassess under roadmap A1.
+
+**Source/request-URL observation, 2026-11-09:** Teams' profile Organization tab uses Loki
+(`<region>.loki.delve.office.com`), an undocumented Microsoft 365 profile service. Its GraphQL
+`OrganizationQuery` asks for `managerChainTopToBottom`, cursor-paged `directs` and `peers`, `workingWith`
+and report counts. Tokens target the Loki resource and headers travel in the POST body. No request or
+response bodies were captured. The connector uses Graph instead.
+
+**Live, 2026-11-09:** a Teams card hid peers even though its manager had other direct reports. Graph peers
+are therefore explicitly derived from the manager's reports minus the person, not claimed to reproduce
+the card. The collaboration-ranked "works with" list is separate: `/users/{id}/people` returned 403 with
+`teams.graph` and 200 with the Outlook profile (`People.Read.All`). It is not used by this feature.
+
+Public contracts: [manager](https://learn.microsoft.com/en-us/graph/api/user-list-manager?view=graph-rest-1.0),
+[direct reports](https://learn.microsoft.com/en-us/graph/api/user-list-directreports?view=graph-rest-1.0),
+[user search](https://learn.microsoft.com/en-us/graph/api/user-list?view=graph-rest-1.0).
+
 ## Search v2 and Substrate suggestions
 
 ### Message search
