@@ -130,3 +130,9 @@ Use synthetic fixtures and fake transports only. Never use live chat content, id
 ## Compatibility and documentation
 
 Keep account-ownership safeguards and current-format validation. When behavior changes, update the affected README and architecture, MCP, requirements, roadmap, or research docs in the same change. Record dated live findings in the roadmap and research docs.
+
+SVG diagrams are part of the documentation, not an optional follow-up. Whenever tools, services, ports,
+adapters, backend responsibilities or authentication wiring change, review all three files in
+`docs/diagrams/`: `connector-overview.svg`, `architecture.svg` and `code-map.svg`. Update affected diagrams
+in the same change, including tool counts, names, dependencies, routes and accessible descriptions. Render
+and visually inspect every changed SVG before committing; check text fit, clipping, overlaps and arrows.
