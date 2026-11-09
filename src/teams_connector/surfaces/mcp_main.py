@@ -1,7 +1,7 @@
 """MCP server over stdio: thin tools over the shared service (architecture, "MCP tools").
 
 One process per agent session. Nothing touches the network until the first tool call. Every tool is
-read-only except send_message and delete_messages.
+read-only except send_message, edit_message and delete_messages.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from teams_connector.domain.models import (
     ChatSearchResult,
     DeleteResult,
     DownloadedFiles,
+    EditResult,
     ExportArtifact,
     ExportFormat,
     ExportProgress,
@@ -45,8 +46,8 @@ from teams_connector.domain.time import optional_utc
 log = logging.getLogger(__name__)
 
 INSTRUCTIONS = """\
-Read access to the signed-in user's Microsoft Teams chats and team channels, plus one explicitly \
-authorized message-send tool, and read-only directory organization lookups.
+Read access to the signed-in user's Microsoft Teams chats, channels and organization directory, \
+plus explicitly authorized message sends, edits and deletions.
 
 - Finding conversations: list_chats lists chats and channels by recent activity (kind: one_on_one, \
 group, meeting, channel, or self for the user's own notes chat). search_chats finds conversations by \
@@ -105,6 +106,14 @@ before trying again.
 both. Active HTML (scripts, forms, event handlers, javascript: links), embedded media, declarations and \
 unfinished markup are refused. To show pictures, pass PNG or JPEG paths in images: in html, \
 <img src="file name"> places one; images not placed follow the text. Larger or other images go in files.
+- Editing: call edit_message only after explicit authorization for the specific message, new body and \
+every file/image addition or reference removal. Read the message first and use its id and the current \
+chat name. Only the user's own undeleted chat messages qualify; channels and embedded cards are unsupported. \
+Pass text or html to replace the body, or omit both to retain it. files and images ADD new uploads; \
+remove_attachments names existing references from get_messages. Replace an attachment by removing its old \
+name and adding a new file/image. Everything else is kept; removed sources are not deleted. \
+The message PUT is attempted once, with no automatic retry. verified=false means accepted but unconfirmed: \
+check get_messages before any further edit. Never repeat an uncertain edit; new uploads may remain.
 - Deleting: delete_messages soft-deletes the user's own messages in one chat (never anyone else's; those \
 are skipped). Before calling it, list what will be deleted (the chat, how many messages, the first and \
 last with their time and text) and get the user's explicit yes for that whole set; one yes covers the set, \
@@ -535,6 +544,50 @@ def build_server(context: AppContext) -> FastMCP:
             html=html,
             files=files,
             images=images,
+        )
+
+    @mcp.tool(annotations=SEND)
+    @_logged
+    async def edit_message(
+        conversation_id: ConversationId,
+        expected_chat_name: Annotated[str, Field(description="Current chat name from list_chats.")],
+        message_id: Annotated[str, Field(description="Id from get_messages of the user's own message.")],
+        text: Annotated[
+            str | None, Field(description="New plain body, up to 10,000 characters; or html.")
+        ] = None,
+        html: Annotated[
+            str | None,
+            Field(description='New passive HTML body; <img src="file name"> can place a new image.'),
+        ] = None,
+        files: Annotated[
+            list[str] | None, Field(description="Absolute paths of new files to add, up to 10.")
+        ] = None,
+        images: Annotated[
+            list[str] | None,
+            Field(description="Absolute paths of new inline PNG/JPEG images to add, up to 10."),
+        ] = None,
+        remove_attachments: Annotated[
+            list[str] | None,
+            Field(description="Existing attachment names from get_messages to remove, up to 20."),
+        ] = None,
+    ) -> EditResult:
+        """Edit one of the user's own chat messages after explicit authorization for this message, the
+        new body and every attachment change. Read again to check ownership and the live chat name.
+        text/html replaces the body; omitting both retains it. files/images add uploads; remove_attachments
+        removes named references while keeping source files. Other attachments are preserved. Attachment
+        changes support self, one-on-one and group chats. No channels or embedded cards. The message PUT
+        is attempted once. Check verified: false means Teams accepted it but readback was not confirmed.
+        Never repeat an uncertain edit; inspect get_messages first. New uploads are cleaned up only after
+        definite failure; cleanup failures or unknown outcomes can leave new uploads behind."""
+        return await (await services()).editor.edit(
+            conversation_id,
+            expected_chat_name=expected_chat_name,
+            message_id=message_id,
+            text=text,
+            html=html,
+            files=files or [],
+            images=images or [],
+            remove_attachments=remove_attachments or [],
         )
 
     @mcp.tool(annotations=SEND)

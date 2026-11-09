@@ -94,6 +94,7 @@ The current split ([research](api-research.md#microsoft-graph-with-the-teams-cli
 | People's names and photos | Graph | |
 | Person lookup, manager chain, direct reports and derived peers | Graph v1.0 `users`, using `teams.graph` | Existing grant worked in the 2026-11-09 investigation; reassess manager access per tenant. No Loki or Outlook fallback. |
 | Sending | Graph | Returns the server message id |
+| Editing the user's own chat messages | Chat Service PUT; new files via Graph and new images via regional AMS | Verified on the self chat on 2026-11-09. Graph editing lacks the required grant. |
 | Downloading files linked from messages | Graph shares | |
 | Downloading pasted images | AMS, private (full-size views); Graph hosted copies for channel images | AMS holds them and the Skype token reads them ([research](api-research.md#ams-async-media-service)); a channel's Graph copy is read with the Graph token |
 | Meeting transcripts (download and search) | Graph `media/transcripts`, JSON content | Verified on one account and tenant (2026-10-16); the route is not in Graph's documentation, and a fresh account is untested (roadmap A1). The recording card names the recording, so no lookup is needed. |

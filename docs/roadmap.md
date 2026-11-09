@@ -43,23 +43,6 @@ or more through upload sessions ([architecture](architecture.md#85-send-a-messag
 [research](api-research.md#sending-files)). Extend this support to meeting chats, which currently refuse
 these sends and have not yet been tried live.
 
-#### P1.8 — Edit the user's own messages
-
-Requested 2026-11-03, to revise a draft posted in the self chat instead of deleting it and sending it again.
-Not implemented: edits are a non-goal today ([requirements §3](requirements.md#3-non-goals)), and
-`send_message` and `delete_messages` are the only write tools. Implementing this makes editing a third
-write path. That needs the requirements and the agent instructions changed, with the same safeguards as
-sending: explicit authorization for the message and for its new content, the user's own messages only
-(`is_self`), one attempt and no automatic retry.
-
-- **Route:** Chat Service `PUT …/messages/{messageId}`, sending the whole message with new `content` and
-  `properties.edittime`, was captured but never called ([research](api-research.md#writes)). Graph edits
-  were refused with the current grants ([research](api-research.md#grants-2026-10-01)). Try the Chat
-  Service route on one disposable self-chat message first.
-- **Scope:** decide whether an edit may change files and inline images, or only the text.
-- **Result:** confirm with `get_messages`, which shows the newest text and `edited_at`. Teams keeps no
-  readable copy of the replaced text ([research](api-research.md#edits-and-deletes)).
-
 #### P2.2f — Meeting recaps
 
 The AI summary of each transcribed meeting is in exports, `get_messages` and transcript search
@@ -94,6 +77,16 @@ Graph sends to the self chat, a one-on-one and a group chat were verified on 202
 (`/teams/{team}/channels/{channel}/messages`) and meeting chats may carry meeting policies. Send one
 disposable, user-approved message to each, then check that the returned id matches history and that
 a refusal is reported clearly.
+
+### Message editing beyond the self chat
+
+Body and file/image reference edits passed on one account's self chat on 2026-11-09
+([research](api-research.md#writes)). With explicit authorization for each test message and its changes,
+check body edits in one-on-one, group and meeting chats, and file/image edits in one-on-one and group
+chats. Check member sharing and denied edits clearly. Cleanup of newly created AMS objects after a definite
+failure has synthetic coverage only; verify that live before claiming it works for every deployment.
+Channels, attachment changes in meeting chats and embedded-card edits are unsupported scope, not built
+features awaiting verification.
 
 ### N9 — Loop pages beyond the meeting notes
 

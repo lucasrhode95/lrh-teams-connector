@@ -1,5 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="760" viewBox="0 0 1500 760" role="img" aria-labelledby="title description">
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="760" viewBox="0 0 1500 760" role="img" aria-labelledby="title description edit-description">
   <title id="title">Teams for MCP clients</title>
+  <desc id="edit-description">Explicitly authorized edits of the user's own chat messages use Chat Service with readback. New files use Graph and new inline images use regional AMS. Removed attachment references leave source files in storage.</desc>
   <desc id="description">Local agentic MCP clients and the local browser UI connect to a Teams Connector running on this computer. Microsoft Graph's official API handles channels, people, photos, files, sending and read-only directory organization lookups. MCP exposes person search, manager chains, direct user reports and derived peers through the existing Graph sign-in. Teams Web's private, reverse-engineered services handle the chat list, chat history, presence and message search. The browser screenshot contains synthetic Teams data. The Teams link represents bidirectional API requests and responses.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f6f9fc"/><stop offset="1" stop-color="#eaf2f8"/></linearGradient>
@@ -77,7 +78,7 @@
       <rect x="615" y="520.5" width="6" height="6" fill="#f35325"/><rect x="622.5" y="520.5" width="6" height="6" fill="#81bc06"/>
       <rect x="615" y="528" width="6" height="6" fill="#05a6f0"/><rect x="622.5" y="528" width="6" height="6" fill="#ffba08"/>
     </g>
-    <text x="639" y="530.5" font-size="15" fill="#e4f0f5">Teams Web services</text>
+    <text x="639" y="530.5" font-size="15" fill="#e4f0f5">Teams Web services · edits</text>
     <text x="639" y="547.5" font-size="14" class="connector-secondary">Private, reverse-engineered APIs</text>
   </g>
 

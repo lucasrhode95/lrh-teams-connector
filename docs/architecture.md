@@ -15,7 +15,7 @@ overview; this document records the rules and contracts they cannot show.
 | Layer | Responsibility |
 |---|---|
 | `src/teams_connector/__main__.py` | Canonical CLI (`teams-connector`) for shared sign-in, profile status, MCP, and UI. Loads MCP and web dependencies only for those commands. |
-| `surfaces/mcp_main.py` | Typed MCP tools over the service layer. Keeps stdio free of logs; `send_message` and `delete_messages` are the only Teams write tools. |
+| `surfaces/mcp_main.py` | Typed MCP tools over the service layer. Keeps stdio free of logs; `send_message`, `edit_message` and `delete_messages` are the Teams write tools. |
 | `surfaces/web/` | Starlette app, static local export page, and loopback UI launcher. Uses a per-run session token, Host validation, and an idle timeout. |
 | `surfaces/ui_settings.py` | Defaults for the local UI and its launcher: port 8766 (the Outlook connector uses 8765, so both can run) and a 30-minute idle timeout. |
 | `service/` | Domain behavior for the catalog, message history, exports, attachment downloads, profile photos, and sending. MCP and UI share these operations. |
@@ -70,6 +70,7 @@ and the adapters behind them. The split of backends (which private or public ser
 | MCP | `download_attachment` | `Files.download_attachments` (`History.resolve`) | `ChatHistoryReader` (finds the message, and a channel reply's thread), `ChannelHistoryReader`, `FileReader`, `ImageReader` | `ChatService`, `GraphChannels`, `GraphFiles`, `AmsImages`, `GraphHostedImages` |
 | MCP | `send_message` | `Sender.send` (and `Catalog.recipient`) | `ChatWriter`, `ChatCatalog` (chats), `ChannelDirectory` (channels), `MemberReader` and `FileSharer` (files) | `GraphWriter`, `CsaCatalog`, `GraphChannels`, `ChatService`, `GraphFileSharer` |
 | MCP | `delete_messages` | `Deleter.delete` (and `Catalog.recipient`, `History.message`) | `MessageDeleter`, `ChatHistoryReader`, `ChatCatalog` | `ChatService`, `CsaCatalog` |
+| MCP | `edit_message` | `Editor.edit`, `Catalog.recipient` | `MessageEditor`, `FileSharer`, `MemberReader` | `ChatEditor`, `GraphFileSharer`, `ChatService` |
 | MCP | `get_presence` | `Presences.for_chat` | `PresenceReader` | `TeamsPresence` |
 | UI | `GET /api/status` | token status | none | `TokenProvider` |
 | UI | `GET /api/chats` | `Catalog.list` (or `ensure`) | as `list_chats` | as `list_chats` |
@@ -378,7 +379,7 @@ then retrieve a full transcript through `download_attachment` when needed.
 
 ### 8.5 Send a message
 
-`send_message` is one of the two Teams write tools, with `delete_messages`. The user must explicitly
+`send_message` is one of three Teams write tools, with `edit_message` and `delete_messages`. The user must explicitly
 authorize the recipient and the exact content, files and images. Pass the current conversation name from
 `list_chats` as `expected_chat_name`; the service refreshes only that recipient (a chat's delta, or a
 channel's name from its team), then checks the name before sending. Pass exactly one of `text` (plain
@@ -479,6 +480,47 @@ The adapter escapes OData string literals and uses Graph v1.0:
 Peers are derived directory relationships, not Teams' card visibility or collaboration ranking. No
 transitive report counts are computed. Manager access with `User.ReadBasic.All` is a dated tenant finding,
 not a portable permission promise ([research](api-research.md#organization-lookups)).
+
+### 8.8 Edit a message
+
+`edit_message` takes `conversation_id`, the current `expected_chat_name`, and `message_id` from
+`get_messages`. The user must explicitly authorize the specific message, new body, and every attachment
+addition or reference removal. This is a third write path, and the local export UI exposes no edit action.
+
+- `text` or `html`: replace the body (nonempty, up to 10,000 characters); omit both to keep it. Plain text
+  is escaped with line breaks preserved; HTML uses the send path's passive checks. An `<img src="name">`
+  may place a new image by the local file's name. Other new images follow the body.
+- `files` and `images`: absolute paths of new uploads to add. Files use the same 2 GiB limit, chunked
+  upload and sharing rules as sends; PNG/JPEG image input uses the same approximately 3 MB budget. Final
+  messages are limited to 10 files and 10 inline images. Other attachments remain in place; retained
+  images follow a replacement body.
+- `remove_attachments`: up to 20 exact existing names from `get_messages`. Remove old references and add
+  new uploads in the same call to replace attachments. Removing references never deletes source files.
+
+`Editor` validates inputs before uploads, refreshes the target chat's name, and reads structured source
+through `MessageEditor.prepare`. It checks the source author against the active account, and refuses
+deleted messages, system events, recording cards, unknown removal names and unsupported embedded cards.
+Body edits support self, one-on-one, group and meeting chats; attachment changes support self, one-on-one
+and group chats. Channels are unsupported. Live evidence covers the self chat; other kinds remain in the roadmap.
+
+`ChatEditor` preserves the id, sender, arrival time and untouched metadata in a short-lived snapshot;
+nothing is persisted. Files use `GraphFileSharer`. Inline images use the AuthZ `amsV2` create/content routes
+with the Skype token and `config.AMS_CLIENT_VERSION`, and the AuthZ `ams` view route. The final Chat Service
+PUT uses the existing Skype credential, new source HTML / file references / `amsreferences`, and an
+`edittime` in epoch milliseconds. No new Graph grant or alternative write backend is used.
+
+Before PUT, the adapter rereads and rejects changes to the message's source version/content/metadata.
+This is a preflight check, not an atomic compare-and-swap guarantee. One shared HTTP client backs the
+normal transport and a `max_attempts=1` edit transport; `OnceCredential` prevents 401 renewal from repeating
+the request. The message PUT is never automatically retried, including on throttling, connection failures
+or an uncertain response. New Graph uploads retain their existing bounded retry rules.
+
+The adapter reads the message back after an accepted PUT. `EditResult` returns the message id,
+`status=updated`, `verified=true`, `edited_at` and current attachments when confirmed. An unreadable or
+different readback returns `status=accepted`, `verified=false` and a reason; it does not roll back assets
+or repeat the edit. A sent write without a complete answer, or HTTP 504, raises `WriteOutcomeUnknown`;
+inspect `get_messages` before deciding what to do next. Only new uploads are rolled back after a definite
+failure; uncertain uploads or edits can leave resources behind, and failed cleanup is reported.
 
 ## 9. Local export UI
 

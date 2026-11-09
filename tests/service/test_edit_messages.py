@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,28 @@ from tests.fakes.teams_fake import ME, FakeTeams, cs_message
 
 ONE = "19:one@unq.gbl.spaces"
 PNG = b"\x89PNG\r\n\x1a\nsynthetic-image"
+
+
+async def test_server_markup_and_timestamp_normalization_is_verified(
+    services: Services, fake: FakeTeams, monkeypatch
+) -> None:
+    handle = fake._chat_service
+
+    def normalized(request, path, query):
+        response = handle(request, path, query)
+        if request.method == "PUT" and response.is_success:
+            row = next(m for m in fake.chats[ONE].messages if m["id"] == "1002")
+            row["content"] = row["content"].replace("<b>", "<strong>").replace("</b>", "</strong>")
+            row["properties"]["edittime"] = str(
+                int((datetime.now(UTC) + timedelta(seconds=1)).timestamp() * 1000)
+            )
+        return response
+
+    monkeypatch.setattr(fake, "_chat_service", normalized)
+    result = await services.editor.edit(
+        ONE, expected_chat_name="Pat Peer", message_id="1002", html="<b>Revised</b>"
+    )
+    assert result.verified
 
 
 @pytest.fixture

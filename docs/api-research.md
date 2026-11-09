@@ -254,6 +254,13 @@ File entries use `@type: http://schema.skype.com/File`, extension-valued `type` 
 `sharepointIds` (`driveId`, `listItemUniqueId`). Removing references did not delete the uploaded sources.
 These checks cover one account's self chat; other chat kinds and tenants remain live-verification work.
 
+**MCP implementation check, 2026-11-09:** Teams adjusted the submitted edit time by roughly half a second
+and rewrote inline-image markup on readback. Verification therefore compares readable body content and
+structured attachment identities, and requires a newer server edit timestamp; byte-identical image HTML
+and an exact client timestamp are not a valid confirmation contract. The MCP tool's HTML/file/image edit
+was confirmed by a fresh read; a subsequent attachment-reference removal returned `verified: true` with
+no attachments remaining. Uploaded sources were retained.
+
 What history rows hold, from Chat Service (and Graph for channels). Live unless dated otherwise.
 
 ### Types and fields

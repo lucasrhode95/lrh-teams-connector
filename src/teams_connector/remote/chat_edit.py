@@ -172,9 +172,11 @@ class ChatEdit:
             )
         verified = (
             actual.get("id") == payload.get("id")
-            and actual.get("content") == payload["content"]
+            and message.text == expected.text
             and message.author_id == self.message.author_id
-            and message.edited_at == expected.edited_at
+            and message.edited_at is not None
+            and (self.message.edited_at is None or message.edited_at > self.message.edited_at)
+            and not message.is_deleted
             and message.attachments == expected.attachments
         )
         return EditReceipt(
@@ -216,7 +218,8 @@ class ChatEdit:
             if model.name not in removed
         ]
         props["files"] = json.dumps([*kept, *(_file_record(file) for file in files)])
-        props["edittime"] = str(int(datetime.now(UTC).timestamp() * 1000))
+        previous = int(self.message.edited_at.timestamp() * 1000) if self.message.edited_at else 0
+        props["edittime"] = str(max(int(datetime.now(UTC).timestamp() * 1000), previous + 1))
         if body is not None:
             for field in ("mentions", "cards", "links"):
                 if field in props:
