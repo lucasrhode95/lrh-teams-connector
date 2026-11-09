@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="2600" height="1760" viewBox="0 0 2600 1760" role="img" aria-labelledby="title description">
   <title id="title">Teams connector architecture</title>
-  <desc id="description">Short-lived entry points: the MCP server (one stdio process per agent session), the local export UI, and the auth command. MCP and UI are thin surfaces over one service layer that holds every domain decision. The service reads and writes an account-bound SQLite store of the chat catalog and calls the remote layer through ports. Teams' private services provide the chat catalog (CSA), chat history and members (Chat Service), pasted images (AMS) and presence, after an AuthZ exchange that yields a Skype token and the service routes; Microsoft Graph provides channels, people, photos, shared files and sending; Search v2 provides online message discovery and chats by member, and Teams Web's suggestions route the people for one-on-ones. Tokens come from the shared lrh-m365-auth cache.</desc>
+  <desc id="description">Short-lived entry points: the MCP server (one stdio process per agent session), the local export UI, and the auth command. MCP and UI are thin surfaces over one service layer that holds every domain decision. The service reads and writes an account-bound SQLite store of the chat catalog and calls the remote layer through ports. Teams' private services provide the chat catalog (CSA), chat history and members (Chat Service), pasted images (AMS) and presence, after an AuthZ exchange that yields a Skype token and the service routes; Microsoft Graph provides channels, people, photos, shared files and sending. MCP organization tools call Organization through OrgDirectory and GraphOrgDirectory, using the existing teams.graph credential to find people, expand manager chains, page user reports and derive peers; directory reads are never cached. Search v2 provides online message discovery and chats by member, and Teams Web's suggestions route the people for one-on-ones. Tokens come from the shared lrh-m365-auth cache.</desc>
   <defs>
     <style>
       text { font-family: Arial, Helvetica, sans-serif; }
@@ -26,7 +26,7 @@
 
   <rect width="2600" height="1760" fill="#fff"/>
   <text class="title" x="1300" y="70" text-anchor="middle">Teams connector architecture</text>
-  <text class="subtitle" x="1300" y="110" text-anchor="middle">Teams services for chats · Graph for channels, people, files and sending · Search v2 discovery · local catalog</text>
+  <text class="subtitle" x="1300" y="110" text-anchor="middle">Teams services for chats · Graph for channels, org lookups, files and sending · Search v2 · local catalog</text>
 
   <!-- MCP surface. -->
   <rect x="80" y="170" width="790" height="210" rx="14" fill="#f7f9fc" stroke="#c7d5e2" stroke-width="1.5"/>
@@ -34,7 +34,7 @@
   <text class="card-title" x="100" y="203">MCP SERVER</text>
   <text class="card-subtitle" x="100" y="227"><tspan class="code">teams-connector mcp</tspan> · one stdio process per agent session</text>
   <rect x="100" y="260" width="750" height="100" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
-  <text class="detail" x="120" y="292"><tspan class="code">surfaces/mcp_main.py</tspan>: 11 FastMCP tools</text>
+  <text class="detail" x="120" y="292"><tspan class="code">surfaces/mcp_main.py</tspan>: 15 FastMCP tools</text>
   <text class="detail" x="120" y="320">Bounded pages, self-contained cursors, coverage</text>
   <text class="detail" x="120" y="348"><tspan class="code">send_message</tspan> and <tspan class="code">delete_messages</tspan> are the only writes</text>
 
@@ -106,10 +106,10 @@
   <text class="detail" x="1448" y="671">the live chat name</text>
 
   <rect x="100" y="720" width="248" height="160" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
-  <text class="section-title code" x="116" y="756">files.py</text>
-  <text class="detail" x="116" y="791">attachment downloads</text>
-  <text class="detail" x="116" y="819">profile photos</text>
-  <text class="detail" x="116" y="847">kept a week</text>
+  <text class="section-title code" x="116" y="756">org.py</text>
+  <text class="detail" x="116" y="791">people and managers</text>
+  <text class="detail" x="116" y="819">reports · derived peers</text>
+  <text class="detail" x="116" y="847">MCP only · no cache</text>
 
   <rect x="366" y="720" width="515" height="160" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
   <text class="section-title" x="382" y="756">helpers</text>
@@ -187,9 +187,13 @@
   <text class="section-title code" x="672" y="1310" style="font-size:20px">ports.py</text>
   <text class="detail" x="672" y="1336" style="font-size:18px">adapter interfaces</text>
 
-  <rect x="915" y="1286" width="755" height="64" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
-  <text class="section-title code" x="927" y="1310" style="font-size:20px">transport.py</text>
-  <text class="detail" x="927" y="1336" style="font-size:18px">one HTTP client · host allowlist · bounded retries · writes never resent if uncertain</text>
+  <rect x="915" y="1286" width="245" height="64" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
+  <text class="section-title code" x="927" y="1310" style="font-size:20px">graph_org.py</text>
+  <text class="detail" x="927" y="1336" style="font-size:18px">OrgDirectory · teams.graph</text>
+
+  <rect x="1170" y="1286" width="500" height="64" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
+  <text class="section-title code" x="1182" y="1310" style="font-size:20px">transport.py</text>
+  <text class="detail" x="1182" y="1336" style="font-size:18px">HTTPS · host allowlist · bounded retries</text>
 
   <!-- Sign-in command. -->
   <rect x="80" y="1430" width="520" height="220" rx="14" fill="#f7f9fc" stroke="#c7d5e2" stroke-width="1.5"/>
@@ -252,7 +256,7 @@
   <rect x="1938" y="1072" width="32" height="26" rx="5" fill="#2b6cb0"/>
   <text class="badge" x="1954" y="1091" text-anchor="middle">G</text>
   <text class="section-title" x="1980" y="1093">Microsoft Graph (documented)</text>
-  <text class="detail" x="1940" y="1126" style="font-size:18px"><tspan class="code">/me/joinedTeams</tspan> · <tspan class="code">/teams/…/channels</tspan> · <tspan class="code">/users</tspan></text>
+  <text class="detail" x="1940" y="1126" style="font-size:18px"><tspan class="code">/teams/…/channels</tspan> · <tspan class="code">/users</tspan> (people and org)</text>
   <text class="detail" x="1940" y="1156" style="font-size:18px"><tspan class="code">/chats/…/messages</tspan> (send) · <tspan class="code">/shares/…/driveItem</tspan></text>
 
   <rect x="1920" y="1182" width="580" height="80" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>

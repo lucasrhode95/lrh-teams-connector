@@ -55,6 +55,34 @@ class Participant(Compact):
     name: str | None = None
 
 
+class Person(Compact):
+    """A directory user. Missing profile fields mean unavailable, never inferred from chat names."""
+
+    id: str
+    name: str | None = None
+    email: str | None = None
+    user_principal_name: str | None = None
+
+
+class PersonMatches(Compact):
+    items: list[Person]
+    complete: bool
+
+
+class ManagerChain(Compact):
+    person: Person
+    managers: list[Person]  # immediate manager first, root last; excludes the person
+
+
+class OrgPeople(Compact):
+    person: Person
+    items: list[Person]
+    complete: bool
+    derived: bool  # peers are the manager's direct reports minus the person
+    manager: Person | None = None
+    reason: str | None = None
+
+
 class Presence(Compact):
     """One person's Teams presence: availability and activity, when they were last active, and their device.
     No status note and no calendar text."""

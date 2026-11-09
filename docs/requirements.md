@@ -30,6 +30,10 @@ Presence (one-on-one, read only) is part of the reads. Outlook, Teams and
 SharePoint are separately installed connectors that share one sign-in (`lrh-m365-auth`); each keeps
 its own product logic.
 
+Read-only person and organization lookups are also exposed through MCP (requested and implemented
+2026-11-09). This feature stays in the Teams connector alongside the Organization tab experience;
+Microsoft Entra directory relationships are the record. It does not require a chat with the person.
+
 ## 2. Ownership (2026-10-17)
 
 The same in every `lrh-*` connector. Each connector owns one product, and all share one sign-in
@@ -88,6 +92,7 @@ The current split ([research](api-research.md#microsoft-graph-with-the-teams-cli
 | Chat history and chat members | Chat Service, private | Same |
 | Channels, channel history and members | Graph | Lists every joined channel; the private catalog adds only activity |
 | People's names and photos | Graph | |
+| Person lookup, manager chain, direct reports and derived peers | Graph v1.0 `users`, using `teams.graph` | Existing grant worked in the 2026-11-09 investigation; reassess manager access per tenant. No Loki or Outlook fallback. |
 | Sending | Graph | Returns the server message id |
 | Downloading files linked from messages | Graph shares | |
 | Downloading pasted images | AMS, private (full-size views); Graph hosted copies for channel images | AMS holds them and the Skype token reads them ([research](api-research.md#ams-async-media-service)); a channel's Graph copy is read with the Graph token |
@@ -149,6 +154,14 @@ not deleted, and the catalog is rebuilt from Teams
 Calendar events and meeting recaps are separate capabilities. Report each one as verified, blocked or
 unverified; message search alone never counts as broad Microsoft 365 search. Transcripts are searched by
 `search_transcripts` (below); the Graph route they use is verified on one account only.
+
+Organization search returns every candidate within its limit, without automatically selecting among
+ambiguous names. Hierarchy tools take a returned Entra object id. Manager chains exclude the person and
+run from immediate manager to root. Reports include users only; peers are the manager's user reports minus
+the person, explicitly derived and potentially different from the Teams card. Empty lists, unavailable
+profile fields, incomplete bounded reads and permission failures must remain distinct. Organization data
+is read on demand and never cached. Collaboration ranking ("works with"), transitive trees and report
+counts are outside this feature.
 
 ## 8. History, exports, sending and deleting
 

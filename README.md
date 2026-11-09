@@ -134,6 +134,10 @@ The MCP server exposes the tools below. Each one's inputs, results and caveats a
 | MCP tool | Service module | Behavior |
 |---|---|---|
 | `auth_status` | shared auth provider | Read cached account/client credentials and resource-token expiry |
+| `find_person` | [`service/org.py`](src/teams_connector/service/org.py) | Find directory users by name prefix, exact email/UPN or object id; returns candidates for ambiguous names |
+| `get_manager_chain` | [`service/org.py`](src/teams_connector/service/org.py) | Read all managers, immediate manager first and root last |
+| `list_direct_reports` | [`service/org.py`](src/teams_connector/service/org.py) | Read direct user reports across Graph pages; excludes contacts and reports incomplete bounded reads |
+| `list_peers` | [`service/org.py`](src/teams_connector/service/org.py) | Derive peers from the manager's direct reports minus the person; can differ from Teams' profile card |
 | `list_chats` | [`service/catalog.py`](src/teams_connector/service/catalog.py) | List chats and channels by recent activity, with kind filters and paging |
 | `search_chats` | [`service/catalog.py`](src/teams_connector/service/catalog.py) | Match conversation names, and with a refresh the named group and meeting chats Teams matches by member and the one-on-ones with the people Teams suggests |
 | `get_messages` | [`service/history.py`](src/teams_connector/service/history.py) | Read a conversation's history, newest pages first (a channel: threads by latest activity), with inclusive date bounds, and each transcribed meeting's AI summary after its marker (`include_summaries`, on by default) |
@@ -146,6 +150,12 @@ The MCP server exposes the tools below. Each one's inputs, results and caveats a
 | `delete_messages` | [`service/delete.py`](src/teams_connector/service/delete.py) | Delete a set of your own messages in one chat after one explicit confirmation of the set; a delete with an uncertain outcome is never resent, and the result lists what was deleted, skipped and uncertain; a write tool |
 
 Message timestamps are returned in UTC.
+
+Organization lookups use the existing `teams.graph` sign-in and read the directory on each call; nothing
+is cached. Use an id returned by `find_person` for hierarchy tools. Missing profile fields are unavailable;
+permission errors remain errors. The current tenant's manager grant was verified in the roadmap research
+on 2026-11-09; other tenants may need different grants. See the
+[organization contract](docs/architecture.md#87-organization-lookups) for limits and empty results.
 
 Which service backs each tool and route, and which private or public service each capability uses, is in [the architecture](docs/architecture.md#2-services-ports-and-adapters) and [requirements §4](docs/requirements.md#4-backend-choice).
 

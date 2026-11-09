@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="2600" height="3890" viewBox="0 0 2600 3890" role="img" aria-labelledby="title description">
   <title id="title">Teams connector code map</title>
-  <desc id="description">The Teams connector's main classes and who calls whom. The command line starts the MCP server or the export UI (with text previews and presence), prepares sign-in, or shows status. Both surfaces call service classes: Catalog, History, Search, Exports, Sender, Files, Photos and Presences. The service depends on the ports in remote/ports.py. CsaCatalog, ChatService and TeamsSession implement the Teams-service ports; GraphChannels, GraphPeople, GraphWriter and GraphFiles implement the Graph ports; SubstrateSearch implements message search. Every remote request goes through one Transport with tokens from the shared TokenProvider. The store is an account-bound SQLite Store that holds the chat catalog only. AppContext in bootstrap.py builds the services once per process. Hover an item for details.</desc>
+  <desc id="description">The Teams connector's main classes and who calls whom. The command line starts the MCP server or the export UI (with text previews and presence), prepares sign-in, or shows status. Both surfaces call service classes: Catalog, History, Search, Exports, Sender, Files, Photos and Presences. MCP also exposes four directory tools through Organization, which calls OrgDirectory, implemented by GraphOrgDirectory using the existing teams.graph credential. Manager chains run from immediate manager to root; reports include users only; peers are derived from the manager's reports minus the person. Organization reads are never cached. The service depends on the ports in remote/ports.py. CsaCatalog, ChatService and TeamsSession implement the Teams-service ports; GraphChannels, GraphPeople, GraphWriter and GraphFiles implement the other Graph ports; SubstrateSearch implements message search. Every remote request goes through one Transport with tokens from the shared TokenProvider. The store is an account-bound SQLite Store that holds the chat catalog only. AppContext in bootstrap.py builds the services once per process. Hover an item for details.</desc>
   <defs>
     <style>
       text { font-family: Arial, Helvetica, sans-serif; }
@@ -63,24 +63,29 @@
 <rect x="80" y="494" width="850" height="366" rx="14" fill="#f7f9fc" stroke="#c7d5e2" stroke-width="1.5"/>
 <path d="M80 568 V508 Q80 494 94 494 H916 Q930 494 930 508 V568 Z" fill="#183153"/>
 <text class="card-title" x="100" y="527">MCP SERVER</text>
-<text class="card-subtitle" x="100" y="551"><tspan class="code">surfaces/mcp_main.py</tspan> · <tspan class="code">build_server(AppContext)</tspan> · 11 FastMCP tools</text>
+<text class="card-subtitle" x="100" y="551"><tspan class="code">surfaces/mcp_main.py</tspan> · <tspan class="code">build_server(AppContext)</tspan> · 15 FastMCP tools</text>
 <rect x="100" y="588" width="810" height="252" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
 <text class="group-title" x="118" y="626">Conversations</text>
 <g><title>Chats and channels by recent activity, with kind filters and paging. → Catalog.list</title><text class="detail small" x="118" y="656">• <tspan class="code">list_chats</tspan></text></g>
 <g><title>Conversation names, and, with a refresh, members that Teams matches. → Catalog.search</title><text class="detail small" x="118" y="683">• <tspan class="code">search_chats</tspan></text></g>
 <g><title>One bounded page of a conversation, newest pages first. → History.get_messages</title><text class="detail small" x="118" y="710">• <tspan class="code">get_messages</tspan></text></g>
-<g><title>Save the files a message names, by message id or arrival time; each is cached per source. → Files.download_attachments</title><text class="detail small" x="118" y="737">• <tspan class="code">download_attachments</tspan></text></g>
+<g><title>Save the files a message names, by message id or arrival time; each is cached per source. → Files.download_attachments</title><text class="detail small" x="118" y="737">• <tspan class="code">download_attachment</tspan></text></g>
 <text class="group-title" x="118" y="776">Account</text>
 <g><title>The active account and each profile's cached credential and token expiry. → TokenProvider.status</title><text class="detail small" x="118" y="806">• <tspan class="code">auth_status</tspan></text></g>
 <text class="group-title" x="360" y="626">Search</text>
 <g><title>One page of Search v2 message hits for the terms, scope and dates. → Search.search_messages</title><text class="detail small" x="360" y="656">• <tspan class="code">search_messages</tspan></text></g>
+<g><title>Search words said in meeting recordings. → TranscriptSearch.search</title><text class="detail small" x="360" y="683">• <tspan class="code">search_transcripts</tspan></text></g>
 <text class="group-title" x="360" y="722">Write</text>
 <g><title>Send one message, optionally with files and inline images, after explicit authorization; checks the live chat name; never resent after an uncertain outcome; a failed send deletes its uploads. → Sender.send</title><text class="detail small" x="360" y="752">• <tspan class="code">send_message</tspan></text></g>
 <g><title>Delete a confirmed set of the user's own chat messages; re-reads each, deletes each once, reports deleted, skipped and uncertain. → Deleter.delete</title><text class="detail small" x="360" y="779">• <tspan class="code">delete_messages</tspan></text></g>
+<g><title>Availability of the other person in a one-on-one chat; read only. → Presences.for_chat</title><text class="detail small" x="360" y="806">• <tspan class="code">get_presence</tspan></text></g>
 <text class="group-title" x="668" y="626">Export</text>
 <g><title>Export conversations to .txt, .jsonl or a .zip with attachments. → Exports.export</title><text class="detail small" x="668" y="656">• <tspan class="code">export_chats</tspan></text></g>
-<text class="group-title" x="668" y="776">Presence</text>
-<g><title>Availability of the other person in a one-on-one chat; read only. → Presences.for_chat</title><text class="detail small" x="668" y="806">• <tspan class="code">get_presence</tspan></text></g>
+<text class="group-title" x="668" y="695">Organization</text>
+<g><title>Directory users by name prefix, exact email/UPN or object id. Returns candidates, not an ambiguous choice. → Organization.find_person</title><text class="detail small" x="668" y="725">• <tspan class="code">find_person</tspan></text></g>
+<g><title>Immediate manager first, root last, excluding the person. → Organization.get_manager_chain</title><text class="detail small" x="668" y="752">• <tspan class="code">get_manager_chain</tspan></text></g>
+<g><title>Paged user reports; contacts excluded and bounded reads labeled incomplete. → Organization.list_direct_reports</title><text class="detail small" x="668" y="779">• <tspan class="code">list_direct_reports</tspan></text></g>
+<g><title>Derived from the manager's user reports minus the person; may differ from the Teams card. → Organization.list_peers</title><text class="detail small" x="668" y="806">• <tspan class="code">list_peers</tspan></text></g>
 
 <!-- Local UI. -->
 <rect x="970" y="494" width="850" height="366" rx="14" fill="#f7f9fc" stroke="#c7d5e2" stroke-width="1.5"/>
@@ -209,6 +214,15 @@
 <g><title>Declarations, CDATA sections, processing instructions, and markup left open.</title><text class="detail" x="691" y="2070">declarations · unfinished markup</text></g>
 <text class="muted" x="691" y="2158">used by <tspan class="code">Sender</tspan>; the HTML is never rewritten</text>
 
+<rect x="1247" y="1914" width="553" height="260" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
+<text class="section-title" x="1265" y="1949"><tspan class="code">Organization</tspan><tspan class="detail" dx="12">org.py</tspan></text>
+<text class="group-title" x="1265" y="1986">Read-only methods · MCP</text>
+<g><title>Validate a bounded plain query and return every candidate within the limit.</title><text class="detail" x="1265" y="2016">• <tspan class="code">find_person(query, limit)</tspan></text></g>
+<g><title>Validate the object id and read all managers, nearest first.</title><text class="detail" x="1265" y="2043">• <tspan class="code">get_manager_chain(person_id)</tspan></text></g>
+<g><title>Resolve the subject and read its direct user reports.</title><text class="detail" x="1265" y="2070">• <tspan class="code">list_direct_reports(person_id)</tspan></text></g>
+<g><title>Resolve the subject, read its immediate manager, then exclude the subject from that manager's reports.</title><text class="detail" x="1265" y="2097">• <tspan class="code">list_peers(person_id)</tspan></text></g>
+<text class="muted" x="1265" y="2158">uses <tspan class="code">OrgDirectory</tspan> · no cache</text>
+
 <path class="local-flow" d="M340 2198 V2260"/>
 <text class="flow-label" x="360" y="2236" text-anchor="start">chats · catalog · meta</text>
 <path class="call-flow" d="M940 2194 V2260"/>
@@ -260,6 +274,7 @@
 <g><title>Send one message to a chat or a channel; upload a file and share it with people.</title><text class="detail" x="1258" y="2484"><tspan class="code">ChatWriter</tspan> · <tspan class="code">send</tspan> · <tspan class="code">FileSharer</tspan> · <tspan class="code">upload</tspan> · <tspan class="code">share</tspan></text></g>
 <g><title>Download a file linked from a message.</title><text class="detail" x="1258" y="2511"><tspan class="code">FileReader</tspan> · <tspan class="code">download</tspan></text></g>
 <g><title>One page of Search v2 message hits.</title><text class="detail" x="1258" y="2538"><tspan class="code">MessageSearchReader</tspan> · <tspan class="code">search_messages</tspan></text></g>
+<g><title>Validated person queries and ids: find, person, manager_chain, manager and direct_reports. Returns typed people and completeness.</title><text class="detail" x="1258" y="2565"><tspan class="code">OrgDirectory</tspan> · directory reads</text></g>
 
 <path class="impl-flow" d="M940 2588 V2634"/>
 <text class="flow-label" x="960" y="2620" text-anchor="start">implemented by</text>
@@ -283,6 +298,7 @@
 <g><title>Shared files via /shares/{id}/driveItem; implements FileReader.</title><text class="detail small" x="1258" y="2791"><tspan class="code">GraphFiles</tspan>: linked files</text></g>
 <g><title>Search v2 Message/Teams pages under the m365.search profile; implements MessageSearchReader. Calls Transport directly.</title><text class="detail small" x="1258" y="2818"><tspan class="code">SubstrateSearch</tspan>: Search v2</text></g>
 <g><title>Named chats by member (Search v2) and the people Teams suggests (substrate.office.com); implements ChatMemberSearch.</title><text class="detail small" x="1258" y="2845"><tspan class="code">SubstrateChatSearch</tspan>: chats by member, people</text></g>
+<g><title>graph_org.py implements OrgDirectory: Graph v1.0 users, expanded manager chain with ConsistencyLevel eventual, and paged directReports retaining users only. Uses Graph and the existing teams.graph credential.</title><text class="detail small" x="1258" y="2872"><tspan class="code">GraphOrgDirectory</tspan>: org lookups</text></g>
 
 <path class="call-flow" d="M1170 2888 V3143"/>
 <path class="call-flow" d="M1520 2888 V2930"/>
@@ -350,13 +366,13 @@
 <g><title>One HTTPS client for every Microsoft service.</title><text class="detail small" x="1938" y="366">• <tspan class="code">Transport(client)</tspan></text></g>
 <text class="detail small" x="1938" y="393">• <tspan class="code">Graph(transport, Bearer teams.graph)</tspan></text>
 <text class="detail small" x="1938" y="420">• <tspan class="code">TeamsSession(transport, tokens)</tspan></text>
-<text class="detail small" x="1938" y="447">• <tspan class="code">GraphPeople</tspan> · <tspan class="code">GraphChannels</tspan></text>
+<text class="detail small" x="1938" y="447">• <tspan class="code">GraphPeople</tspan> · <tspan class="code">GraphChannels</tspan> · <tspan class="code">GraphOrgDirectory</tspan></text>
 <text class="detail small" x="1938" y="474">• <tspan class="code">ChatService(transport, session, ...)</tspan></text>
 <text class="detail small" x="1938" y="501">• <tspan class="code">CsaCatalog(transport, session, ...)</tspan></text>
 <g><title>SQLite file per account fingerprint.</title><text class="detail small" x="1938" y="528">• <tspan class="code">Store(account)</tspan> · <tspan class="code">Catalog</tspan> · <tspan class="code">History</tspan></text></g>
 <text class="detail small" x="1938" y="555">• <tspan class="code">SubstrateSearch(transport, m365.search)</tspan></text>
 <text class="detail small" x="1938" y="582">• <tspan class="code">Files(history, GraphFiles, images)</tspan> · <tspan class="code">Photos</tspan></text>
-<text class="detail small" x="1938" y="609">• <tspan class="code">Search</tspan> · <tspan class="code">Exports</tspan></text>
+<text class="detail small" x="1938" y="609">• <tspan class="code">Search</tspan> · <tspan class="code">Exports</tspan> · <tspan class="code">Organization</tspan></text>
 <text class="detail small" x="1938" y="636">• <tspan class="code">Sender(catalog, GraphWriter, GraphFileSharer)</tspan></text>
 
 <rect x="1900" y="716" width="620" height="560" rx="14" fill="#eff8f6" stroke="#9fd3cb" stroke-width="1.5"/>
@@ -367,7 +383,7 @@
 <text class="detail" x="1924" y="904">Graph without touching the service.</text>
 <text class="detail" x="1924" y="940">Teams (purple) profiles: AuthZ and the</text>
 <text class="detail" x="1924" y="976">chat catalog. Graph (blue): channels,</text>
-<text class="detail" x="1924" y="1012">people, files, sending. Outlook Web</text>
+<text class="detail" x="1924" y="1012">people, org, files, sending. Outlook Web</text>
 <text class="detail" x="1924" y="1048">(amber): Search v2.</text>
 <text class="detail" x="1924" y="1084">Nothing stays in memory between</text>
 <text class="detail" x="1924" y="1120">processes: cursors carry their state.</text>
@@ -387,7 +403,7 @@
 <text class="section-title" x="1978" y="2393"><tspan class="code">Microsoft Graph</tspan></text>
 <g><title>Documented API under the teams.graph profile.</title><text class="detail" x="1938" y="2430"><tspan class="code">graph.microsoft.com/v1.0</tspan></text></g>
 <g><title>Joined teams and every channel, including private and shared ones.</title><text class="detail small" x="1938" y="2457"><tspan class="code">/me/joinedTeams</tspan> · <tspan class="code">/teams/…/allChannels</tspan></text></g>
-<g><title>Channel history and members; people and photos.</title><text class="detail small" x="1938" y="2484"><tspan class="code">/teams/…/channels/…/messages</tspan> · <tspan class="code">/users</tspan></text></g>
+<g><title>Channel history and members; people, photos and org lookups. Organization uses /users, expanded manager chains, /manager and /directReports.</title><text class="detail small" x="1938" y="2484"><tspan class="code">/teams/…/channels/…/messages</tspan> · <tspan class="code">/users</tspan></text></g>
 <g><title>Sending, and files linked from messages.</title><text class="detail small" x="1938" y="2511"><tspan class="code">/chats/…/messages</tspan> · <tspan class="code">/shares/…/driveItem</tspan></text></g>
 
 <rect x="1920" y="2578" width="580" height="100" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>

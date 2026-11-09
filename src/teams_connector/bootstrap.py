@@ -20,6 +20,7 @@ from teams_connector.remote.chat_service import ChatService
 from teams_connector.remote.csa import CsaCatalog
 from teams_connector.remote.csa_mapping import Me
 from teams_connector.remote.graph import Graph
+from teams_connector.remote.graph_org import GraphOrgDirectory
 from teams_connector.remote.graph_teams import (
     GraphChannels,
     GraphFiles,
@@ -39,6 +40,7 @@ from teams_connector.service.delete import Deleter
 from teams_connector.service.export.orchestrator import Exports
 from teams_connector.service.files import Files, Photos
 from teams_connector.service.history import History
+from teams_connector.service.org import Organization
 from teams_connector.service.presence import Presences
 from teams_connector.service.search import Search
 from teams_connector.service.send import Sender
@@ -62,6 +64,7 @@ class Services:
     photos: Photos
     presence: Presences
     transcript_search: TranscriptSearch
+    organization: Organization
 
 
 class AppContext:
@@ -179,6 +182,7 @@ class AppContext:
             presence=Presences(
                 catalog, TeamsPresence(transport, session, Bearer(account_tokens, "teams.spaces"))
             ),
+            organization=Organization(GraphOrgDirectory(graph)),
         )
 
     async def aclose(self) -> None:

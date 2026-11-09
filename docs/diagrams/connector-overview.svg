@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1500" height="760" viewBox="0 0 1500 760" role="img" aria-labelledby="title description">
   <title id="title">Teams for MCP clients</title>
-  <desc id="description">Local agentic MCP clients and the local browser UI connect to a Teams Connector running on this computer. Microsoft Graph's official API handles channels, people, photos, files and sending. Teams Web's private, reverse-engineered services handle the chat list, chat history, presence and message search. The browser screenshot contains synthetic Teams data. The Teams link represents bidirectional API requests and responses.</desc>
+  <desc id="description">Local agentic MCP clients and the local browser UI connect to a Teams Connector running on this computer. Microsoft Graph's official API handles channels, people, photos, files, sending and read-only directory organization lookups. MCP exposes person search, manager chains, direct user reports and derived peers through the existing Graph sign-in. Teams Web's private, reverse-engineered services handle the chat list, chat history, presence and message search. The browser screenshot contains synthetic Teams data. The Teams link represents bidirectional API requests and responses.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f6f9fc"/><stop offset="1" stop-color="#eaf2f8"/></linearGradient>
     <linearGradient id="connector" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#16385f"/><stop offset="1" stop-color="#245c78"/></linearGradient>
@@ -14,7 +14,7 @@
   <rect width="1500" height="760" rx="28" fill="url(#bg)"/>
 
   <text x="64" y="111" class="title">Teams for MCP clients</text>
-  <text x="64" y="140" class="subtitle">A local MCP server and browser UI for one user's Teams chats, channels and meetings.</text>
+  <text x="64" y="140" class="subtitle">A local MCP server and browser UI for Teams chats, channels, meetings and directory lookups.</text>
 
   <text x="64" y="213" class="label">LOCAL MCP CLIENTS</text>
   <g filter="url(#shadow)">
@@ -71,7 +71,7 @@
       </svg>
     </g>
     <text x="639" y="459.5" font-size="15" fill="#e4f0f5">Microsoft Graph</text>
-    <text x="639" y="478.5" font-size="14" class="connector-secondary">Official Microsoft API</text>
+    <text x="639" y="478.5" font-size="14" class="connector-secondary">Official API · includes org lookups</text>
     <rect x="595" y="501.5" width="310" height="62" rx="13" fill="#ffffff" fill-opacity=".2" stroke="#d5edf5" stroke-opacity=".24"/>
     <g aria-hidden="true">
       <rect x="615" y="520.5" width="6" height="6" fill="#f35325"/><rect x="622.5" y="520.5" width="6" height="6" fill="#81bc06"/>

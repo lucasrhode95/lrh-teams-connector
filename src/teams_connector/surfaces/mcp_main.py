@@ -31,8 +31,11 @@ from teams_connector.domain.models import (
     ExportFormat,
     ExportProgress,
     ExportRequest,
+    ManagerChain,
     MessagePage,
     MessageSearchResult,
+    OrgPeople,
+    PersonMatches,
     PresenceResult,
     SendResult,
     TranscriptSearchResult,
@@ -43,7 +46,7 @@ log = logging.getLogger(__name__)
 
 INSTRUCTIONS = """\
 Read access to the signed-in user's Microsoft Teams chats and team channels, plus one explicitly \
-authorized message-send tool.
+authorized message-send tool, and read-only directory organization lookups.
 
 - Finding conversations: list_chats lists chats and channels by recent activity (kind: one_on_one, \
 group, meeting, channel, or self for the user's own notes chat). search_chats finds conversations by \
@@ -67,6 +70,12 @@ conversation; export fetches the selected history, \
 so a long selection takes a while. Read the returned file path with your file tools.
 - Presence: get_presence reads the other person's availability in a one-on-one chat only. It is read-only, \
 and when it returns no presence it says why.
+- Organization: find_person finds directory users by name prefix, exact email/UPN or object id. It \
+returns candidates; never choose an ambiguous name without the user's context. Use a returned id for \
+get_manager_chain (immediate manager first), list_direct_reports or list_peers. Peers are derived from \
+the manager's direct reports minus the person and can differ from Teams' profile card. Read complete: \
+false means the search or report list was bounded; narrow an incomplete person search. No collaboration \
+ranking or transitive report counts are returned. Missing profile fields are unavailable, not inferred.
 - Attachments: download_attachment saves the files a message names (its shared files and pasted images, \
 shown as [File: name] and [Image: name] markers) and returns their local paths. A meeting's Loop notes \
 show as [Meeting notes] and a link; download_attachment (as "Meeting notes.txt") and exports read the live \
@@ -120,6 +129,7 @@ SEND = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=
 Since = Annotated[datetime | None, Field(description="Inclusive lower bound (ISO 8601; UTC if no offset).")]
 Until = Annotated[datetime | None, Field(description="Inclusive upper bound (ISO 8601; UTC if no offset).")]
 ConversationId = Annotated[str, Field(description="Conversation id from list_chats or search results.")]
+PersonId = Annotated[str, Field(description="Entra object id from find_person or another org lookup.")]
 
 
 def _logged[**P, R](function: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
@@ -182,6 +192,43 @@ def build_server(context: AppContext) -> FastMCP:
         group and meeting chats that Teams matches by a member's name or email, with the members
         that matched."""
         return await (await services()).catalog.search(query, refresh=refresh, limit=limit, cursor=cursor)
+
+    @mcp.tool(annotations=READ_ONLY)
+    @_logged
+    async def find_person(
+        query: Annotated[
+            str,
+            Field(description="Name prefix, exact email/UPN or object id; plain text, 1 to 200 characters."),
+        ],
+        limit: Annotated[int, Field(ge=1, le=100)] = 25,
+    ) -> PersonMatches:
+        """Find directory users, including people outside the chat catalog. Returns candidates, never an
+        automatic choice for ambiguous names. If complete is false, narrow the query or increase limit.
+        Missing profile fields are unavailable. Read now using the existing Teams Graph sign-in."""
+        return await (await services()).organization.find_person(query, limit=limit)
+
+    @mcp.tool(annotations=READ_ONLY)
+    @_logged
+    async def get_manager_chain(person_id: PersonId) -> ManagerChain:
+        """Read a person's manager chain: immediate manager first, root last, excluding the person.
+        An empty managers list means no manager is assigned. Permission failures remain errors."""
+        return await (await services()).organization.get_manager_chain(person_id)
+
+    @mcp.tool(annotations=READ_ONLY)
+    @_logged
+    async def list_direct_reports(person_id: PersonId) -> OrgPeople:
+        """Read a person's direct user reports, following Graph pages and excluding contacts. Not a
+        transitive tree or report count. complete is false if the 100-page or 10,000-user bound is reached.
+        Permission failures remain errors; profiles may contain only an id."""
+        return await (await services()).organization.list_direct_reports(person_id)
+
+    @mcp.tool(annotations=READ_ONLY)
+    @_logged
+    async def list_peers(person_id: PersonId) -> OrgPeople:
+        """Derive peers from the manager's direct user reports minus this person (derived=true).
+        This can differ from Teams' Organization tab; it is not a collaboration ranking. With no manager,
+        returns an empty list and a reason. complete reflects the same bounds as list_direct_reports."""
+        return await (await services()).organization.list_peers(person_id)
 
     @mcp.tool(annotations=READ_ONLY)
     @_logged

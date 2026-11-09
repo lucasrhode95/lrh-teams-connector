@@ -13,6 +13,7 @@ Adapters (wired in bootstrap.py):
 - MessageDeleter: remote/chat_service.py.
 - PresenceReader: remote/presence.py.
 - MeetingSummaryReader: remote/substrate_summaries.py.
+- OrgDirectory: remote/graph_org.py.
 
 Swapping an adapter (another tenant, a policy change) must not change anything above this file.
 """
@@ -30,6 +31,7 @@ from teams_connector.domain.models import (
     Message,
     MessageHit,
     Participant,
+    Person,
     Presence,
     RecordingRef,
     Transcript,
@@ -207,6 +209,28 @@ class People(Protocol):
 
     async def photo(self, user_id: str) -> tuple[bytes, str] | None:
         """A small profile photo and its content type; None when the person has none."""
+        ...
+
+
+class OrgDirectory(Protocol):
+    """Directory reads for validated queries and Entra object ids; no local persistence."""
+
+    async def find(self, query: str, *, limit: int) -> tuple[list[Person], bool]:
+        """Exact object id/email/UPN, or a name prefix. Returns (matches, complete)."""
+        ...
+
+    async def person(self, person_id: str) -> Person: ...
+
+    async def manager_chain(self, person_id: str) -> tuple[Person, list[Person]]:
+        """Subject and all managers, nearest first. No manager is an empty chain."""
+        ...
+
+    async def manager(self, person_id: str) -> Person | None:
+        """The immediate manager; None on 404, after the caller resolved the subject."""
+        ...
+
+    async def direct_reports(self, person_id: str) -> tuple[list[Person], bool]:
+        """User reports only, following server pages. Returns (reports, complete)."""
         ...
 
 
