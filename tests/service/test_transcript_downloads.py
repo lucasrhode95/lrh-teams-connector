@@ -1,8 +1,6 @@
 """Downloading a meeting's transcript as a text file, through the real services and the fake tenant.
 Synthetic meetings only."""
 
-from __future__ import annotations
-
 import pytest
 
 from teams_connector.bootstrap import Services

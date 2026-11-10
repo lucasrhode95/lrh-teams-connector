@@ -7,8 +7,6 @@ qualify, so anything else in the set is skipped. A delete with an uncertain outc
 ambiguous outcome is reported per message. Files a deleted message shared are reported, not removed.
 """
 
-from __future__ import annotations
-
 from collections.abc import Sequence
 
 from teams_connector.domain.errors import (

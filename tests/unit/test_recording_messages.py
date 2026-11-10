@@ -1,8 +1,6 @@
 """Recording messages: the transcript marker, the transcript attachment, and what a caller can see of both.
 Synthetic records and card markup only."""
 
-from __future__ import annotations
-
 from teams_connector.domain.models import RecordingRef
 from teams_connector.remote import chat_service_mapping as mapping
 

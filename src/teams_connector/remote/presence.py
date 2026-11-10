@@ -6,8 +6,6 @@ as Teams Web does. Only the fields the connector reports are kept: calendar data
 availability and capabilities are dropped here. Checked live on 2026-10-15 in one region.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 from teams_connector.domain.errors import Upstream

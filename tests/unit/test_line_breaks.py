@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from teams_connector.remote import chat_service_mapping, graph_mapping
 
 

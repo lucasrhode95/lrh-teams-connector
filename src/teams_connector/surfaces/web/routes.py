@@ -8,8 +8,6 @@ Exports run as background tasks (one at a time) that report progress and can be 
 finished file is downloaded from the job.
 """
 
-from __future__ import annotations
-
 import asyncio
 import contextlib
 import hashlib

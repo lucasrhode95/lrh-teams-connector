@@ -3,8 +3,6 @@
 Synthetic fixtures and the fake tenant only.
 """
 
-from __future__ import annotations
-
 import base64
 from pathlib import Path
 

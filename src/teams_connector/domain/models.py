@@ -4,8 +4,6 @@ These never mirror a Microsoft wire format. The remote/*_mapping.py modules conv
 Graph JSON into them, and nothing else knows those field names.
 """
 
-from __future__ import annotations
-
 from datetime import datetime
 from typing import Any, Literal
 

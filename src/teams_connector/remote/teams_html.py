@@ -5,8 +5,6 @@ URIObject/SWIFT payloads, Graph with ``<at>`` mentions and ``<attachment>`` plac
 renders all of it. Everything here is pure: no network, no Teams field names beyond the markup itself.
 """
 
-from __future__ import annotations
-
 import base64
 import binascii
 import html
@@ -52,12 +50,9 @@ def render_message(
         return RenderedBody("", [])
     if not is_html and not _URI_OBJECT_RE.search(content):
         return RenderedBody(normalize_plain_text(content), [])
-    parser = TeamsHtmlParser(mention_people or {})
-    try:
-        parser.feed(content)
-        parser.close()
-    except AssertionError:  # Python 3.12 rejects some marked sections ("<![x[")
-        return RenderedBody(normalize_plain_text(html.unescape(re.sub(r"<[^>]*>", " ", content))), [])
+    parser = TeamsHtmlParser(mention_people or {})  # Python 3.14's parser never raises on malformed markup
+    parser.feed(content)
+    parser.close()
     return RenderedBody(parser.text(), parser.images)
 
 
@@ -376,7 +371,7 @@ class TeamsHtmlParser(HTMLParser):
                 decoded = json.loads(
                     base64.b64decode("".join(encoded.split()), validate=True).decode("utf-8-sig")
                 )
-            except (binascii.Error, UnicodeDecodeError, ValueError, RecursionError):
+            except binascii.Error, UnicodeDecodeError, ValueError, RecursionError:
                 continue
             card_text.extend(adaptive_card_text(decoded))
         self.parts.append(_merged_lines(visible, card_text))

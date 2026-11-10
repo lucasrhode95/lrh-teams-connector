@@ -1,7 +1,5 @@
 """Transcript JSON: entries, offsets and events, from a synthetic document."""
 
-from __future__ import annotations
-
 import pytest
 
 from teams_connector.remote import transcript_json

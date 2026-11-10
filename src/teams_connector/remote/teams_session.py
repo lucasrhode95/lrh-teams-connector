@@ -5,8 +5,6 @@ account's regional service URLs. Chat Service requests authenticate with the Sky
 with the ``csa`` bearer token plus the Skype token. Graph never needs this session.
 """
 
-from __future__ import annotations
-
 import asyncio
 import time
 from dataclasses import dataclass
@@ -81,7 +79,7 @@ class TeamsSession:
         lifetime = tokens.get("expiresIn") or nested.get("expiresIn")
         try:
             seconds = float(lifetime) if lifetime else _DEFAULT_LIFETIME
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             seconds = _DEFAULT_LIFETIME
         presence = _mapping(data.get("regionGtms")).get("presenceUPS")
         routes = _mapping(data.get("regionGtms"))

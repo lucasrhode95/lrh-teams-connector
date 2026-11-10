@@ -7,8 +7,6 @@ before any output. Libraries that log full request URLs (``httpx``, ``httpcore``
 because their URLs carry conversation and team ids, sharing links and pre-authenticated upload URLs.
 """
 
-from __future__ import annotations
-
 import logging
 import logging.handlers
 import os

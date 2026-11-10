@@ -5,8 +5,6 @@ Built lazily on first use, so a starting process does no network or disk work (a
 capability (requirements §4).
 """
 
-from __future__ import annotations
-
 import asyncio
 from dataclasses import dataclass
 from typing import Any

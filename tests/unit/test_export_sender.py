@@ -4,8 +4,6 @@ A person's name shows as it is. Teams' own events and meeting cards read Teams. 
 read Unknown sender.
 """
 
-from __future__ import annotations
-
 from datetime import UTC, datetime
 
 from teams_connector.domain.models import Message, RecordingRef

@@ -3,8 +3,6 @@
 Commands import their dependencies lazily, so that ``mcp`` never loads the web stack.
 """
 
-from __future__ import annotations
-
 import argparse
 import contextlib
 import sys

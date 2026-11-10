@@ -1,7 +1,5 @@
 """Recording cards: the recording and transcript a card names, from synthetic card markup only."""
 
-from __future__ import annotations
-
 from teams_connector.domain.models import RecordingRef
 from teams_connector.remote import recording_cards
 

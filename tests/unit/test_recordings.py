@@ -3,8 +3,6 @@
 Synthetic fixtures only: the hosts, ids and titles are invented.
 """
 
-from __future__ import annotations
-
 from teams_connector.remote import chat_service_mapping
 from teams_connector.service.export import formatter
 

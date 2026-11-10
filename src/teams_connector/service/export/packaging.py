@@ -9,8 +9,6 @@ The final file is created exclusively in the exports directory (a numbered suffi
 so concurrent exports never overwrite each other.
 """
 
-from __future__ import annotations
-
 import re
 import shutil
 import zipfile

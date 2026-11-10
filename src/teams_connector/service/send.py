@@ -14,8 +14,6 @@ them; anything that could not be deleted, or whose upload outcome is unknown, is
 retried by the transport only when the failure proves nothing was applied.
 """
 
-from __future__ import annotations
-
 import html as markup
 import json
 import math

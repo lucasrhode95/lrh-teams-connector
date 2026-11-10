@@ -4,8 +4,6 @@ Each reader fetches only the URL a message named, from that URL's own allowliste
 Skype token, Graph with the Graph token. Nothing is listed, searched or written beyond the destination file.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any
 

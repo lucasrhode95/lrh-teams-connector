@@ -3,8 +3,6 @@
 Synthetic fixtures only.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from teams_connector.domain.errors import InvalidRequest

@@ -4,8 +4,6 @@ Callers validate plain queries, limits and object ids. This adapter quotes OData
 fields and follows only Graph continuation URLs. Permission failures remain failures, not empty lists.
 """
 
-from __future__ import annotations
-
 from typing import Any
 from uuid import UUID
 

@@ -6,8 +6,6 @@ client, Graph serves channels (more completely than the private catalog), people
 files and sending, but not chat reads (no Chat.Read for this client).
 """
 
-from __future__ import annotations
-
 import asyncio
 import base64
 import contextlib
@@ -117,7 +115,7 @@ class GraphChannels:
                     f"/teams/{segment(team_id)}/channels/{segment(channel_id)}",
                     {"$select": "id,displayName,membershipType"},
                 )
-            except (NotFound, InvalidRequest):
+            except NotFound, InvalidRequest:
                 return None
         return graph_mapping.channel(team, row) if row.get("id") else None
 
@@ -247,7 +245,7 @@ class GraphPeople:
                 content, content_type = await self._graph.get_bytes(
                     f"/users/{user_id.lower()}/photos/{PHOTO_SIZE}/$value", max_bytes=MAX_PHOTO_BYTES
                 )
-            except (NotFound, InvalidRequest):  # no photo (404) or not a directory user (400)
+            except NotFound, InvalidRequest:  # no photo (404) or not a directory user (400)
                 return None
         kind = (content_type or "").split(";", 1)[0].strip().lower()
         if not kind.startswith("image/") or not content:

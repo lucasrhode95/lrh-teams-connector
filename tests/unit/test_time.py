@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from datetime import UTC, datetime, timedelta, timezone
 
 from teams_connector.domain.time import as_utc

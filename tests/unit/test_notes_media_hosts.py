@@ -2,8 +2,6 @@
 
 Synthetic values only."""
 
-from __future__ import annotations
-
 import pytest
 
 from teams_connector import config

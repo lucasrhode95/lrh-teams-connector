@@ -8,8 +8,6 @@ first. The cursor carries the remote link of the page being read and the oldest 
 returned, so a walk continues without skipping or repeating messages.
 """
 
-from __future__ import annotations
-
 from collections.abc import AsyncIterator
 from datetime import datetime
 

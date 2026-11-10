@@ -6,8 +6,6 @@ WAL mode, busy timeout, one connection per operation, short transactions. If SQL
 it is opened, the damaged files are moved to a ``corrupt-<timestamp>`` folder next to it.
 """
 
-from __future__ import annotations
-
 import contextlib
 import logging
 import os

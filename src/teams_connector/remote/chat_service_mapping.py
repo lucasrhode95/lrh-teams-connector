@@ -1,7 +1,5 @@
 """Teams Chat Service / CSA JSON → domain models. The only place that knows their message field names."""
 
-from __future__ import annotations
-
 import hashlib
 import json
 import re
@@ -106,7 +104,7 @@ def parse_time(value: Any) -> datetime | None:
         seconds = value / 1000 if abs(value) > 100_000_000_000 else value
         try:
             return datetime.fromtimestamp(seconds, tz=UTC)
-        except (OverflowError, OSError, ValueError):
+        except OverflowError, OSError, ValueError:
             return None
     elif isinstance(value, str) and value.strip():
         text = value.strip()
@@ -127,7 +125,7 @@ def order_key(message: dict[str, Any]) -> tuple[int, int, datetime, str]:
     """Chronological order: sequence id when present, then arrival time, then id."""
     try:
         sequence, has_sequence = int(message.get("sequenceId")), 1  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         sequence, has_sequence = 0, 0
     timestamp = message_datetime(message) or datetime.min.replace(tzinfo=UTC)
     return (0 if has_sequence else 1, sequence, timestamp, str(message.get("id") or ""))

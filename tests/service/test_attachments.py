@@ -3,8 +3,6 @@
 Synthetic fixtures only: the object ids, hosts and bytes are invented.
 """
 
-from __future__ import annotations
-
 import base64
 import hashlib
 import zipfile

@@ -3,8 +3,6 @@
 Synthetic fixtures only: the page, names and links are invented.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 from teams_connector.remote.loop_notes import meeting_notes, notes_links

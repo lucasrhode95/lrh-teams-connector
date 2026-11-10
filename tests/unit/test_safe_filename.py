@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import pytest
 
 from teams_connector.service.files import safe_filename

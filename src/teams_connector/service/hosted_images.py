@@ -6,8 +6,6 @@ embedded-media tag, is refused rather than sent as a broken or external picture.
 rebuilt to point at the hosted copy; nothing else in the HTML changes.
 """
 
-from __future__ import annotations
-
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from html import escape

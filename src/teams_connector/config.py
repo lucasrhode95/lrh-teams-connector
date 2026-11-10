@@ -1,7 +1,5 @@
 """Product names, local data location, fixed public Teams service URLs, and file-send settings."""
 
-from __future__ import annotations
-
 import os
 import re
 from pathlib import Path

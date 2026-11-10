@@ -5,8 +5,6 @@ separate from Graph/Chat Service history reads; this adapter returns only fields
 Search response and does not claim that a hit id is a history id.
 """
 
-from __future__ import annotations
-
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4

@@ -5,8 +5,6 @@ reported as such instead of ``unknownFutureValue``. Continuation links are opaqu
 Graph host.
 """
 
-from __future__ import annotations
-
 import asyncio
 import io
 import json
@@ -194,7 +192,7 @@ class Graph:
         for response in data.get("responses", []):
             try:
                 key = keys[int(response.get("id"))]
-            except (TypeError, ValueError, IndexError):
+            except TypeError, ValueError, IndexError:
                 raise Upstream("Graph batch response has an unknown request id.") from None
             body_part = response.get("body")
             headers = response.get("headers")

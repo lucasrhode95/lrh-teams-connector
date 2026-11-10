@@ -8,8 +8,6 @@ card alone identifies the recording and its transcript, with no other request (d
 "Transcripts", live 2026-10-16). Pure: no network.
 """
 
-from __future__ import annotations
-
 import html
 import re
 from urllib.parse import urlsplit

@@ -6,8 +6,6 @@ and a quoted phrase matches its words in order. Search reads no history and writ
 pointers, and get_messages reads a conversation's history.
 """
 
-from __future__ import annotations
-
 import re
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
