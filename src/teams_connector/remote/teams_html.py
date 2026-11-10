@@ -267,9 +267,14 @@ def _recording_marker(inner: str) -> str:
 
 
 class TeamsHtmlParser(HTMLParser):
-    """Convert common Teams rich-text markup into readable Markdown-like text."""
+    """Convert common Teams rich-text markup into readable Markdown-like text.
 
-    BLOCK_TAGS = {"p", "div", "section", "article", "tr"}
+    A table becomes one ``| cell | cell |`` line per row; a row of ``<th>`` cells is followed by a
+    ``| --- |`` separator. Line breaks inside a cell become spaces, and a table nested in a cell is
+    flattened into that cell's text.
+    """
+
+    BLOCK_TAGS = {"p", "div", "section", "article"}
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -287,6 +292,9 @@ class TeamsHtmlParser(HTMLParser):
         self.paragraph_starts: list[int] = []
         self.images: list[Attachment] = []
         self.image_names: set[str] = set()
+        self.cell_starts: list[int] = []  # open cells, outermost first: where each one's text begins
+        self.row_cells = 0
+        self.row_is_header = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attributes = {name.lower(): value or "" for name, value in attrs}
@@ -307,7 +315,9 @@ class TeamsHtmlParser(HTMLParser):
             return
         if self.ignored_depth:
             return
-        if tag == "p":
+        if tag in {"table", "tr", "td", "th"}:
+            self._start_table_part(tag)
+        elif tag == "p":
             self.paragraph_starts.append(len(self.parts))
             self._newline(1)
         elif tag in self.BLOCK_TAGS:
@@ -370,7 +380,9 @@ class TeamsHtmlParser(HTMLParser):
             return
         if self.ignored_depth:
             return
-        if tag == "p":
+        if tag in {"table", "tr", "td", "th"}:
+            self._end_table_part(tag)
+        elif tag == "p":
             self._end_paragraph()
         elif tag in self.BLOCK_TAGS or tag == "li":
             self._newline(2 if tag in self.BLOCK_TAGS else 1)
@@ -397,7 +409,7 @@ class TeamsHtmlParser(HTMLParser):
         elif tag == "pre" and self.pre_depth:
             self.pre_depth -= 1
             self._newline(1)
-            self.parts.append("\n```")
+            self.parts.append("```")
             self._newline(2)
         elif tag == "code" and not self.pre_depth:
             self.parts.append("`")
@@ -418,6 +430,46 @@ class TeamsHtmlParser(HTMLParser):
                 data = data[:leading_whitespace] + data[leading_whitespace + 1 :]
             self.suppress_leading_mention_at = False
         self.parts.append(data)
+
+    def _start_table_part(self, tag: str) -> None:
+        if self.cell_starts:  # a table inside a cell is flattened into that cell's text
+            if tag in {"td", "th"}:
+                self.cell_starts.append(len(self.parts))
+            else:
+                self.parts.append(" ")
+            return
+        if tag == "table":
+            self._newline(2)
+        elif tag == "tr":
+            self._newline(1)
+            self.parts.append("|")
+            self.row_cells, self.row_is_header = 0, False
+        else:
+            self.cell_starts.append(len(self.parts))
+            self.row_is_header = self.row_is_header or tag == "th"
+
+    def _end_table_part(self, tag: str) -> None:
+        if tag in {"td", "th"} and self.cell_starts:
+            start = self.cell_starts.pop()
+            cell = " ".join("".join(self.parts[start:]).split())
+            del self.parts[start:]
+            # Positions recorded inside the cell no longer exist.
+            self.last_mention_content_start = self.last_mention_close_index = None
+            if self.cell_starts:
+                self.parts.append(f" {cell} ")
+            else:
+                self.parts.append(f" {cell.replace('|', chr(92) + '|')} |")
+                self.row_cells += 1
+        elif self.cell_starts:
+            self.parts.append(" ")
+        elif tag == "tr":
+            if self.row_is_header and self.row_cells:
+                self._newline(1)
+                self.parts.append("|" + " --- |" * self.row_cells)
+                self.row_is_header = False
+            self._newline(1)
+        elif tag == "table":
+            self._newline(2)
 
     def _image(self, attributes: dict[str, str]) -> None:
         image = inline_images.inline_image(attributes)

@@ -69,6 +69,52 @@ def test_lists_links_quotes_and_code_are_readable() -> None:
         assert part in rendered
 
 
+def test_tables_keep_rows_and_cells() -> None:
+    assert (
+        html(
+            "<p>Team:</p><table><tr><th>Name</th><th>Role</th></tr><tr><td>Sam</td><td>Host</td></tr></table>"
+            "<p>After</p>"
+        )
+        == "Team:\n\n| Name | Role |\n| --- | --- |\n| Sam | Host |\n\nAfter"
+    )
+
+
+def test_teams_composer_cells_read_as_one_line_each() -> None:
+    # The Teams composer wraps every cell in <p>; breaks inside a cell become spaces.
+    content = (
+        "<table><tbody><tr><td><p>Sam</p></td><td><p>Host <b>lead</b></p><p>since May</p></td></tr>"
+        "<tr><td><p><br></p></td><td><span>a|b</span></td></tr></tbody></table>"
+    )
+    assert html(content) == "| Sam | Host **lead** since May |\n| | a\\|b |"
+
+
+def test_cells_keep_mentions_links_and_images() -> None:
+    content = (
+        f"<table><tr><td>{MENTION.format(i=0, name='Example, User')}</td>"
+        "<td><a href='https://example.test'>docs</a></td>"
+        "<td><img src='https://images.example.test/one.png'></td></tr></table>"
+    )
+    assert html(content) == (
+        "| @(Example, User) | docs (https://example.test) | [Image: https://images.example.test/one.png] |"
+    )
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("<table><tr><td>Outer<table><tr><td>x</td><td>y</td></tr></table></td>"
+         "<td colspan=2>z</td></tr></table>", "| Outer x y | z |"),
+        ("<td>loose</td> text <tr><td>open", "loose | text\n|open"),
+    ],
+)  # fmt: skip
+def test_nested_and_malformed_tables_keep_their_text(content: str, expected: str) -> None:
+    assert html(content) == expected
+
+
+def test_code_block_has_no_blank_line_before_its_fence() -> None:
+    assert html("<pre><code>value = 1</code></pre><p>next</p>") == "```\nvalue = 1\n```\n\nnext"
+
+
 def test_attachment_and_image_markers() -> None:
     message = chat_service_mapping.to_message(
         {
