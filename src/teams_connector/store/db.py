@@ -121,14 +121,6 @@ class Store:
             row = db.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
         return str(row[0]) if row else None
 
-    def set_meta(self, **values: str | None) -> None:
-        with self._tx() as db:
-            for key, value in values.items():
-                if value is None:
-                    db.execute("DELETE FROM meta WHERE key = ?", (key,))
-                else:
-                    db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
-
     # ---------------------------------------------------------------- chats
 
     def save_catalog(

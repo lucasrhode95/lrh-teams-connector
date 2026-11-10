@@ -17,8 +17,11 @@ def text(raw: dict[str, Any]) -> str:
     return chat_service_mapping.to_message({"id": "m", **raw}, "c").text
 
 
-def html(content: str) -> str:
-    return text({"messagetype": "RichText/Html", "content": content})
+def html(content: str, people: list[str] | None = None) -> str:
+    """``people[i]`` is the person mention element ``itemid=i`` names, as properties.mentions lists it."""
+    mentions = [{"itemid": i, "mri": f"8:orgid:{person}"} for i, person in enumerate(people or [])]
+    return text({"messagetype": "RichText/Html", "content": content,
+                 "properties": {"mentions": json.dumps(mentions)}})  # fmt: skip
 
 
 def test_rich_html_is_detected_from_the_message_type() -> None:
@@ -29,34 +32,27 @@ def test_rich_html_is_detected_from_the_message_type() -> None:
 @pytest.mark.parametrize("name", ["Example, User", "@Example, User"])
 def test_mentions_are_delimited_without_a_duplicate_at(name: str) -> None:
     assert (
-        html(f"<p>{MENTION.format(i=0, name=name)}, Could you respond?</p>")
+        html(f"<p>{MENTION.format(i=0, name=name)}, Could you respond?</p>", ["u1"])
         == "@(Example, User), Could you respond?"
     )
 
 
 @pytest.mark.parametrize("separator", ["&nbsp;", " ", "\n\t", ""])
-def test_split_mention_fragments_merge(separator: str) -> None:
+def test_one_person_split_into_parts_reads_as_one_mention(separator: str) -> None:
     content = MENTION.format(i=0, name="Example,") + separator + MENTION.format(i=1, name="User")
-    assert html(content) == "@(Example, User)"
+    assert html(content, ["u1", "u1"]) == "@(Example, User)"
 
 
-def test_sequential_people_and_complete_mentions() -> None:
+def test_mentions_merge_by_person_not_by_punctuation() -> None:
     content = (
         MENTION.format(i=0, name="Example,") + MENTION.format(i=1, name="Avery") + " "
-        + MENTION.format(i=2, name="Sample,") + MENTION.format(i=3, name="Blake") + " "
-        + MENTION.format(i=4, name="Smith, Charlie") + MENTION.format(i=5, name="Example, User")
+        + MENTION.format(i=2, name="Blake") + MENTION.format(i=3, name="Sample") + " "
+        + MENTION.format(i=4, name="Smith,") + MENTION.format(i=5, name="Example, User") + " and "
+        + MENTION.format(i=6, name="Smith,") + MENTION.format(i=7, name="Charlie")
     )  # fmt: skip
-    assert html(content) == "@(Example, Avery) @(Sample, Blake) @(Smith, Charlie)@(Example, User)"
-    connective = (
-        MENTION.format(i=0, name="Example, Avery") + " and " + MENTION.format(i=1, name="Sample, Blake")
-    )
-    assert html(connective) == "@(Example, Avery) and @(Sample, Blake)"
-    assert html(MENTION.format(i=0, name="Example,") + MENTION.format(i=1, name="Sample, Blake")) == (
-        "@(Example,)@(Sample, Blake)"
-    )
-    assert (
-        html(MENTION.format(i=0, name="Smith") + " " + MENTION.format(i=1, name="Charlie"))
-        == "@(Smith) @(Charlie)"
+    people = ["avery", "avery", "blake", "blake", "charlie", "user", "charlie", "unlisted"]
+    assert html(content, people[:7]) == (
+        "@(Example, Avery) @(Blake Sample) @(Smith,)@(Example, User) and @(Smith,)@(Charlie)"
     )
 
 
@@ -112,7 +108,7 @@ def test_nested_and_malformed_tables_keep_their_text(content: str, expected: str
 
 
 def test_code_block_has_no_blank_line_before_its_fence() -> None:
-    assert html("<pre><code>value = 1</code></pre><p>next</p>") == "```\nvalue = 1\n```\n\nnext"
+    assert html("<pre><code>a = 1\r\nb = 2</code></pre><p>next</p>") == "```\na = 1\nb = 2\n```\n\nnext"
 
 
 def test_attachment_and_image_markers() -> None:

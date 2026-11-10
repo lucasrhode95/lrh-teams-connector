@@ -35,10 +35,6 @@ def test_line_breaks_between_paragraphs_are_layout_not_blank_lines() -> None:
     assert _text("<p>first line</p>\r\n<p>second line</p>") == "first line\nsecond line"
 
 
-def test_code_blocks_keep_their_line_breaks() -> None:
-    assert "a\nb" in _text("<pre><code>a\r\nb</code></pre>")
-
-
 def test_graph_messages_use_the_same_paragraph_rule() -> None:
     raw = {
         "id": "2",

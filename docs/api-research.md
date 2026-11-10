@@ -270,8 +270,12 @@ What history rows hold, from Chat Service (and Graph for channels). Live unless 
   `edittime`, `deletetime`, `mentions`, `emotions`, `files`, `importance`).
 - User messages are `Text` or `RichText/Html`. A rich message can have `contenttype=text`, so detect HTML
   from `messagetype` as well (both spellings, `messagetype` and `messageType`, occur).
-- `properties.mentions` is a JSON string of `id` and `displayName`; the HTML wraps the name in an element
-  with `itemtype="http://schema.skype.com/Mention"`.
+- `properties.mentions` is a JSON string of `itemid`, `mri`, `displayName`, `mentionType` and `@type`; the
+  HTML wraps each name in an element with `itemtype="http://schema.skype.com/Mention"` and that `itemid`.
+  Teams splits a `Last, First` name into one element per part, each with its own `itemid` and the same
+  `mri` (2026-11-10, 40 chats: all 40 split pairs shared one `mri`; one more split had no comma). Graph's
+  `<at id>` elements do the same, each `mentions[]` entry naming one `mentioned.user.id` (1 of 1 split pair
+  in 15 channels).
 - `properties.emotions` is a JSON string of `key` and `users[]`; the key `follow` marks followers, not a
   reaction.
 - A quoted reply is a `<blockquote itemtype="http://schema.skype.com/Reply" itemid="<message id>">` holding the

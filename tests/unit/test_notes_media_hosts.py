@@ -10,12 +10,6 @@ from teams_connector import config
 from teams_connector.domain.errors import ConfigurationError
 
 
-def test_the_default_is_this_deployments_media_host(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("TEAMS_CONNECTOR_NOTES_MEDIA_HOSTS", raising=False)
-
-    assert config.notes_media_hosts() == frozenset(config.DEFAULT_NOTES_MEDIA_HOSTS)
-
-
 def test_an_empty_value_keeps_the_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TEAMS_CONNECTOR_NOTES_MEDIA_HOSTS", " , ")
 

@@ -123,7 +123,8 @@ async def test_search_chats_refresh_false_is_cache_only(services: Services, fake
     assert fake.calls == []
 
     await services.catalog.list(refresh=True)
-    services.store.set_meta(catalog_at="0")
+    with services.store._tx() as db:  # make the cached catalog stale
+        db.execute("UPDATE meta SET value = '0' WHERE key = 'catalog_at'")
     fake.calls.clear()
     found = await services.catalog.search("sprint", refresh=False)
     assert found.items and found.items[0].name_matched

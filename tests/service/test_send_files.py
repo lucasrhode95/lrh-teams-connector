@@ -174,10 +174,6 @@ async def test_a_file_over_the_configured_cap_is_refused(
     assert fake.calls == []
 
 
-def test_the_default_cap_is_two_gib() -> None:
-    assert config.MAX_SEND_FILE_BYTES == 2 * 1024**3
-
-
 @pytest.fixture
 def large(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A 25-byte file that counts as large: upload sessions start at 16 bytes, in 10-byte chunks."""

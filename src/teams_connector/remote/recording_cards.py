@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import html
 import re
+from urllib.parse import urlsplit
 
 from teams_connector.domain.models import RecordingRef
 
@@ -20,6 +21,7 @@ _ITEM = re.compile(r"<item\b([^>]*?)/?>", re.IGNORECASE)
 _ATTRIBUTE = re.compile(r'([\w:-]+)\s*=\s*"([^"]*)"')
 _TITLE = re.compile(r"<Title\b[^>]*>(.*?)</Title\s*>", re.IGNORECASE | re.DOTALL)
 _TRANSCRIPT_TYPES = ("onedriveforbusinesstranscript", "amstranscript")
+_PLAY_LINK = re.compile(r'<a\b[^>]*\bhref="([^"]+)"', re.IGNORECASE)
 
 
 def recording(content: str) -> RecordingRef | None:
@@ -37,6 +39,17 @@ def recording(content: str) -> RecordingRef | None:
         title=title(content),
         transcript_id=(transcript or {}).get("id") or None,
     )
+
+
+def marker(content: str) -> str:
+    """The card as one line: its title and the SharePoint link Teams shows to play it; media-service
+    views and meeting or call ids are left out."""
+    name = title(content)
+    text = f"[Recording: {name}]" if name else "[Recording]"
+    match = _PLAY_LINK.search(content)
+    link = html.unescape(match.group(1)).strip() if match else ""
+    host = (urlsplit(link).hostname or "").casefold() if link.startswith("https://") else ""
+    return f"{text} {link}" if host == "sharepoint.com" or host.endswith(".sharepoint.com") else text
 
 
 def has_transcript(content: str) -> bool:

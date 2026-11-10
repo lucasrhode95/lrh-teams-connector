@@ -1,8 +1,8 @@
-"""Teams rich text to readable text: HTML, mentions, SWIFT cards, Adaptive Cards, lists, links, code.
+"""Teams rich text to readable text: HTML, mentions, SWIFT cards, Adaptive Cards, lists, links, code, tables.
 
 Both backends deliver Teams message bodies as Teams-flavoured HTML (Chat Service with mention spans and
-URIObject/SWIFT payloads, Graph with ``<at>`` mentions and ``<attachment>`` placeholders). Everything here
-is pure: no network, no Teams field names beyond the markup itself.
+URIObject/SWIFT payloads, Graph with ``<at>`` mentions and ``<attachment>`` placeholders). One parser pass
+renders all of it. Everything here is pure: no network, no Teams field names beyond the markup itself.
 """
 
 from __future__ import annotations
@@ -12,98 +12,70 @@ import binascii
 import html
 import json
 import re
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import urlsplit
 
 from teams_connector.domain.models import Attachment
 from teams_connector.remote import inline_images
 
-_URI_OBJECT_RE = re.compile(
-    r"<URIObject\b(?P<attributes>[^>]*)>(?P<content>.*?)</URIObject\s*>",
-    re.IGNORECASE | re.DOTALL,
-)
-_TAG_RE = re.compile(r"<Swift\b[^>]*>", re.IGNORECASE)
-_RECORDING_TYPE = "video.2/callrecording"
-_RECORDING_TITLE_RE = re.compile(r"<Title\b[^>]*>(.*?)</Title\s*>", re.IGNORECASE | re.DOTALL)
-_RECORDING_LINK_RE = re.compile(r"<a\b[^>]*\bhref=\"([^\"]+)\"", re.IGNORECASE)
-_TAG_END_RE = re.compile(r"</Swift\s*>", re.IGNORECASE)
+_URI_OBJECT_RE = re.compile(r"<URIObject\b", re.IGNORECASE)
+_AT_RE = re.compile(r"<at\b(?P<attributes>[^>]*)>(?P<name>.*?)</at\s*>", re.IGNORECASE | re.DOTALL)
+_AT_ID_RE = re.compile(r"""\bid\s*=\s*["']?(?P<id>[^"'\s>]+)""", re.IGNORECASE)
+_ATTACHMENT_RE = re.compile(r"<attachment\b[^>]*>\s*</attachment\s*>|<attachment\b[^>]*/>", re.IGNORECASE)
+_MENTION_SPAN = '<span itemtype="http://schema.skype.com/Mention" itemid="{id}">{name}</span>'
+_TABLE_TAGS = {"table", "tr", "td", "th"}
 
 
-class _TagAttributeParser(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.attributes: dict[str, str] = {}
+@dataclass(frozen=True)
+class RenderedBody:
+    """A message body's readable text, and its inline images as attachments, named as the text names them."""
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self.attributes = {name.lower(): value or "" for name, value in attrs}
-
-    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self.handle_starttag(tag, attrs)
+    text: str
+    images: list[Attachment]
 
 
-def _tag_attributes(source: str, tag_name: str) -> dict[str, str]:
-    parser = _TagAttributeParser()
+def render_message(
+    content: str, *, is_html: bool, mention_people: Mapping[str, str] | None = None
+) -> RenderedBody:
+    """Readable text for one Teams message body (HTML or plain text), with its inline images.
+
+    ``mention_people`` maps a mention element's ``itemid`` to the person it names, from the message's own
+    mention list. Teams splits a ``Last, First`` name into one element per part; adjacent elements naming
+    the same person read as one ``@(Last, First)`` mention. A plain-text body holding a card (URIObject) is
+    parsed as markup so the card's payload never shows.
+    """
+    if not _URI_OBJECT_RE.search(content) and _URI_OBJECT_RE.search(html.unescape(content)):
+        content = html.unescape(content)  # a card stored escaped
+    if not content:
+        return RenderedBody("", [])
+    if not is_html and not _URI_OBJECT_RE.search(content):
+        return RenderedBody(normalize_plain_text(content), [])
+    parser = TeamsHtmlParser(mention_people or {})
     try:
-        parser.feed(f"<{tag_name} {source}>")
+        parser.feed(content)
         parser.close()
-    except Exception:
-        return {}
-    return parser.attributes
+    except AssertionError:  # Python 3.12 rejects some marked sections ("<![x[")
+        return RenderedBody(normalize_plain_text(html.unescape(re.sub(r"<[^>]*>", " ", content))), [])
+    return RenderedBody(parser.text(), parser.images)
 
 
-def _remove_swift_payload_elements(source: str) -> tuple[str, list[str]]:
-    """Remove every Swift b64 element, returning its encoded values for decoding."""
-    output: list[str] = []
-    payloads: list[str] = []
-    cursor = 0
-    for opening in _TAG_RE.finditer(source):
-        tag_attributes = opening.group(0)[len("<Swift") : -1].strip()
-        attrs = _tag_attributes(tag_attributes, "Swift")
-        payload = attrs.get("b64")
-        if payload is None:
-            continue
+def graph_html(content: str) -> str:
+    """Graph's message HTML in Chat Service form: each ``<at id="n">`` mention becomes a Teams mention span
+    with ``itemid="n"``, and the ``<attachment>`` placeholders (rendered separately) are removed."""
+    content = _ATTACHMENT_RE.sub("", content)
 
-        output.append(source[cursor : opening.start()])
-        payloads.append(payload)
-        end = opening.end()
-        if not opening.group(0).rstrip().endswith("/>"):
-            closing = _TAG_END_RE.search(source, end)
-            if closing is not None:
-                end = closing.end()
-        cursor = end
-    output.append(source[cursor:])
-    return "".join(output), payloads
+    def span(match: re.Match[str]) -> str:
+        identifier = _AT_ID_RE.search(match.group("attributes"))
+        item = html.escape(identifier.group("id"), quote=True) if identifier else ""
+        return _MENTION_SPAN.format(id=item, name=match.group("name"))
+
+    return _AT_RE.sub(span, content)
 
 
-def _normalized_for_deduplication(value: str) -> str:
-    without_markdown = re.sub(r"[*_`]+", "", value)
-    return re.sub(r"[^\w]+", " ", without_markdown, flags=re.UNICODE).casefold().strip()
-
-
-def _merge_uri_object_text(visible_text: str, card_text: list[str]) -> str:
-    """Merge visible fallback and card text without repeating identical content."""
-    output: list[str] = []
-    seen: list[str] = []
-    for value in [visible_text, *card_text]:
-        for line in value.splitlines() or [value]:
-            cleaned = re.sub(r"[\t ]+", " ", html.unescape(line)).strip()
-            normalized = _normalized_for_deduplication(cleaned)
-            if not normalized:
-                continue
-            if any(
-                normalized == previous or (len(normalized) >= 3 and f" {normalized} " in f" {previous} ")
-                for previous in seen
-            ):
-                continue
-            output.append(cleaned)
-            seen.append(normalized)
-    return "\n".join(output)
-
-
-def _adaptive_card_text(payload: Any) -> list[str]:
-    """Extract user-facing text from Teams card envelopes and Adaptive Cards."""
+def adaptive_card_text(payload: Any) -> list[str]:
+    """User-facing text of a Teams card envelope or Adaptive Card (deduplicated, in order)."""
     output: list[str] = []
 
     def add(value: Any) -> None:
@@ -119,25 +91,18 @@ def _adaptive_card_text(payload: Any) -> list[str]:
             return
         if not isinstance(node, dict):
             return
-
         node_type = str(node.get("type", "")).casefold()
-        if node_type == "textblock":
-            add(node.get("text"))
-        elif node_type == "richtextblock":
-            visit(node.get("inlines", []))
-        elif node_type == "textrun":
+        if node_type in ("textblock", "textrun"):
             add(node.get("text"))
         elif node_type == "factset":
-            facts = node.get("facts", [])
-            if isinstance(facts, list):
-                for fact in facts:
-                    if not isinstance(fact, dict):
-                        continue
-                    title, value = fact.get("title"), fact.get("value")
-                    if title is not None and value is not None:
-                        add(f"{title}: {value}")
-                    else:
-                        add(title if title is not None else value)
+            for fact in node.get("facts") or []:
+                if not isinstance(fact, dict):
+                    continue
+                title, value = fact.get("title"), fact.get("value")
+                if title is not None and value is not None:
+                    add(f"{title}: {value}")
+                else:
+                    add(title if title is not None else value)
         elif node_type == "image":
             add(node.get("altText"))
         elif node_type.startswith("action."):
@@ -149,36 +114,21 @@ def _adaptive_card_text(payload: Any) -> list[str]:
                 add(f"Field ID: {node['id']}")
             add(node.get("value"))
             add(node.get("placeholder"))
-
-        # These are the card's content-bearing children. Other properties such
-        # as spacing, color, width, alignment, and image URLs are presentation.
-        for key in (
-            "body",
-            "items",
-            "columns",
-            "actions",
-            "inlines",
-            "images",
-        ):
+        # The card's content-bearing children; other properties (spacing, colour, image URLs) are layout.
+        for key in ("body", "items", "columns", "actions", "inlines", "images"):
             child = node.get(key)
             if isinstance(child, (dict, list)):
                 visit(child)
 
     if not isinstance(payload, dict):
         return output
-
     add(payload.get("summary"))
     add(payload.get("text"))
-    attachments = payload.get("attachments", [])
-    if isinstance(attachments, list):
-        for attachment in attachments:
-            if isinstance(attachment, dict):
-                content = attachment.get("content")
-                if isinstance(content, dict):
-                    visit(content)
+    for attachment in payload.get("attachments") or []:
+        if isinstance(attachment, dict) and isinstance(attachment.get("content"), dict):
+            visit(attachment["content"])
     if str(payload.get("type", "")).casefold() == "adaptivecard":
         visit(payload)
-
     # A repeated block can occur in both the Teams summary and card body.
     deduplicated: list[str] = []
     seen: set[str] = set()
@@ -190,123 +140,80 @@ def _adaptive_card_text(payload: Any) -> list[str]:
     return deduplicated
 
 
-def _render_visible_html(source: str) -> str:
-    parser = TeamsHtmlParser()
-    try:
-        parser.feed(source)
-        parser.close()
-        return parser.text()
-    except Exception:
-        return html.unescape(re.sub(r"<[^>]*>", "", source)).strip()
+def normalize_plain_text(content: str) -> str:
+    lines = [re.sub(r"[\t ]+", " ", line).strip() for line in content.splitlines()]
+    output: list[str] = []
+    blank = False
+    for line in lines:
+        if not line:
+            if output and not blank:
+                output.append("")
+            blank = True
+            continue
+        output.append(line)
+        blank = False
+    while output and not output[-1]:
+        output.pop()
+    return "\n".join(output)
 
 
-def _rewrite_swift_uriobjects(source: str, *, as_html: bool) -> tuple[str, bool]:
-    """Replace SWIFT.1 URIObjects with safe visible and decoded card text."""
-    found = False
+@dataclass
+class _Card:
+    """An open URIObject: where its visible text starts, its type and the SWIFT payloads it carries."""
 
-    def replace(match: re.Match[str]) -> str:
-        nonlocal found
-        outer_attrs = _tag_attributes(match.group("attributes"), "URIObject")
-        inner = match.group("content")
-        if outer_attrs.get("type", "").casefold().startswith(_RECORDING_TYPE):
-            found = True
-            marker = _recording_marker(inner)
-            return html.escape(marker, quote=False) if as_html else marker
-        visible_source, encoded_payloads = _remove_swift_payload_elements(inner)
-        if outer_attrs.get("type", "").casefold() != "swift.1":
-            # Even if a non-card URIObject has a Swift field, never print its
-            # encoded representation into an export.
-            if not encoded_payloads:
-                return match.group(0)
-            found = True
-            visible = _render_visible_html(visible_source)
-            return html.escape(visible, quote=False) if as_html else visible
-
-        found = True
-        visible = _render_visible_html(visible_source)
-        card_text: list[str] = []
-        for encoded in encoded_payloads:
-            compact = "".join(encoded.split())
-            try:
-                raw = base64.b64decode(compact, validate=True)
-                decoded = json.loads(raw.decode("utf-8-sig"))
-                card_text.extend(_adaptive_card_text(decoded))
-            except (
-                binascii.Error,
-                UnicodeDecodeError,
-                json.JSONDecodeError,
-                RecursionError,
-                ValueError,
-            ):
-                continue
-
-        merged = _merge_uri_object_text(visible, card_text)
-        return html.escape(merged, quote=False) if as_html else merged
-
-    rewritten = _URI_OBJECT_RE.sub(replace, source)
-    # Also strip an orphaned Swift payload element if the surrounding Teams
-    # markup is malformed and did not match the complete URIObject wrapper.
-    rewritten, orphan_payloads = _remove_swift_payload_elements(rewritten)
-    return rewritten, found or bool(orphan_payloads)
+    start: int
+    kind: str
+    payloads: list[str] = field(default_factory=list)
 
 
-def _recording_marker(inner: str) -> str:
-    """A meeting recording card as one line: its title and the link Teams shows to play it (the OneDrive or
-    SharePoint copy). The card's other fields (media-service views, meeting and call ids) are left out."""
-    title_match = _RECORDING_TITLE_RE.search(inner)
-    title = (
-        " ".join(html.unescape(re.sub(r"<[^>]*>", "", title_match.group(1))).split()) if title_match else ""
-    )
-    marker = f"[Recording: {title}]" if title else "[Recording]"
-    link_match = _RECORDING_LINK_RE.search(inner)
-    link = html.unescape(link_match.group(1)).strip() if link_match else ""
-    host = (urlsplit(link).hostname or "").casefold() if link.startswith("https://") else ""
-    if host == "sharepoint.com" or host.endswith(".sharepoint.com"):
-        return f"{marker} {link}"
-    return marker
+@dataclass
+class _Mention:
+    tag: str
+    person: str | None
+    content_start: int
 
 
 class TeamsHtmlParser(HTMLParser):
-    """Convert common Teams rich-text markup into readable Markdown-like text.
+    """Convert Teams rich-text markup into readable Markdown-like text.
 
-    A table becomes one ``| cell | cell |`` line per row; a row of ``<th>`` cells is followed by a
-    ``| --- |`` separator. Line breaks inside a cell become spaces, and a table nested in a cell is
-    flattened into that cell's text.
+    - A mention reads ``@(Name)``; adjacent mention elements naming the same person are one mention.
+    - A SWIFT card (URIObject) reads as its visible fallback text merged with its decoded card text; the
+      encoded payload never shows, in any URIObject or on its own.
+    - A table becomes one ``| cell | cell |`` line per row; a row of ``<th>`` cells is followed by a
+      ``| --- |`` separator. Line breaks inside a cell become spaces, and a table nested in a cell is
+      flattened into that cell's text.
     """
 
     BLOCK_TAGS = {"p", "div", "section", "article"}
 
-    def __init__(self) -> None:
+    def __init__(self, mention_people: Mapping[str, str]) -> None:
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
-        self.list_stack: list[dict[str, Any]] = []
-        self.link_stack: list[tuple[int, str]] = []
-        self.pre_depth = 0
-        self.ignored_depth = 0
-        self.suppress_leading_mention_at = False
-        self.mention_tags: list[str] = []
-        self.mention_content_starts: list[int] = []
-        self.mention_join_snapshots: list[tuple[list[str], int] | None] = []
-        self.last_mention_content_start: int | None = None
-        self.last_mention_close_index: int | None = None
-        self.paragraph_starts: list[int] = []
         self.images: list[Attachment] = []
         self.image_names: set[str] = set()
+        self.mention_people = mention_people
+        self.list_stack: list[dict[str, Any]] = []
+        self.link_stack: list[tuple[int, str]] = []
+        self.paragraph_starts: list[int] = []
+        self.pre_depth = 0
+        self.ignored_depth = 0
+        self.mentions: list[_Mention] = []
+        # The last closed mention, while only whitespace follows it: its person and its ")" position.
+        self.previous_mention: tuple[str, int] | None = None
+        self.cards: list[_Card] = []
         self.cell_starts: list[int] = []  # open cells, outermost first: where each one's text begins
         self.row_cells = 0
         self.row_is_header = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attributes = {name.lower(): value or "" for name, value in attrs}
-        item_type = attributes.get("itemtype", "").lower()
-        if item_type.rstrip("/").endswith("/mention"):
-            join_snapshot = self._join_previous_mention()
-            self.mention_tags.append(tag)
-            self.mention_join_snapshots.append(join_snapshot)
-            self.suppress_leading_mention_at = True
-            if join_snapshot is None:
-                self.parts.append("@(")
-            self.mention_content_starts.append(len(self.parts))
+        if attributes.get("itemtype", "").lower().rstrip("/").endswith("/mention"):
+            self._start_mention(tag, attributes.get("itemid", ""))
+        if tag == "swift":  # a card payload: kept for decoding, never shown
+            if self.cards and attributes.get("b64") is not None:
+                self.cards[-1].payloads.append(attributes["b64"])
+            self.ignored_depth += 1
+            return
         if tag == "img" and not self.ignored_depth:
             self._image(attributes)
             return
@@ -315,7 +222,10 @@ class TeamsHtmlParser(HTMLParser):
             return
         if self.ignored_depth:
             return
-        if tag in {"table", "tr", "td", "th"}:
+        if tag == "uriobject":
+            self._newline(1)
+            self.cards.append(_Card(len(self.parts), attributes.get("type", "").casefold()))
+        elif tag in _TABLE_TAGS:
             self._start_table_part(tag)
         elif tag == "p":
             self.paragraph_starts.append(len(self.parts))
@@ -325,7 +235,7 @@ class TeamsHtmlParser(HTMLParser):
         elif tag == "br":
             self.parts.append("\n")  # hard break: two in a row, or one after a paragraph, leave a blank line
         elif tag in {"ul", "ol"}:
-            self.list_stack.append({"tag": tag, "next": self._positive_int(attributes.get("start"), 1)})
+            self.list_stack.append({"tag": tag, "next": _positive_int(attributes.get("start"), 1)})
         elif tag == "li":
             self._newline(1)
             depth = max(0, len(self.list_stack) - 1)
@@ -346,8 +256,7 @@ class TeamsHtmlParser(HTMLParser):
             self._newline(2)
             self.parts.append("> ")
         elif tag == "a":
-            href = attributes.get("href", "").strip()
-            self.link_stack.append((len(self.parts), href))
+            self.link_stack.append((len(self.parts), attributes.get("href", "").strip()))
         elif tag == "pre":
             self._newline(2)
             self.parts.append("```\n")
@@ -356,31 +265,16 @@ class TeamsHtmlParser(HTMLParser):
             self.parts.append("`")
 
     def handle_endtag(self, tag: str) -> None:
-        if self.mention_tags and tag == self.mention_tags[-1]:
-            self.mention_tags.pop()
-            content_start = self.mention_content_starts.pop()
-            join_snapshot = self.mention_join_snapshots.pop()
-            self.suppress_leading_mention_at = False
-            if join_snapshot is not None:
-                snapshot, previous_content_start = join_snapshot
-                second_content = self.parts[content_start:]
-                second_name = self._plain_mention_text(second_content)
-                if not second_name or "," in second_name:
-                    self.parts = snapshot + ["@(", *second_content, ")"]
-                    self.last_mention_content_start = len(snapshot) + 1
-                else:
-                    self.parts.append(")")
-                    self.last_mention_content_start = previous_content_start
-            else:
-                self.parts.append(")")
-                self.last_mention_content_start = content_start
-            self.last_mention_close_index = len(self.parts) - 1
-        if tag in {"script", "style"} and self.ignored_depth:
+        if self.mentions and tag == self.mentions[-1].tag:
+            self._end_mention()
+        if tag in {"script", "style", "swift"} and self.ignored_depth:
             self.ignored_depth -= 1
             return
         if self.ignored_depth:
             return
-        if tag in {"table", "tr", "td", "th"}:
+        if tag == "uriobject" and self.cards:
+            self._end_card(self.cards.pop())
+        elif tag in _TABLE_TAGS:
             self._end_table_part(tag)
         elif tag == "p":
             self._end_paragraph()
@@ -402,10 +296,7 @@ class TeamsHtmlParser(HTMLParser):
             start, href = self.link_stack.pop()
             label = "".join(self.parts[start:]).strip()
             del self.parts[start:]
-            if label and href and href != label:
-                self.parts.append(f"{label} ({href})")
-            else:
-                self.parts.append(label or href)
+            self.parts.append(f"{label} ({href})" if label and href and href != label else label or href)
         elif tag == "pre" and self.pre_depth:
             self.pre_depth -= 1
             self._newline(1)
@@ -417,19 +308,79 @@ class TeamsHtmlParser(HTMLParser):
     def handle_data(self, data: str) -> None:
         if self.ignored_depth:
             return
-        has_line_break = "\n" in data.replace("\r", "\n")
-        if not self.pre_depth and not data.strip() and has_line_break and self._at_line_start():
-            # Teams stores a line break between two paragraphs as whitespace; at a line start it is layout.
-            return
-        if not self.mention_tags and data.strip():
-            self.last_mention_content_start = None
-            self.last_mention_close_index = None
-        if self.suppress_leading_mention_at and data.strip():
-            leading_whitespace = len(data) - len(data.lstrip())
-            if data[leading_whitespace:].startswith("@"):
-                data = data[:leading_whitespace] + data[leading_whitespace + 1 :]
-            self.suppress_leading_mention_at = False
+        if (
+            not self.pre_depth
+            and not data.strip()
+            and "\n" in data.replace("\r", "\n")
+            and self._at_line_start()
+        ):
+            return  # Teams stores a break between paragraphs as whitespace; at a line start it is layout
+        if data.strip():
+            self.previous_mention = None
+            mention = self.mentions[-1] if self.mentions else None
+            if mention is not None and len(self.parts) == mention.content_start:
+                data = data.lstrip().removeprefix("@")  # Chat Service may keep the "@" inside the element
         self.parts.append(data)
+
+    def text(self) -> str:
+        raw = "".join(self.parts).replace("\r", "").replace("\xa0", " ")
+        result: list[str] = []
+        in_code = False
+        previous_blank = False
+        for line in raw.split("\n"):
+            if line.strip().startswith("```"):
+                in_code = not in_code
+                result.append(line.strip())
+                previous_blank = False
+                continue
+            if in_code:
+                result.append(line.rstrip())
+                continue
+            cleaned = re.sub(r"[\t ]+", " ", line).strip()
+            if not cleaned:
+                if result and not previous_blank:
+                    result.append("")
+                previous_blank = True
+                continue
+            result.append(cleaned)
+            previous_blank = False
+        while result and not result[-1]:
+            result.pop()
+        return "\n".join(result).strip()
+
+    def _start_mention(self, tag: str, item_id: str) -> None:
+        person = self.mention_people.get(item_id)
+        previous = self.previous_mention
+        if person is not None and previous is not None and previous[0] == person:
+            del self.parts[previous[1] :]  # reopen the previous mention: drop its ")" and the whitespace
+            self.parts.append(" ")
+        else:
+            self.parts.append("@(")
+        self.mentions.append(_Mention(tag, person, len(self.parts)))
+        self.previous_mention = None
+
+    def _end_mention(self) -> None:
+        mention = self.mentions.pop()
+        self.parts.append(")")
+        self.previous_mention = (mention.person, len(self.parts) - 1) if mention.person else None
+
+    def _end_card(self, card: _Card) -> None:
+        """A SWIFT card reads as its visible text and its decoded card text, each line once."""
+        if card.kind != "swift.1":
+            return  # any other URIObject keeps its visible text (its payloads were already left out)
+        visible = "".join(self.parts[card.start :])
+        del self.parts[card.start :]
+        card_text: list[str] = []
+        for encoded in card.payloads:
+            try:
+                decoded = json.loads(
+                    base64.b64decode("".join(encoded.split()), validate=True).decode("utf-8-sig")
+                )
+            except (binascii.Error, UnicodeDecodeError, ValueError, RecursionError):
+                continue
+            card_text.extend(adaptive_card_text(decoded))
+        self.parts.append(_merged_lines(visible, card_text))
+        self._newline(1)
 
     def _start_table_part(self, tag: str) -> None:
         if self.cell_starts:  # a table inside a cell is flattened into that cell's text
@@ -453,8 +404,7 @@ class TeamsHtmlParser(HTMLParser):
             start = self.cell_starts.pop()
             cell = " ".join("".join(self.parts[start:]).split())
             del self.parts[start:]
-            # Positions recorded inside the cell no longer exist.
-            self.last_mention_content_start = self.last_mention_close_index = None
+            self.previous_mention = None  # positions recorded inside the cell no longer exist
             if self.cell_starts:
                 self.parts.append(f" {cell} ")
             else:
@@ -484,34 +434,6 @@ class TeamsHtmlParser(HTMLParser):
         if image.attachment is not None:
             self.images.append(image.attachment.model_copy(update={"name": name}))
 
-    def _join_previous_mention(self) -> tuple[list[str], int] | None:
-        close_index = self.last_mention_close_index
-        content_start = self.last_mention_content_start
-        if self.mention_tags or close_index is None or content_start is None:
-            return None
-        if not self.parts[close_index].endswith(")"):
-            return None
-
-        first_name = self._plain_mention_text(self.parts[content_start:close_index])
-        if not first_name.endswith(","):
-            return None
-
-        separator = "".join(self.parts[close_index + 1 :])
-        if any(character not in " \t\r\n\xa0" for character in separator):
-            return None
-
-        snapshot = list(self.parts)
-        del self.parts[close_index:]
-        self.parts.append(" ")
-        self.last_mention_close_index = None
-        return snapshot, content_start
-
-    @staticmethod
-    def _plain_mention_text(parts: list[str]) -> str:
-        text = "".join(parts).replace("\xa0", " ")
-        text = re.sub(r"[*_`]+", "", text)
-        return text.strip()
-
     def _end_paragraph(self) -> None:
         """Consecutive paragraphs read as consecutive lines, as Teams shows them. An empty paragraph
         (no text, or only a line break) keeps its blank line."""
@@ -530,106 +452,35 @@ class TeamsHtmlParser(HTMLParser):
         if trailing < count:
             self.parts.append("\n" * (count - trailing))
 
-    @staticmethod
-    def _positive_int(value: str | None, fallback: int) -> int:
-        if value is None:
-            return fallback
-        try:
-            parsed = int(value)
-        except ValueError:
-            return fallback
-        return parsed if parsed > 0 else fallback
 
-    def text(self) -> str:
-        raw = "".join(self.parts).replace("\r", "").replace("\xa0", " ")
-        result: list[str] = []
-        in_code = False
-        previous_blank = False
-        for line in raw.split("\n"):
-            if line.strip().startswith("```"):
-                in_code = not in_code
-                result.append(line.strip())
-                previous_blank = False
-                continue
-            if in_code:
-                result.append(line.rstrip())
-                continue
-            cleaned = re.sub(r"[\t ]+", " ", line).strip()
-            if not cleaned:
-                if result and not previous_blank:
-                    result.append("")
-                previous_blank = True
-                continue
-            result.append(cleaned)
-            previous_blank = False
-        while result and not result[-1]:
-            result.pop()
-        return "\n".join(result).strip()
-
-
-_AT_RE = re.compile(r"<at\b[^>]*>(?P<name>.*?)</at\s*>", re.IGNORECASE | re.DOTALL)
-_ATTACHMENT_RE = re.compile(r"<attachment\b[^>]*>\s*</attachment\s*>|<attachment\b[^>]*/>", re.IGNORECASE)
-_MENTION_SPAN = '<span itemtype="http://schema.skype.com/Mention">{name}</span>'
-
-
-def adaptive_card_text(payload: Any) -> list[str]:
-    """User-facing text of a Teams card envelope or Adaptive Card (deduplicated, in order)."""
-    return _adaptive_card_text(payload)
-
-
-@dataclass(frozen=True)
-class RenderedBody:
-    """A message body's readable text, and its inline images as attachments, named as the text names them."""
-
-    text: str
-    images: list[Attachment]
-
-
-def render_body(content: str, *, is_html: bool) -> str:
-    """Readable text for one Teams message body (HTML or plain text)."""
-    return render_message(content, is_html=is_html).text
-
-
-def render_message(content: str, *, is_html: bool) -> RenderedBody:
-    """Readable text for one Teams message body (HTML or plain text), with its inline images."""
-    decoded_content = html.unescape(content)
-    if not re.search(r"<URIObject\b", content, re.IGNORECASE) and re.search(
-        r"<URIObject\b", decoded_content, re.IGNORECASE
-    ):
-        content = decoded_content
-    content, _ = _rewrite_swift_uriobjects(content, as_html=is_html)
-    if not content:
-        return RenderedBody("", [])
-    if not is_html:
-        return RenderedBody(normalize_plain_text(content), [])
-    parser = TeamsHtmlParser()
-    try:
-        parser.feed(content)
-        parser.close()
-        return RenderedBody(parser.text(), parser.images)
-    except Exception:
-        return RenderedBody(_render_visible_html(content), [])
-
-
-def graph_html(content: str) -> str:
-    """Graph's message HTML in Chat Service form: ``<at>`` mentions become Teams mention spans, and the
-    ``<attachment>`` placeholders (rendered separately) are removed."""
-    content = _ATTACHMENT_RE.sub("", content)
-    return _AT_RE.sub(lambda m: _MENTION_SPAN.format(name=m.group("name")), content)
-
-
-def normalize_plain_text(content: str) -> str:
-    lines = [re.sub(r"[\t ]+", " ", line).strip() for line in content.splitlines()]
+def _merged_lines(visible: str, card_text: list[str]) -> str:
+    """Visible fallback and card text as lines, without repeating a line another one already contains."""
     output: list[str] = []
-    blank = False
-    for line in lines:
-        if not line:
-            if output and not blank:
-                output.append("")
-            blank = True
-            continue
-        output.append(line)
-        blank = False
-    while output and not output[-1]:
-        output.pop()
+    seen: list[str] = []
+    for value in [visible, *card_text]:
+        for line in value.splitlines() or [value]:
+            cleaned = re.sub(r"[\t ]+", " ", line).strip()
+            normalized = _normalized_for_deduplication(cleaned)
+            if not normalized:
+                continue
+            if any(
+                normalized == previous or (len(normalized) >= 3 and f" {normalized} " in f" {previous} ")
+                for previous in seen
+            ):
+                continue
+            output.append(cleaned)
+            seen.append(normalized)
     return "\n".join(output)
+
+
+def _normalized_for_deduplication(value: str) -> str:
+    without_markdown = re.sub(r"[*_`]+", "", value)
+    return re.sub(r"[^\w]+", " ", without_markdown, flags=re.UNICODE).casefold().strip()
+
+
+def _positive_int(value: str | None, fallback: int) -> int:
+    try:
+        parsed = int(value or "")
+    except ValueError:
+        return fallback
+    return parsed if parsed > 0 else fallback
