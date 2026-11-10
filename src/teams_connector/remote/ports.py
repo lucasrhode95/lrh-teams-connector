@@ -10,7 +10,7 @@ Adapters (wired in bootstrap.py):
 - People, ChatWriter, FileSharer, FileReader, MeetingNotesReader: remote/graph_teams.py.
 - TranscriptReader, VideoSearch: remote/graph_transcripts.py. ImageReader:
   remote/image_readers.py.
-- MessageDeleter: remote/chat_service.py.
+- MessageDeleter: remote/chat_service.py. MessageEditor: remote/chat_edit.py.
 - PresenceReader: remote/presence.py.
 - MeetingSummaryReader: remote/substrate_summaries.py.
 - OrgDirectory: remote/graph_org.py.
@@ -295,6 +295,53 @@ class MessageDeleter(Protocol):
     async def delete(self, chat: Chat, message_id: str) -> None:
         """Soft-delete one of the user's own messages in a chat. Never resent after an ambiguous outcome,
         which raises WriteOutcomeUnknown."""
+        ...
+
+
+@dataclass(frozen=True)
+class UploadedImage:
+    name: str
+    object_id: str
+    view_url: str
+    object_url: str
+
+
+@dataclass(frozen=True)
+class EditReceipt:
+    verified: bool
+    message: Message | None = None
+    reason: str | None = None
+
+
+class PreparedEdit(Protocol):
+    @property
+    def message(self) -> Message: ...
+
+    def check(self, body: str | None, *, new_images: int, remove_names: Sequence[str]) -> None:
+        """Refuse, before any upload, an edit whose content would be too large."""
+        ...
+
+    async def replace(
+        self,
+        body: str | None,
+        *,
+        files: Sequence[UploadedFile],
+        images: Sequence[UploadedImage],
+        remove_names: Sequence[str],
+    ) -> EditReceipt:
+        """Recheck the snapshot, replace once, then read back. Inputs were validated by the service."""
+        ...
+
+
+class MessageEditor(Protocol):
+    async def prepare(self, chat: Chat, message_id: str) -> PreparedEdit:
+        """Read structured source and retain a short-lived edit snapshot, never persisted."""
+        ...
+
+    async def upload_image(self, chat: Chat, name: str, image: HostedImage) -> UploadedImage: ...
+
+    async def discard_image(self, image: UploadedImage) -> None:
+        """Remove a new upload after a definite failure, never an existing attachment."""
         ...
 
 

@@ -82,8 +82,8 @@ class Sender:
         inline ``images`` (absolute paths). Without files or images exactly one of text or html is
         required; with them, at most one. Every argument is validated here, image sizes included; nothing
         is uploaded or sent until all of it is valid."""
-        local_files = _check_files(files or [])
-        inline = _check_images(images or [])
+        local_files = check_files(files or [])
+        inline = check_images(images or [])
         if (text is not None and html is not None) or (
             text is None and html is None and not local_files and not inline
         ):
@@ -93,8 +93,8 @@ class Sender:
             )
         named: set[str] = set()
         if text is not None:
-            _check_text(text)
-            body = _paragraphs(text)
+            check_text(text)
+            body = paragraphs(text)
         elif html is not None:
             body, named = _check_html(html, inline)
         else:
@@ -127,12 +127,14 @@ class Sender:
                 raise
             # The message may have been posted with these files: they stay.
             kept = [(f, "the message may have been posted with it") for f in uploaded]
-            raise _report(exc, action="The message may not have been posted", kept=kept) from exc
+            raise failure_report(exc, action="The message may not have been posted", kept=kept) from exc
         except ConnectorError as exc:
             if not uploaded:
                 raise
             deleted, kept = await self._discard(uploaded)
-            raise _report(exc, action="The message was not posted", deleted=deleted, kept=kept) from exc
+            raise failure_report(
+                exc, action="The message was not posted", deleted=deleted, kept=kept
+            ) from exc
         return SendResult(
             conversation_id=chat.id,
             chat_name=chat.name,
@@ -143,26 +145,7 @@ class Sender:
         )
 
     async def _recipients(self, chat: Chat) -> list[str]:
-        """The chat's other people, by Entra object id. Apps (``28:``) are left out. Anyone else without an
-        object id in this directory (no id at all, or a federated or anonymous member) cannot be granted
-        access, so the send is refused rather than posting a file someone cannot open. The self chat has
-        nobody to share with."""
-        if chat.kind == "self":
-            return []
-        people = []
-        for member in await self._members.members(chat):
-            member_id = (member.id or "").lower()
-            if member_id == self._me_id or member_id.startswith("28:"):
-                continue
-            if not _is_object_id(member_id):
-                raise InvalidRequest(
-                    "This chat has a member outside your organization's directory; "
-                    "files cannot be shared with them."
-                )
-            people.append(member_id)
-        if not people:
-            raise InvalidRequest("This chat has no other members to share files with.")
-        return people
+        return await chat_recipients(self._members, chat, self._me_id)
 
     async def _upload_and_share(self, paths: list[Path], recipients: list[str]) -> list[UploadedFile]:
         """Upload every file, then share each (unless nobody else is in the chat). On a failure nothing is
@@ -175,7 +158,7 @@ class Sender:
                 if not uploaded and not isinstance(exc, WriteOutcomeUnknown):
                     raise
                 deleted, kept = await self._discard(uploaded)
-                raise _report(
+                raise failure_report(
                     exc,
                     action=f"Uploading {path.name} failed; nothing was posted",
                     deleted=deleted,
@@ -187,7 +170,7 @@ class Sender:
                 await self._sharer.share(file, recipients)
             except ConnectorError as exc:
                 deleted, kept = await self._discard(uploaded)
-                raise _report(
+                raise failure_report(
                     exc, action=f"Sharing {file.name} failed; nothing was posted", deleted=deleted, kept=kept
                 ) from exc
         return uploaded
@@ -195,20 +178,49 @@ class Sender:
     async def _discard(
         self, files: list[UploadedFile]
     ) -> tuple[list[UploadedFile], list[tuple[UploadedFile, str]]]:
-        """Delete the files a failed send uploaded. Returns the deleted files and those left, with why."""
-        deleted: list[UploadedFile] = []
-        kept: list[tuple[UploadedFile, str]] = []
-        for file in files:
-            try:
-                await self._sharer.delete(file)
-            except ConnectorError as exc:
-                kept.append((file, f"deleting it failed: {exc}"))
-            else:
-                deleted.append(file)
-        return deleted, kept
+        return await discard_files(self._sharer, files)
 
 
-def _check_files(files: Sequence[str]) -> list[Path]:
+async def chat_recipients(members: MemberReader, chat: Chat, me_id: str) -> list[str]:
+    """The chat's other people, by Entra object id. Apps (``28:``) are left out. Anyone else without an
+    object id in this directory (no id at all, or a federated or anonymous member) cannot be granted
+    access, so a file is refused rather than posted where someone cannot open it. The self chat has
+    nobody to share with. ``me_id`` is the signed-in user's lowercase object id."""
+    if chat.kind == "self":
+        return []
+    people: list[str] = []
+    for member in await members.members(chat):
+        member_id = (member.id or "").lower()
+        if member_id == me_id or member_id.startswith("28:"):
+            continue
+        if not _is_object_id(member_id):
+            raise InvalidRequest(
+                "This chat has a member outside your organization's directory; "
+                "files cannot be shared with them."
+            )
+        people.append(member_id)
+    if not people:
+        raise InvalidRequest("This chat has no other members to share files with.")
+    return list(dict.fromkeys(people))
+
+
+async def discard_files(
+    sharer: FileSharer, files: Sequence[UploadedFile]
+) -> tuple[list[UploadedFile], list[tuple[UploadedFile, str]]]:
+    """Delete files a failed write uploaded. Returns the deleted files and those left, with why."""
+    deleted: list[UploadedFile] = []
+    kept: list[tuple[UploadedFile, str]] = []
+    for file in files:
+        try:
+            await sharer.delete(file)
+        except ConnectorError as exc:
+            kept.append((file, f"deleting it failed: {exc}"))
+        else:
+            deleted.append(file)
+    return deleted, kept
+
+
+def check_files(files: Sequence[str]) -> list[Path]:
     """Local files to send: absolute paths of readable regular files within config.MAX_SEND_FILE_BYTES."""
     if len(files) > MAX_FILES:
         raise InvalidRequest(f"Send at most {MAX_FILES} files with one message.")
@@ -230,7 +242,7 @@ def _check_files(files: Sequence[str]) -> list[Path]:
     return paths
 
 
-def _check_images(images: Sequence[str]) -> list[tuple[str, HostedImage]]:
+def check_images(images: Sequence[str]) -> list[tuple[str, HostedImage]]:
     """Inline images: absolute paths of PNG or JPEG files (by their content), with distinct file names,
     since the HTML names them by file name. Returns (file name, image) in the order given."""
     if len(images) > MAX_IMAGES:
@@ -292,7 +304,7 @@ def _too_large_for_inline() -> InvalidRequest:
     )
 
 
-def _paragraphs(text: str) -> str:
+def paragraphs(text: str) -> str:
     """Plain text as one paragraph: escaped, with each line break kept as ``<br>``."""
     lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     return "<p>" + "<br>".join(markup.escape(line, quote=False) for line in lines) + "</p>"
@@ -302,7 +314,7 @@ def _size(value: int) -> str:
     return f"{value / 1024**3:g} GiB" if value >= 1024**3 else f"{value / 1024**2:g} MiB"
 
 
-def _report(
+def failure_report(
     exc: ConnectorError,
     *,
     action: str,
@@ -338,7 +350,7 @@ def normalized_name(value: str) -> str:
     return " ".join(value.split()).casefold()
 
 
-def _check_text(text: str) -> None:
+def check_text(text: str) -> None:
     if not text or not text.strip():
         raise InvalidRequest("text must be a non-empty string.")
     if len(text) > MAX_TEXT_CHARS:

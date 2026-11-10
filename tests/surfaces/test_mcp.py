@@ -34,6 +34,7 @@ async def test_mcp_exposes_current_contract_and_reads_synthetic_chats(context: A
             "search_transcripts",
             "send_message",
             "delete_messages",
+            "edit_message",
             "find_person",
             "get_manager_chain",
             "list_direct_reports",
@@ -45,6 +46,9 @@ async def test_mcp_exposes_current_contract_and_reads_synthetic_chats(context: A
         assert tools["send_message"].annotations.readOnlyHint is False
         assert tools["send_message"].annotations.destructiveHint is True
         assert tools["delete_messages"].annotations.destructiveHint is True
+        assert tools["edit_message"].annotations.destructiveHint is True
+        assert tools["edit_message"].annotations.readOnlyHint is False
+        assert "remove_attachments" in tools["edit_message"].inputSchema["properties"]
         assert "explicit confirmation" in (tools["delete_messages"].description or "")
         assert "files" in tools["send_message"].inputSchema["properties"]
         assert "include_transcripts" in tools["export_chats"].inputSchema["properties"]
@@ -85,3 +89,48 @@ async def test_mcp_rejects_an_empty_search_and_a_send_to_a_misnamed_chat(
         )
         assert send.isError
         assert fake.sent == []
+
+
+async def test_mcp_edits_with_attachments_and_refuses_another_persons_message(
+    context: AppContext,
+    fake: FakeTeams,
+    tmp_path,
+) -> None:
+    file = tmp_path / "plan.txt"
+    file.write_text("Synthetic plan", encoding="utf-8")
+    async with create_connected_server_and_client_session(build_server(context)) as client:
+        result = await client.call_tool(
+            "edit_message",
+            {
+                "conversation_id": "19:one@unq.gbl.spaces",
+                "expected_chat_name": "Pat Peer",
+                "message_id": "1002",
+                "html": "<b>Revised</b>",
+                "files": [str(file)],
+            },
+        )
+        assert not result.isError and result.structuredContent
+        assert result.structuredContent["verified"] is True
+        assert result.structuredContent["status"] == "updated"
+        assert result.structuredContent["message_id"] == "1002"
+        name = result.structuredContent["attachments"][0]["name"]
+        removed = await client.call_tool(
+            "edit_message",
+            {
+                "conversation_id": "19:one@unq.gbl.spaces",
+                "expected_chat_name": "Pat Peer",
+                "message_id": "1002",
+                "remove_attachments": [name],
+            },
+        )
+        assert not removed.isError and removed.structuredContent["verified"] is True
+        refused = await client.call_tool(
+            "edit_message",
+            {
+                "conversation_id": "19:one@unq.gbl.spaces",
+                "expected_chat_name": "Pat Peer",
+                "message_id": "1003",
+                "text": "Changed",
+            },
+        )
+        assert refused.isError and len(fake.edits) == 2

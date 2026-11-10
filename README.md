@@ -5,7 +5,7 @@ A local MCP server and browser UI for one user's Microsoft Teams chats, channels
 - Find conversations by name or participant, then read chat and channel history.
 - Search message text and meeting transcripts, with each meeting's AI summary.
 - Export conversations with their attachments, transcripts and summaries.
-- Send a message or delete your own, only after you explicitly authorize it.
+- Send a message, edit your own body/files/images, or delete your own messages after explicit authorization.
 
 ## Requirements
 
@@ -148,8 +148,16 @@ The MCP server exposes the tools below. Each one's inputs, results and caveats a
 | `get_presence` | [`service/presence.py`](src/teams_connector/service/presence.py) | Availability, activity, device and last-active time of the other person in a one-on-one chat; nothing richer |
 | `send_message` | [`service/send.py`](src/teams_connector/service/send.py) | Send one message (plain text, or HTML sent as written), optionally with inline PNG/JPEG images and local files uploaded to your OneDrive and shared with the chat, after explicit authorization; a write tool |
 | `delete_messages` | [`service/delete.py`](src/teams_connector/service/delete.py) | Delete a set of your own messages in one chat after one explicit confirmation of the set; a delete with an uncertain outcome is never resent, and the result lists what was deleted, skipped and uncertain; a write tool |
+| `edit_message` | [`service/edit.py`](src/teams_connector/service/edit.py) | Edit your own chat message body, add files/images, or remove named attachment references after explicit authorization. Preserves other attachments and source files; one message PUT with readback; a write tool |
 
 Message timestamps are returned in UTC.
+
+For edits, read the message first and pass its `message_id` and current `expected_chat_name`. Supply `text`
+or `html` to replace the body, or omit both to keep it. `files` and `images` add uploads;
+`remove_attachments` names existing references from `get_messages`. Replace a file/image by removing its
+old name and adding a new path. Removed sources stay in storage. Check `verified`: an accepted but
+unconfirmed edit must be inspected before another edit. See the
+[edit contract](docs/architecture.md#88-edit-a-message) for supported chats, limits and failures.
 
 Organization lookups use the existing `teams.graph` sign-in and read the directory on each call; nothing
 is cached. Use an id returned by `find_person` for hierarchy tools. Missing profile fields are unavailable;

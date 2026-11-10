@@ -259,6 +259,17 @@ class SendResult(Compact):
     status: Literal["accepted"] = "accepted"
 
 
+class EditResult(Compact):
+    conversation_id: str
+    chat_name: str
+    message_id: str
+    verified: bool
+    status: Literal["updated", "accepted"]
+    edited_at: datetime | None = None
+    attachments: list[Attachment] = Field(default_factory=list)
+    reason: str | None = None
+
+
 class DeletedMessage(Compact):
     """A message deleted in Teams. ``files`` names the files it shared: they stay in the sender's OneDrive,
     still shared with the chat."""

@@ -29,5 +29,8 @@ async def test_account_switch_rebuilds_services_and_rejects_stale_requests() -> 
     with pytest.raises(AccountMismatch, match="changed"):
         await first.organization.get_manager_chain(PEER)
 
+    with pytest.raises(AccountMismatch, match="changed"):
+        await first.editor.edit("48:notes", expected_chat_name="Notes", message_id="4001", text="Changed")
+
     assert len(fake.calls) == calls_before_stale_request
     await context.aclose()

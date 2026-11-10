@@ -57,8 +57,8 @@ platform does not become a Teams meeting.
 - Keeping messages Teams no longer returns: deleted text, earlier versions of edited messages, or
   messages past the organization's retention policy (decided 2026-10-14).
 - Matching inside words. Teams search matches words, word prefixes and phrases only.
-- Teams writes other than sending a message and deleting the user's own chat messages: no edits,
-  reactions or read-state changes, and nothing written as someone else.
+- Teams writes other than sending, editing the user's own chat messages and deleting the user's own chat
+  messages: no reactions or read-state changes, and nothing written as someone else.
 - Resuming an export after a process restart, or other export resilience machinery, unless a real
   failure calls for it.
 - One combined text file for several conversations. Each conversation is its own artifact.
@@ -94,6 +94,7 @@ The current split ([research](api-research.md#microsoft-graph-with-the-teams-cli
 | People's names and photos | Graph | |
 | Person lookup, manager chain, direct reports and derived peers | Graph v1.0 `users`, using `teams.graph` | Existing grant worked in the 2026-11-09 investigation; reassess manager access per tenant. No Loki or Outlook fallback. |
 | Sending | Graph | Returns the server message id |
+| Editing the user's own chat messages | Chat Service PUT; new files via Graph and new images via regional AMS | Verified on the self chat on 2026-11-09. Graph editing lacks the required grant. |
 | Downloading files linked from messages | Graph shares | |
 | Downloading pasted images | AMS, private (full-size views); Graph hosted copies for channel images | AMS holds them and the Skype token reads them ([research](api-research.md#ams-async-media-service)); a channel's Graph copy is read with the Graph token |
 | Meeting transcripts (download and search) | Graph `media/transcripts`, JSON content | Verified on one account and tenant (2026-10-16); the route is not in Graph's documentation, and a fresh account is untested (roadmap A1). The recording card names the recording, so no lookup is needed. |
@@ -164,6 +165,18 @@ is read on demand and never cached. Collaboration ranking ("works with"), transi
 counts are outside this feature.
 
 ## 8. History, exports, sending and deleting
+
+- **Editing the user's own messages** (decided and implemented 2026-11-09): authorize the specific message,
+  replacement text or HTML, and every attachment change explicitly. Validate the live chat name and read
+  the source again to check ownership, deletion and system-event status. Files and inline images may be
+  added, removed by their names, or replaced by removing old references and adding new uploads. Retain
+  everything else. New files use the same upload/sharing rules as sends; new inline images use regional
+  AMS. Removing a reference never deletes its source. The final message PUT is attempted once without
+  automatic retries, including after 401; a changed snapshot aborts before PUT. Confirm by reading back;
+  an accepted edit whose readback is unavailable or differs is explicitly unverified, never silently retried.
+  Roll back new uploads after definite failure, retain them if the edit's outcome is unknown, and report
+  cleanup failures. Chats support body edits; attachment changes initially support the self chat,
+  one-on-one and group chats. Channels and embedded-card edits are outside this feature.
 
 - **History selection** is one rule for `get_messages`, MCP exports and UI exports: `since` and
   `until` are inclusive, dates filter first, then `message_limit` keeps the latest N matching

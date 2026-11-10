@@ -16,6 +16,7 @@ from m365_auth import Account, AccountBoundTokenSource, AuthenticationRequired, 
 
 from teams_connector import config
 from teams_connector.domain.models import Participant
+from teams_connector.remote.chat_edit import ChatEditor
 from teams_connector.remote.chat_service import ChatService
 from teams_connector.remote.csa import CsaCatalog
 from teams_connector.remote.csa_mapping import Me
@@ -37,6 +38,7 @@ from teams_connector.remote.teams_session import TeamsSession
 from teams_connector.remote.transport import Bearer, Transport
 from teams_connector.service.catalog import Catalog
 from teams_connector.service.delete import Deleter
+from teams_connector.service.edit import Editor
 from teams_connector.service.export.orchestrator import Exports
 from teams_connector.service.files import Files, Photos
 from teams_connector.service.history import History
@@ -65,6 +67,7 @@ class Services:
     presence: Presences
     transcript_search: TranscriptSearch
     organization: Organization
+    editor: Editor
 
 
 class AppContext:
@@ -109,6 +112,9 @@ class AppContext:
         me = Me(user_id=account.object_id, name=name)
         account_tokens = AccountBoundTokenSource(self.tokens, account)
         if self._transport is None:
+            self._http_client = self._http_client or httpx.AsyncClient(
+                timeout=httpx.Timeout(60.0, connect=15.0), follow_redirects=False
+            )
             self._transport = Transport(client=self._http_client)
         transport = self._transport
         graph = Graph(transport, Bearer(account_tokens, "teams.graph"))
@@ -116,6 +122,7 @@ class AppContext:
         people = GraphPeople(graph)
         channels = GraphChannels(graph)
         chat_service = ChatService(transport, session, people)
+        edit_transport = Transport(client=self._http_client, max_attempts=1)
         catalog_source = CsaCatalog(transport, session, account_tokens, people, chat_service, me)
 
         store = Store(store_path(account.fingerprint), account.fingerprint)
@@ -183,6 +190,13 @@ class AppContext:
                 catalog, TeamsPresence(transport, session, Bearer(account_tokens, "teams.spaces"))
             ),
             organization=Organization(GraphOrgDirectory(graph)),
+            editor=Editor(
+                catalog,
+                ChatEditor(transport, edit_transport, session),
+                GraphFileSharer(graph, folder=config.CHAT_FILES_FOLDER, access=config.SHARED_FILE_ACCESS),
+                chat_service,
+                account.object_id,
+            ),
         )
 
     async def aclose(self) -> None:

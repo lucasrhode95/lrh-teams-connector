@@ -225,12 +225,12 @@ the same id ([msgvault](https://pkg.go.dev/go.kenn.io/msgvault%40v0.20.0/interna
 
 ### Writes
 
-Chat Service writes; only the soft delete is used (by `delete_messages`):
+Chat Service writes; the connector uses soft deletes and message edits:
 
 | Route | Shape | Evidence |
 |---|---|---|
 | `POST …/conversations/{id}/messages` | `content`, `messagetype`, `contenttype`, `clientmessageid`, `imdisplayname`, `properties`, optional `amsreferences`. The body returns only `OriginalArrivalTime`; the new id is the last segment of the `Location` header. | Capture, Source, 2026-10-01 |
-| `PUT …/messages/{messageId}` | Edit: the whole message with new `content` and `properties.edittime` | Capture, 2026-10-14 |
+| `PUT …/messages/{messageId}` | Edit: the whole message with new `content`, file/image references and `properties.edittime`; preserve message id, sender and arrival time | Capture, 2026-10-14; Live, 2026-11-09 |
 | `DELETE …/messages/{messageId}?behavior=softDelete` | Delete; undo is `DELETE …/messages/{messageId}/properties?name=deletetime`. With the Skype token it answered 200 for the user's own message in a group chat, and history then showed empty `content` and `deletetime` | Capture, 2026-10-14; Live, 2026-10-15 |
 | `PUT` / `DELETE …/messages/{messageId}/properties?name=emotions` | Add or remove a reaction: `{"emotions": {"key": "like", "value": "<messageId>"}}` | Third party |
 | `POST /v1/users/ME/drafts` | Scheduled message: `draftType: "ScheduledDraft"`, `innerThreadId`, `draftDetails.sendAt` | Third party |
@@ -238,6 +238,28 @@ Chat Service writes; only the soft delete is used (by `delete_messages`):
 | `GET /v1/users/ME/properties`, `GET /v1/threads/{id}/consumptionhorizons` | User properties; read horizons | Third party; Capture |
 
 ## Message content
+
+**Edits, live 2026-11-09:** one explicitly authorized disposable self-chat message was edited through
+Chat Service with the existing Skype token. Plain text (escaped into HTML) and bold HTML each returned
+200; reads of the same id confirmed the new source content and `edited_at`. The current Graph token had
+neither `Chat.ReadWrite` nor `ChannelMessage.ReadWrite`; no Graph edit was attempted with missing grants.
+A manually edited self-chat message independently confirmed the file-record structure below. A supplied
+Resource Saver archive did not contain its edited body; no captures or private identifiers were retained.
+
+The same disposable message accepted a new OneDrive file reference in `properties.files` (JSON string)
+and an inline AMS image in `content` / `amsreferences`, then removal of both references, all through PUT
+(200). The file resolved through Graph shares, and the full-size image bytes matched the uploaded PNG.
+File entries use `@type: http://schema.skype.com/File`, extension-valued `type` / `fileType`, `version: 2`,
+`state: active`, `id` / `itemid`, `fileName`, `fileInfo` (`itemId`, `fileUrl`, `shareUrl`, `siteUrl`) and
+`sharepointIds` (`driveId`, `listItemUniqueId`). Removing references did not delete the uploaded sources.
+These checks cover one account's self chat; other chat kinds and tenants remain live-verification work.
+
+**MCP implementation check, 2026-11-09:** Teams adjusted the submitted edit time by roughly half a second
+and rewrote inline-image markup on readback. Verification therefore compares readable body content and
+structured attachment identities, and requires a newer server edit timestamp; byte-identical image HTML
+and an exact client timestamp are not a valid confirmation contract. The MCP tool's HTML/file/image edit
+was confirmed by a fresh read; a subsequent attachment-reference removal returned `verified: true` with
+no attachments remaining. Uploaded sources were retained.
 
 What history rows hold, from Chat Service (and Graph for channels). Live unless dated otherwise.
 
@@ -359,7 +381,7 @@ pasted images in those chats: 171 on the first host, 1 on the second. With `Auth
 The connector's AMS reader downloaded the second-host image in full (200,914 bytes, JPEG). So the Skype token
 reads pasted-image views on either host.
 
-**Uploads (not used by the connector; Capture 2026-10-15, one pasted PNG in a one-on-one).** Teams Web
+**Uploads (used for edit images; Capture 2026-10-15, one pasted PNG in a one-on-one).** Teams Web
 uploads a pasted image to AMS before sending and references it from the message:
 
 1. `POST <amsV2 host>/v1/objects/` with JSON `{"type": "pish/image", "permissions": {"<conversation id>":
@@ -373,6 +395,13 @@ uploads a pasted image to AMS before sending and references it from the message:
      placeholder.
 
 The capture strips credentials, so the upload's auth isn't shown; Source points to the Skype token.
+
+**Live, 2026-11-09:** the regional `amsV2` create route and raw `content/imgpsh` upload accepted
+`Authorization: skype_token …` (201 each). Creation additionally required `X-Client-Version: 0/0.0.0.0`:
+without that header it misleadingly answered 400 saying User-Agent was missing or invalid; changing the
+HTTP User-Agent alone did not fix it. Hosts came from AuthZ (`ams`, `amsV2`), not hard-coded regional
+settings. AMS object deletion after a failed edit has synthetic coverage only; cleanup failures must be
+reported rather than claimed successful.
 
 ## Unified Presence
 

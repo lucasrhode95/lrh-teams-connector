@@ -1,5 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="2600" height="3890" viewBox="0 0 2600 3890" role="img" aria-labelledby="title description">
+<svg xmlns="http://www.w3.org/2000/svg" width="2600" height="3890" viewBox="0 0 2600 3890" role="img" aria-labelledby="title description edit-description">
   <title id="title">Teams connector code map</title>
+  <desc id="edit-description">MCP additionally exposes edit_message, making 16 tools. Editor validates ownership and requested body/file/image changes, then uses MessageEditor implemented by ChatEditor. New files use GraphFileSharer; new images use regional AMS. ChatEditor checks the source snapshot, issues one Chat Service PUT and reads back. Uncertain edits are never resent.</desc>
   <desc id="description">The Teams connector's main classes and who calls whom. The command line starts the MCP server or the export UI (with text previews and presence), prepares sign-in, or shows status. Both surfaces call service classes: Catalog, History, Search, Exports, Sender, Files, Photos and Presences. MCP also exposes four directory tools through Organization, which calls OrgDirectory, implemented by GraphOrgDirectory using the existing teams.graph credential. Manager chains run from immediate manager to root; reports include users only; peers are derived from the manager's reports minus the person. Organization reads are never cached. The service depends on the ports in remote/ports.py. CsaCatalog, ChatService and TeamsSession implement the Teams-service ports; GraphChannels, GraphPeople, GraphWriter and GraphFiles implement the other Graph ports; SubstrateSearch implements message search. Every remote request goes through one Transport with tokens from the shared TokenProvider. The store is an account-bound SQLite Store that holds the chat catalog only. AppContext in bootstrap.py builds the services once per process. Hover an item for details.</desc>
   <defs>
     <style>
@@ -63,22 +64,23 @@
 <rect x="80" y="494" width="850" height="366" rx="14" fill="#f7f9fc" stroke="#c7d5e2" stroke-width="1.5"/>
 <path d="M80 568 V508 Q80 494 94 494 H916 Q930 494 930 508 V568 Z" fill="#183153"/>
 <text class="card-title" x="100" y="527">MCP SERVER</text>
-<text class="card-subtitle" x="100" y="551"><tspan class="code">surfaces/mcp_main.py</tspan> · <tspan class="code">build_server(AppContext)</tspan> · 15 FastMCP tools</text>
+<text class="card-subtitle" x="100" y="551"><tspan class="code">surfaces/mcp_main.py</tspan> · <tspan class="code">build_server(AppContext)</tspan> · 16 FastMCP tools</text>
 <rect x="100" y="588" width="810" height="252" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
 <text class="group-title" x="118" y="626">Conversations</text>
 <g><title>Chats and channels by recent activity, with kind filters and paging. → Catalog.list</title><text class="detail small" x="118" y="656">• <tspan class="code">list_chats</tspan></text></g>
 <g><title>Conversation names, and, with a refresh, members that Teams matches. → Catalog.search</title><text class="detail small" x="118" y="683">• <tspan class="code">search_chats</tspan></text></g>
 <g><title>One bounded page of a conversation, newest pages first. → History.get_messages</title><text class="detail small" x="118" y="710">• <tspan class="code">get_messages</tspan></text></g>
 <g><title>Save the files a message names, by message id or arrival time; each is cached per source. → Files.download_attachments</title><text class="detail small" x="118" y="737">• <tspan class="code">download_attachment</tspan></text></g>
-<text class="group-title" x="118" y="776">Account</text>
-<g><title>The active account and each profile's cached credential and token expiry. → TokenProvider.status</title><text class="detail small" x="118" y="806">• <tspan class="code">auth_status</tspan></text></g>
+<text class="group-title" x="118" y="766">Account · presence</text>
+<g><title>The active account and each profile's cached credential and token expiry. → TokenProvider.status</title><text class="detail small" x="118" y="796">• <tspan class="code">auth_status</tspan></text></g>
+<g><title>Read-only presence of a one-on-one peer. → Presences.for_chat</title><text class="detail small" x="118" y="823">• <tspan class="code">get_presence</tspan></text></g>
 <text class="group-title" x="360" y="626">Search</text>
 <g><title>One page of Search v2 message hits for the terms, scope and dates. → Search.search_messages</title><text class="detail small" x="360" y="656">• <tspan class="code">search_messages</tspan></text></g>
 <g><title>Search words said in meeting recordings. → TranscriptSearch.search</title><text class="detail small" x="360" y="683">• <tspan class="code">search_transcripts</tspan></text></g>
 <text class="group-title" x="360" y="722">Write</text>
 <g><title>Send one message, optionally with files and inline images, after explicit authorization; checks the live chat name; never resent after an uncertain outcome; a failed send deletes its uploads. → Sender.send</title><text class="detail small" x="360" y="752">• <tspan class="code">send_message</tspan></text></g>
-<g><title>Delete a confirmed set of the user's own chat messages; re-reads each, deletes each once, reports deleted, skipped and uncertain. → Deleter.delete</title><text class="detail small" x="360" y="779">• <tspan class="code">delete_messages</tspan></text></g>
-<g><title>Availability of the other person in a one-on-one chat; read only. → Presences.for_chat</title><text class="detail small" x="360" y="806">• <tspan class="code">get_presence</tspan></text></g>
+<g><title>Edit the user's own message body, add files/images or remove named references after explicit authorization. One PUT with readback. → Editor.edit</title><text class="detail small" x="360" y="779">• <tspan class="code">edit_message</tspan></text></g>
+<g><title>Delete a confirmed set of the user's own chat messages; re-reads each, deletes each once, reports deleted, skipped and uncertain. → Deleter.delete</title><text class="detail small" x="360" y="806">• <tspan class="code">delete_messages</tspan></text></g>
 <text class="group-title" x="668" y="626">Export</text>
 <g><title>Export conversations to .txt, .jsonl or a .zip with attachments. → Exports.export</title><text class="detail small" x="668" y="656">• <tspan class="code">export_chats</tspan></text></g>
 <text class="group-title" x="668" y="695">Organization</text>
@@ -186,10 +188,11 @@
 <text class="muted" x="118" y="1878">uses <tspan class="code">History</tspan> · <tspan class="code">FileReader</tspan> · <tspan class="code">People</tspan></text>
 
 <rect x="673" y="1634" width="1127" height="260" fill="#eff8f6" stroke="#c7d5e2" stroke-width="1.5"/>
-<text class="group-title" x="691" y="1672">Helpers</text>
+<text class="group-title" x="691" y="1672">Helpers · edits</text>
 <g><title>Self-contained continuation cursors: everything needed to continue travels in the cursor.</title><text class="detail" x="691" y="1702">• <tspan class="code">cursors.py</tspan></text></g>
 <g><title>Output folders under the data directory; files older than a week are removed; exclusive file creation.</title><text class="detail" x="691" y="1729">• <tspan class="code">localfiles.py</tspan></text></g>
-<g><title>A per-process, daily-rotated log file; timing, status and counts only, never message content.</title><text class="detail" x="691" y="1756">• <tspan class="code">logs.py</tspan></text></g>
+<g><title>service/edit.py: Editor validates ownership and the live chat name, adds new files/images, removes named references, retains other attachments and rolls back new uploads only after a definite failure. Uses MessageEditor and FileSharer.</title><text class="detail" x="691" y="1756">• <tspan class="code">Editor</tspan> · <tspan class="code">edit.py</tspan></text></g>
+<g><title>Requires explicit authorization for this message, new body and every attachment change. Uses MessageEditor, FileSharer and MemberReader.</title><text class="detail" x="691" y="1783">• <tspan class="code">edit(...)</tspan></text></g>
 <text class="group-title" x="1100" y="1672">Domain</text>
 <g><title>Pydantic models: the single schema for the service, the MCP tools and the web API.</title><text class="detail" x="1100" y="1702">• <tspan class="code">domain/models.py</tspan></text></g>
 <g><title>ConnectorError and its kinds; surfaces map them to their protocol.</title><text class="detail" x="1100" y="1729">• <tspan class="code">domain/errors.py</tspan></text></g>
@@ -212,7 +215,7 @@
 <g><title>Scripts, frames, forms, event handlers and javascript: URLs.</title><text class="detail" x="691" y="2016">active content</text></g>
 <g><title>Teams shows only images it hosts.</title><text class="detail" x="691" y="2043">images and embedded media</text></g>
 <g><title>Declarations, CDATA sections, processing instructions, and markup left open.</title><text class="detail" x="691" y="2070">declarations · unfinished markup</text></g>
-<text class="muted" x="691" y="2158">used by <tspan class="code">Sender</tspan>; the HTML is never rewritten</text>
+<text class="muted" x="691" y="2158">used by <tspan class="code">Sender</tspan> and <tspan class="code">Editor</tspan>; validates passive HTML</text>
 
 <rect x="1247" y="1914" width="553" height="260" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
 <text class="section-title" x="1265" y="1949"><tspan class="code">Organization</tspan><tspan class="detail" dx="12">org.py</tspan></text>
@@ -263,6 +266,7 @@
 <g><title>One page of a conversation's history (chats from Chat Service, channels from Graph); ChatHistoryReader adds the lookup by time, ChannelHistoryReader a reply read through its thread.</title><text class="detail" x="678" y="2457"><tspan class="code">HistoryReader</tspan> · <tspan class="code">page</tspan></text></g>
 <g><title>A conversation's participants (chats from Chat Service, channels from Graph).</title><text class="detail" x="678" y="2484"><tspan class="code">MemberReader</tspan> · <tspan class="code">members</tspan></text></g>
 <g><title>One person's presence by object id.</title><text class="detail" x="678" y="2511"><tspan class="code">PresenceReader</tspan> · <tspan class="code">presence</tspan></text></g>
+<g><title>Prepare a structured message snapshot, upload/discard new images, apply changes once and verify readback.</title><text class="detail" x="678" y="2538"><tspan class="code">MessageEditor</tspan> · message edits</text></g>
 <text class="muted" x="678" y="2564">chats use Teams' private services</text>
 
 <rect x="1240" y="2358" width="560" height="230" fill="#f2f7fc" stroke="#c7d5e2" stroke-width="1.5"/>
@@ -288,6 +292,7 @@
 <g><title>The AuthZ exchange: a teams.spaces token becomes a Skype token and the regional Chat Service address, renewed when rejected.</title><text class="detail small" x="678" y="2764"><tspan class="code">TeamsSession</tspan>: AuthZ → Skype token</text></g>
 <g><title>Chat Service sends the Skype token; CSA sends a teams.csa bearer token plus the Skype token.</title><text class="detail small" x="678" y="2791"><tspan class="code">SkypeCredential</tspan> · <tspan class="code">CsaCredential</tspan></text></g>
 <g><title>Presence at the route AuthZ names (presenceUPS) with the teams.spaces bearer; implements PresenceReader.</title><text class="detail small" x="678" y="2818"><tspan class="code">TeamsPresence</tspan>: presence (<tspan class="code">presence.py</tspan>)</text></g>
+<g><title>remote/chat_edit.py implements MessageEditor: source snapshots, one-attempt Chat Service PUT, readback and regional AMS image uploads. Uses a separate max_attempts=1 transport over the same HTTP client.</title><text class="detail small" x="678" y="2845"><tspan class="code">ChatEditor</tspan>: edits · AMS uploads</text></g>
 <text class="muted" x="678" y="2870">call <tspan class="code">Transport</tspan> directly</text>
 
 <rect x="1240" y="2638" width="560" height="250" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
@@ -373,7 +378,7 @@
 <text class="detail small" x="1938" y="555">• <tspan class="code">SubstrateSearch(transport, m365.search)</tspan></text>
 <text class="detail small" x="1938" y="582">• <tspan class="code">Files(history, GraphFiles, images)</tspan> · <tspan class="code">Photos</tspan></text>
 <text class="detail small" x="1938" y="609">• <tspan class="code">Search</tspan> · <tspan class="code">Exports</tspan> · <tspan class="code">Organization</tspan></text>
-<text class="detail small" x="1938" y="636">• <tspan class="code">Sender(catalog, GraphWriter, GraphFileSharer)</tspan></text>
+<g><title>Sender uses GraphWriter and GraphFileSharer. Editor uses ChatEditor, GraphFileSharer and ChatService members.</title><text class="detail small" x="1938" y="636">• <tspan class="code">Sender</tspan> · <tspan class="code">Editor(ChatEditor)</tspan></text></g>
 
 <rect x="1900" y="716" width="620" height="560" rx="14" fill="#eff8f6" stroke="#9fd3cb" stroke-width="1.5"/>
 <text class="note-title" x="1924" y="756">How to read it</text>

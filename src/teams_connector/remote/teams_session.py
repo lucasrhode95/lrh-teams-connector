@@ -29,6 +29,8 @@ class SessionInfo:
     # The account's presence service, as Teams Web reads it (``presenceUPS``, e.g.
     # https://teams.microsoft.com/ups/emea); None when AuthZ names none on a Teams host.
     presence_url: str | None = None
+    ams_url: str | None = None
+    ams_upload_url: str | None = None
 
 
 class TeamsSession:
@@ -82,7 +84,15 @@ class TeamsSession:
         except (TypeError, ValueError):
             seconds = _DEFAULT_LIFETIME
         presence = _mapping(data.get("regionGtms")).get("presenceUPS")
-        return SessionInfo(skype, chat_service.rstrip("/"), time.time() + seconds, _teams_url(presence))
+        routes = _mapping(data.get("regionGtms"))
+        return SessionInfo(
+            skype,
+            chat_service.rstrip("/"),
+            time.time() + seconds,
+            _teams_url(presence),
+            _ams_url(routes.get("ams")),
+            _ams_url(routes.get("amsV2")),
+        )
 
 
 def _teams_url(value: Any) -> str | None:
@@ -90,6 +100,18 @@ def _teams_url(value: Any) -> str | None:
     if not isinstance(value, str) or not value.startswith("https://"):
         return None
     return value.rstrip("/") if host_allowed(urlsplit(value).hostname) else None
+
+
+def _ams_url(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    parts = urlsplit(value)
+    host = parts.hostname or ""
+    if parts.scheme != "https" or parts.username or parts.password or parts.query or parts.fragment:
+        return None
+    if not host.endswith((".asm.skype.com", ".asyncgw.teams.microsoft.com")):
+        return None
+    return value.rstrip("/")
 
 
 def _mapping(value: Any) -> dict[str, Any]:

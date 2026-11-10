@@ -1,5 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="2600" height="1760" viewBox="0 0 2600 1760" role="img" aria-labelledby="title description">
+<svg xmlns="http://www.w3.org/2000/svg" width="2600" height="1760" viewBox="0 0 2600 1760" role="img" aria-labelledby="title description edit-description">
   <title id="title">Teams connector architecture</title>
+  <desc id="edit-description">MCP has 16 tools. edit_message calls Editor through MessageEditor and ChatEditor. The final Chat Service PUT is attempted once and read back; new files use Graph and inline images use regional AMS. Unchanged attachments are retained; removed references never delete their sources. Authorization is required for the specific message and every change.</desc>
   <desc id="description">Short-lived entry points: the MCP server (one stdio process per agent session), the local export UI, and the auth command. MCP and UI are thin surfaces over one service layer that holds every domain decision. The service reads and writes an account-bound SQLite store of the chat catalog and calls the remote layer through ports. Teams' private services provide the chat catalog (CSA), chat history and members (Chat Service), pasted images (AMS) and presence, after an AuthZ exchange that yields a Skype token and the service routes; Microsoft Graph provides channels, people, photos, shared files and sending. MCP organization tools call Organization through OrgDirectory and GraphOrgDirectory, using the existing teams.graph credential to find people, expand manager chains, page user reports and derive peers; directory reads are never cached. Search v2 provides online message discovery and chats by member, and Teams Web's suggestions route the people for one-on-ones. Tokens come from the shared lrh-m365-auth cache.</desc>
   <defs>
     <style>
@@ -34,9 +35,9 @@
   <text class="card-title" x="100" y="203">MCP SERVER</text>
   <text class="card-subtitle" x="100" y="227"><tspan class="code">teams-connector mcp</tspan> · one stdio process per agent session</text>
   <rect x="100" y="260" width="750" height="100" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
-  <text class="detail" x="120" y="292"><tspan class="code">surfaces/mcp_main.py</tspan>: 15 FastMCP tools</text>
+  <text class="detail" x="120" y="292"><tspan class="code">surfaces/mcp_main.py</tspan>: 16 FastMCP tools</text>
   <text class="detail" x="120" y="320">Bounded pages, self-contained cursors, coverage</text>
-  <text class="detail" x="120" y="348"><tspan class="code">send_message</tspan> and <tspan class="code">delete_messages</tspan> are the only writes</text>
+  <text class="detail" x="120" y="348">Writes: <tspan class="code">send_message</tspan> · <tspan class="code">edit_message</tspan> · <tspan class="code">delete_messages</tspan></text>
 
   <!-- Web UI surface. -->
   <rect x="910" y="170" width="790" height="210" rx="14" fill="#f7f9fc" stroke="#c7d5e2" stroke-width="1.5"/>
@@ -112,10 +113,10 @@
   <text class="detail" x="116" y="847">MCP only · no cache</text>
 
   <rect x="366" y="720" width="515" height="160" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
-  <text class="section-title" x="382" y="756">helpers</text>
+  <text class="section-title" x="382" y="756">helpers · message edits</text>
   <text class="detail" x="382" y="791"><tspan class="code">cursors.py</tspan>: self-contained continuation</text>
   <text class="detail" x="382" y="819"><tspan class="code">localfiles.py</tspan>: output folders, cleanup</text>
-  <text class="detail" x="382" y="847"><tspan class="code">logs.py</tspan>: daily file, no message content</text>
+  <text class="detail" x="382" y="847"><tspan class="code">edit.py</tspan>: body, files and inline images</text>
 
   <rect x="899" y="720" width="781" height="160" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
   <text class="section-title" x="915" y="756">coverage, not completeness</text>
@@ -184,8 +185,8 @@
   <text class="detail" x="1437" y="1262" style="font-size:18px">wire JSON → models</text>
 
   <rect x="660" y="1286" width="245" height="64" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
-  <text class="section-title code" x="672" y="1310" style="font-size:20px">ports.py</text>
-  <text class="detail" x="672" y="1336" style="font-size:18px">adapter interfaces</text>
+  <text class="section-title code" x="672" y="1310" style="font-size:20px">chat_edit.py</text>
+  <text class="detail" x="672" y="1336" style="font-size:18px">edits · AMS images</text>
 
   <rect x="915" y="1286" width="245" height="64" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
   <text class="section-title code" x="927" y="1310" style="font-size:20px">graph_org.py</text>
@@ -269,7 +270,7 @@
   <rect x="1938" y="1286" width="32" height="26" rx="5" fill="#5b5fc7"/>
   <text class="badge" x="1954" y="1305" text-anchor="middle">T</text>
   <text class="section-title" x="1980" y="1307">Chat Service, AMS, presence (private)</text>
-  <text class="detail" x="1940" y="1340" style="font-size:18px">messages · members · pasted images · presence</text>
+  <text class="detail" x="1940" y="1340" style="font-size:18px">history · edits · members · images · presence</text>
 
   <rect x="1920" y="1366" width="580" height="80" fill="#fff" stroke="#c7d5e2" stroke-width="1.5"/>
   <rect x="1938" y="1378" width="32" height="26" rx="5" fill="#5b5fc7"/>
