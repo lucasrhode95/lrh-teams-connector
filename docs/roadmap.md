@@ -8,7 +8,7 @@ Work is split by what it needs: **implementation** is code still to write; **dec
 user; **live verification** checks behavior that is already built against a real tenant, and becomes
 implementation only if a check fails.
 
-Snapshot **2026-11-09**.
+Snapshot **2026-11-10**.
 
 ## Implementation
 
@@ -23,16 +23,7 @@ None open.
 
 Working behavior that could be cheaper, simpler or better informed.
 
-#### H1 — Revisit HTML-to-text conversion
-
-Review the custom message and Loop HTML converters, especially table structure. A synthetic ordinary
-message table with cells `Name`, `Role` and `Sam`, `Host` currently becomes `NameRole\n\nSamHost`:
-row boundaries survive, but cells run together. Loop notes use a separate row/task converter.
-
-Preserve cell boundaries, links, lists, code, mentions and image references in the text agents receive.
-Compare library conversion and minimal HTML for complex tables with the existing parsers; consolidate
-where it reduces code without losing Teams-specific source metadata. Cover merged/nested tables and
-malformed HTML with synthetic examples, and decide whether readers need an HTML option.
+None open.
 
 ### Enhancements
 
