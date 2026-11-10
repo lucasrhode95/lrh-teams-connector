@@ -1,8 +1,6 @@
 """Exports with meeting transcripts: the transcripts folder, the include_transcripts flag, names, and an
 unavailable transcript. Through the real exports service and the fake tenant. Synthetic meetings only."""
 
-from __future__ import annotations
-
 import zipfile
 from pathlib import Path
 

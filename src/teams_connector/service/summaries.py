@@ -6,8 +6,6 @@ downloads. Each
 reads a meeting's summary only for the meetings its own result returns.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 from teams_connector.domain.errors import AuthenticationRequired, ConnectorError

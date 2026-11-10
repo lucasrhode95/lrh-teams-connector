@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from teams_connector.bootstrap import Services
 from teams_connector.domain.models import ExportRequest
 from tests.fakes.teams_fake import FakeTeams, add_meeting, cs_message, synthetic_drive

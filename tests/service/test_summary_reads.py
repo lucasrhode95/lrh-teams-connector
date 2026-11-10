@@ -1,8 +1,6 @@
 """Teams' AI summary in get_messages and transcript search: the flag, one read per meeting, the share of
 max_chars, the cursor, and a failed read. Real services and the fake tenant; synthetic meetings."""
 
-from __future__ import annotations
-
 from typing import Any
 
 from teams_connector.bootstrap import Services

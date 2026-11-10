@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import httpx
 
 from teams_connector.remote.graph import Graph

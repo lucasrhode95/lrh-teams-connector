@@ -8,8 +8,6 @@ copies, so it takes that name too, with ``png`` as its extension. Emoji and stic
 link. Nothing here fetches or writes anything.
 """
 
-from __future__ import annotations
-
 import base64
 import binascii
 import hashlib

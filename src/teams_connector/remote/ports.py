@@ -18,8 +18,6 @@ Adapters (wired in bootstrap.py):
 Swapping an adapter (another tenant, a policy change) must not change anything above this file.
 """
 
-from __future__ import annotations
-
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime

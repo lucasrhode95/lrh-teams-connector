@@ -8,8 +8,6 @@ disclaimer and its link, empty paragraphs, the task checkboxes and the "Task lis
 dropped (docs/api-research.md, "Loop pages and meeting notes", 2026-10-15).
 """
 
-from __future__ import annotations
-
 import re
 from html.parser import HTMLParser
 from urllib.parse import urlsplit

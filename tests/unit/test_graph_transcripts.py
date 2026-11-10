@@ -1,7 +1,5 @@
 """Graph transcript reads and video search, through the fake tenant. Synthetic data only."""
 
-from __future__ import annotations
-
 import httpx
 import pytest
 

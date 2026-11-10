@@ -7,8 +7,6 @@ base64url of the drive's site, web and library GUIDs as text, and the drive item
 other substrate calls do.
 """
 
-from __future__ import annotations
-
 import base64
 import json
 import re

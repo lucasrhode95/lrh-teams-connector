@@ -7,8 +7,6 @@ caller reports as an unavailable transcript. Video search is Graph's documented 
 ``driveItem``. Parsing is pure and lives in ``transcript_json`` and ``recording_cards``.
 """
 
-from __future__ import annotations
-
 import json
 from typing import Any
 
@@ -41,7 +39,7 @@ class GraphTranscripts:
             )
         try:
             payload = json.loads(body.decode("utf-8-sig"))
-        except (ValueError, UnicodeDecodeError):
+        except ValueError, UnicodeDecodeError:
             raise Upstream("Teams returned a transcript that is not JSON.") from None
         return transcript_json.transcript(payload)
 

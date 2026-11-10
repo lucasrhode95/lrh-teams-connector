@@ -4,8 +4,6 @@ Pure normalization (no network). Naming needs people's display names, which the 
 between ``plan_names`` and ``NamePlan.apply``.
 """
 
-from __future__ import annotations
-
 import re
 from dataclasses import dataclass, field
 from typing import Any

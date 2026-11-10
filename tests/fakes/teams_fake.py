@@ -6,8 +6,6 @@ threads, members, people, photos, sends, OneDrive uploads (single PUTs and uploa
 and shared files. All data is synthetic.
 """
 
-from __future__ import annotations
-
 import base64
 import json
 import uuid

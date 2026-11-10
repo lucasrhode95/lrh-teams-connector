@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from teams_connector.__main__ import EXIT_OK, build_parser, main
 from tests.fakes.teams_fake import FakeTokens
 

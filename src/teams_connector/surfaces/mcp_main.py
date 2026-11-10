@@ -4,8 +4,6 @@ One process per agent session. Nothing touches the network until the first tool 
 read-only except send_message, edit_message and delete_messages.
 """
 
-from __future__ import annotations
-
 import asyncio
 import functools
 import logging

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import pytest
 
 from tests.fakes.teams_fake import FakeTeams, sample_tenant

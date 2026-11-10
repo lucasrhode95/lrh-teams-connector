@@ -4,8 +4,6 @@ The tested baseline lacked Graph chat-list access, so this adapter supplies the 
 CSA rows are reported as ``channel_activity`` only: Graph is the channel catalog.
 """
 
-from __future__ import annotations
-
 import contextlib
 import re
 from typing import Any
@@ -53,7 +51,7 @@ class CsaCatalog:
                 payload = await self._fetch(sync_token)
                 if delta and _sync_token_expired(payload):
                     payload, delta = await self._fetch(None), False
-            except (InvalidRequest, Upstream):
+            except InvalidRequest, Upstream:
                 if not delta:
                     raise
                 payload, delta = await self._fetch(None), False  # rejected/expired continuation: snapshot
@@ -130,7 +128,7 @@ class CsaCatalog:
         for chat in untitled[:MAX_FALLBACK_NAME_LOOKUPS]:
             try:
                 members = await self._chat_service.members(chat)
-            except (Upstream, InvalidRequest):
+            except Upstream, InvalidRequest:
                 continue
             peers = {p.id: p.name for p in members if p.id and p.id != self._me.user_id}
             if len(peers) == 1:

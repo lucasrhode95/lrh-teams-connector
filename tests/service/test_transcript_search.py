@@ -1,8 +1,6 @@
 """Transcript search through the real services and the fake tenant: in conversations, across meetings, and the
 checks that keep a non-meeting video out. Synthetic meetings and terms only."""
 
-from __future__ import annotations
-
 from datetime import UTC, datetime
 
 import pytest

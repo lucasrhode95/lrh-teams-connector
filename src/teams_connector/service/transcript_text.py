@@ -6,8 +6,6 @@ without case or accents (``budget`` finds ``Budgets``; ``execucao`` finds ``exec
 matching, ``udget`` finds nothing. A phrase is matched within one utterance, not across two.
 """
 
-from __future__ import annotations
-
 import re
 import unicodedata
 from datetime import UTC, datetime

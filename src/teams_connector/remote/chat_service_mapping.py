@@ -1,7 +1,5 @@
 """Teams Chat Service / CSA JSON → domain models. The only place that knows their message field names."""
 
-from __future__ import annotations
-
 import hashlib
 import json
 import re
@@ -106,7 +104,7 @@ def parse_time(value: Any) -> datetime | None:
         seconds = value / 1000 if abs(value) > 100_000_000_000 else value
         try:
             return datetime.fromtimestamp(seconds, tz=UTC)
-        except (OverflowError, OSError, ValueError):
+        except OverflowError, OSError, ValueError:
             return None
     elif isinstance(value, str) and value.strip():
         text = value.strip()
@@ -127,7 +125,7 @@ def order_key(message: dict[str, Any]) -> tuple[int, int, datetime, str]:
     """Chronological order: sequence id when present, then arrival time, then id."""
     try:
         sequence, has_sequence = int(message.get("sequenceId")), 1  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         sequence, has_sequence = 0, 0
     timestamp = message_datetime(message) or datetime.min.replace(tzinfo=UTC)
     return (0 if has_sequence else 1, sequence, timestamp, str(message.get("id") or ""))
@@ -164,8 +162,10 @@ def to_message(raw: dict[str, Any], conversation_id: str) -> Message:
         text = chat_events.render(kind, content)
     else:
         is_html = "html" in kind.lower() or "html" in content_type.lower()
-        rendered = teams_html.render_message(content, is_html=is_html)
+        rendered = teams_html.render_message(content, is_html=is_html, mention_people=_mention_people(props))
         inline, text = rendered.images, rendered.text
+    if is_recording_card:
+        text = recording_cards.marker(content)
     files = _files(raw, props, {item.name.casefold() for item in inline})
     author_id = message_author_id(raw)
     notes = _meeting_notes(content, author_id, {item.name.casefold() for item in [*inline, *files]})
@@ -314,10 +314,26 @@ def _first_string(source: dict[str, Any], *keys: str) -> str | None:
     return None
 
 
+def _mention_people(props: dict[str, Any]) -> dict[str, str]:
+    """Each mention element's ``itemid`` and the person (``mri``) it names, from ``properties.mentions``."""
+    mentions = props.get("mentions")
+    if isinstance(mentions, str):
+        try:
+            mentions = json.loads(mentions)
+        except json.JSONDecodeError:
+            return {}
+    rows = mentions if isinstance(mentions, list) else []
+    return {
+        str(m["itemid"]): str(m["mri"])
+        for m in rows
+        if isinstance(m, dict) and "itemid" in m and m.get("mri")
+    }
+
+
 def preview(content: Any) -> str | None:
     """A short readable preview of a catalog row's last message."""
     if not isinstance(content, str) or not content.strip():
         return None
-    text = teams_html.render_body(content, is_html="<" in content)
+    text = teams_html.render_message(content, is_html="<" in content).text
     text = re.sub(r"\s+", " ", text).strip()
     return text[:240] or None

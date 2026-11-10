@@ -1,7 +1,5 @@
 """Export rendering: TXT for people, JSONL (one record per message) for agents. Times are UTC."""
 
-from __future__ import annotations
-
 import json
 from datetime import UTC, datetime
 

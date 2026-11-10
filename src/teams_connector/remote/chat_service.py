@@ -6,8 +6,6 @@ self-chat history and members come from here. Continuation links are opaque and 
 account's regional Chat Service host and the same conversation.
 """
 
-from __future__ import annotations
-
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit

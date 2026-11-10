@@ -1,7 +1,5 @@
 """The download cache keeps one folder per source. Expired files there go, with their empty folders."""
 
-from __future__ import annotations
-
 import os
 from pathlib import Path
 

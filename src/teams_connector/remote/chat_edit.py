@@ -5,8 +5,6 @@ source only for one call, preserves untouched file records and image tags, and c
 before PUT. A successful PUT followed by an unreadable/mismatched readback is accepted but unverified.
 """
 
-from __future__ import annotations
-
 import copy
 import json
 from collections.abc import Sequence
@@ -180,7 +178,7 @@ class ChatEdit:
             return EditReceipt(False, reason="Teams accepted the edit but returned no readable confirmation.")
         try:
             message = mapping.to_message(actual, self._conversation_id)
-        except (ConnectorError, ValueError, TypeError):
+        except ConnectorError, ValueError, TypeError:
             return EditReceipt(
                 False, reason="Teams accepted the edit but its confirmation could not be parsed."
             )

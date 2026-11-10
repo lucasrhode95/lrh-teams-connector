@@ -17,8 +17,6 @@
   (shortened), and the request id, so a failure can be traced without exposing message content.
 """
 
-from __future__ import annotations
-
 import asyncio
 import base64
 import contextlib
@@ -249,7 +247,7 @@ class Transport:
             return None
         try:
             return response.json()
-        except (json.JSONDecodeError, UnicodeDecodeError):
+        except json.JSONDecodeError, UnicodeDecodeError:
             raise Upstream("Expected a JSON response.") from None
 
     async def get_bytes(
@@ -364,7 +362,7 @@ def _renewal(response: httpx.Response) -> dict[str, Any]:
         try:
             claims = base64.b64decode(challenge.group(1) + "=" * (-len(challenge.group(1)) % 4)).decode()
             return {"claims_challenge": claims}
-        except (ValueError, UnicodeDecodeError):
+        except ValueError, UnicodeDecodeError:
             pass
     return {"force_refresh": True}
 
@@ -394,7 +392,7 @@ def service_error(body: Any) -> tuple[str | None, str | None]:
 def error_code(response: httpx.Response) -> str | None:
     try:
         return service_error(response.json())[0]
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except json.JSONDecodeError, UnicodeDecodeError:
         return None
 
 

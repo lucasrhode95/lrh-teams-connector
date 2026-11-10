@@ -3,8 +3,6 @@
 Unknown fields are ignored; missing optional fields become None.
 """
 
-from __future__ import annotations
-
 import json
 from datetime import datetime
 from typing import Any
@@ -56,8 +54,13 @@ def to_message(raw: dict[str, Any], conversation_id: str) -> Message:
     raw_content = body.get("content")
     content = raw_content if isinstance(raw_content, str) else ""
     is_html = str(body.get("contentType", "")).lower() == "html"
+    people: dict[str, str] = {}  # each <at id> and the user it names; a split name shares one user
+    for item in raw.get("mentions") or []:
+        user_id = mapping(mapping(mapping(item).get("mentioned")).get("user")).get("id")
+        if isinstance(user_id, str):
+            people[str(mapping(item).get("id"))] = user_id
     rendered = teams_html.render_message(
-        teams_html.graph_html(content) if is_html else content, is_html=is_html
+        teams_html.graph_html(content) if is_html else content, is_html=is_html, mention_people=people
     )
     text = rendered.text
     attachments: list[Attachment] = list(rendered.images)

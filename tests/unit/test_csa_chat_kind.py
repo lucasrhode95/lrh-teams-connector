@@ -3,8 +3,6 @@
 Synthetic rows only.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from teams_connector.remote.csa_mapping import Me, chat_kind

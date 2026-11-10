@@ -16,8 +16,6 @@ live in transcript_text; this module reads the chats, the transcripts and the se
 result says.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Literal

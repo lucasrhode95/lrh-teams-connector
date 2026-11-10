@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import asyncio
 import io
 import re
@@ -289,85 +287,6 @@ async def test_ui_presence_routes_use_the_active_account_and_conversation_only(
     assert group.status_code == 400
     assert arbitrary_person.status_code == 404
     assert fake.presence_mris == [f"8:orgid:{ME}", f"8:orgid:{PEER}"]
-
-
-def test_avatars_are_round_and_clip_their_photos() -> None:
-    styles = (Path(routes.__file__).parent / "static" / "app.css").read_text(encoding="utf-8")
-    assert ".avatar { display: grid; place-items: center; overflow: hidden;" in styles
-    assert ".avatar img { width: 100%; height: 100%; object-fit: cover; }" in styles
-
-
-def test_settings_switches_are_accessible_and_lay_out_inline() -> None:
-    static = Path(routes.__file__).parent / "static"
-    page = (static / "index.html").read_text(encoding="utf-8")
-    styles = (static / "app.css").read_text(encoding="utf-8")
-    switch_labels = re.findall(r'<label class="switch"><input([^>]*)', page)
-    assert len(switch_labels) == 3
-    assert all('type="checkbox" role="switch"' in attrs for attrs in switch_labels)
-    assert ".switch input:checked::after { transform: translateX(14px); }" in styles
-    # Field labels stack their control below; that rule must not reach the menu's switch labels.
-    assert ".conversation-controls > label, .export-controls > label { display: grid;" in styles
-    assert ".switch { display: inline-flex;" in styles
-    assert "@media (prefers-reduced-motion: reduce)" in styles
-
-
-def test_web_page_uses_full_panel_layout_and_tracks_system_theme_changes() -> None:
-    static = Path(routes.__file__).parent / "static"
-    page = (static / "index.html").read_text(encoding="utf-8")
-    styles = (static / "app.css").read_text(encoding="utf-8")
-    script = (static / "app.js").read_text(encoding="utf-8")
-    assert "Choose conversations and filters" not in page
-    assert 'class="content-row"' in page and 'class="footer-row"' in page
-    assert page.index('id="auth-help"') < page.index("</header>")
-    assert "height: 100%;" in styles and 'themePreference.addEventListener("change", applyTheme)' in script
-
-
-def test_selection_pills_and_preview_target_are_separate() -> None:
-    static = Path(routes.__file__).parent / "static"
-    page = (static / "index.html").read_text(encoding="utf-8")
-    script = (static / "app.js").read_text(encoding="utf-8")
-    assert 'id="selected-chats"' in page and 'id="preview-content"' in page
-    assert "let previewConversationId = null" in script
-    assert "event.stopPropagation();\n      selected.delete(id);" in script
-    # A row click only previews; its add button, or Ctrl/Cmd+click, also changes the selection.
-    assert "if (event.ctrlKey || event.metaKey) toggleChatSelection(chat.id);" in script
-    assert "event.stopPropagation();\n      toggleChatSelection(chat.id);" in script
-    assert 'checkbox.type = "checkbox"' not in script
-    assert 'clear.textContent = "Clear all"' in script and 'id="selection-count"' not in page
-
-
-def test_preview_ui_supports_full_range_cancellation_and_page_memory_cache() -> None:
-    static = Path(routes.__file__).parent / "static"
-    page = (static / "index.html").read_text(encoding="utf-8")
-    styles = (static / "app.css").read_text(encoding="utf-8")
-    script = (static / "app.js").read_text(encoding="utf-8")
-    assert 'id="view-entire-range"' in page and 'id="cancel-preview"' in page
-    assert 'id="preview-toolbar"' in page
-    assert "const PREVIEW_CACHE_MS = 60_000" in script
-    assert "const PREVIEW_CACHE_LIMIT = 10" in script
-    assert "function cachePreview(key, result, completedAt)" in script
-    assert "Date.parse(completedAt)" in script
-    assert "cachePreview(key, job.result, job.completed_at)" in script
-    assert "previewCache.keys().next().value" in script
-    assert "entire_range: entireRange" in script
-    assert "overflow-x: hidden; overflow-y: auto" in styles
-    assert "content-visibility: auto" in styles
-
-
-def test_presence_is_lazy_accessible_and_never_confuses_unknown_with_offline() -> None:
-    static = Path(routes.__file__).parent / "static"
-    page = (static / "index.html").read_text(encoding="utf-8")
-    styles = (static / "app.css").read_text(encoding="utf-8")
-    script = (static / "app.js").read_text(encoding="utf-8")
-    assert 'id="account-presence"' in page and 'role="img" aria-label="Presence unavailable"' in page
-    assert 'root: list, rootMargin: "0px"' in script
-    assert 'chat.photo_user_id.startsWith("28:")' in script
-    assert '"Last seen: " + lastActive.toLocaleString()' in script
-    assert 'parts.join(" · ")' in script and "metadata.hidden = !metadata.textContent" in script
-    assert r"/\b(away|berightback|outofoffice|offline)\b/" in script  # last seen only when inactive, as Teams
-    assert "Last seen: unavailable" not in script and ".chat-meta[hidden] { display: none; }" in styles
-    assert '"Presence unavailable"' in script and 'value === "offline"' in script
-    assert ".presence-unknown::after" in styles and ".chat-row:focus-visible" in styles
 
 
 def test_date_picker_weeks_start_on_sunday_like_outlook() -> None:

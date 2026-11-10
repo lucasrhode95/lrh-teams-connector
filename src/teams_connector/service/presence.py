@@ -4,8 +4,6 @@ A successful read is kept for a minute in this process only; nothing is stored. 
 cached and does not fail the call: it returns no presence and the reason, so the caller can go on.
 """
 
-from __future__ import annotations
-
 import time
 
 from teams_connector.domain.errors import AuthenticationRequired, ConnectorError, InvalidRequest

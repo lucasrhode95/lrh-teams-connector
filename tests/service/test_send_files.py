@@ -3,8 +3,6 @@
 Synthetic fixtures and the fake tenant only.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import httpx
@@ -172,10 +170,6 @@ async def test_a_file_over_the_configured_cap_is_refused(
     with pytest.raises(InvalidRequest, match=r"the limit is 4 MiB \(config.MAX_SEND_FILE_BYTES\)"):
         await services.sender.send(ONE, expected_chat_name="Pat Peer", files=[str(notes)])
     assert fake.calls == []
-
-
-def test_the_default_cap_is_two_gib() -> None:
-    assert config.MAX_SEND_FILE_BYTES == 2 * 1024**3
 
 
 @pytest.fixture

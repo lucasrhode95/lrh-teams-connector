@@ -5,8 +5,6 @@ removed, and everything else is retained. Removed attachments remain in their so
 uploads are rolled back after a definite failure; an uncertain edit retains them and is never repeated.
 """
 
-from __future__ import annotations
-
 from collections.abc import Sequence
 
 from teams_connector.domain.errors import ConnectorError, InvalidRequest, Upstream, WriteOutcomeUnknown

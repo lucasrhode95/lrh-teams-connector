@@ -15,8 +15,6 @@ tool call, or a UI background task that reports progress and can be cancelled). 
 partial file.
 """
 
-from __future__ import annotations
-
 import asyncio
 import contextlib
 import json

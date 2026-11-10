@@ -5,8 +5,6 @@ Teams shows is kept: a meeting's subject, its duration and the names of its part
 who joined or left, and a new topic. Identifiers, organizer addresses and recording flags are dropped.
 """
 
-from __future__ import annotations
-
 import json
 import xml.etree.ElementTree as ET
 from typing import Any
@@ -65,7 +63,7 @@ def _ended(root: ET.Element) -> str:
 def _members(content: str, verb: str) -> str | None:
     try:
         record = json.loads(content)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     if not isinstance(record, dict) or not isinstance(record.get("members"), list):
         return None

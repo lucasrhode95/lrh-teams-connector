@@ -4,8 +4,6 @@ Public methods validate external inputs. Internal directory calls receive canoni
 bounded plain query; adapters own OData quoting. Ambiguous searches return candidates, never a choice.
 """
 
-from __future__ import annotations
-
 from uuid import UUID
 
 from teams_connector.domain.errors import InvalidRequest
@@ -72,7 +70,7 @@ def _query(value: str) -> str:
 def _object_id(value: str) -> str:
     try:
         return str(UUID(value.strip()))
-    except (ValueError, AttributeError):
+    except ValueError, AttributeError:
         raise InvalidRequest(
             "person_id must be an Entra object id from find_person or an org lookup."
         ) from None

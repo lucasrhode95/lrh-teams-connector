@@ -1,7 +1,5 @@
 """The meeting summary's entity id, its request, and its answer, from synthetic ids and answers only."""
 
-from __future__ import annotations
-
 import base64
 import json
 import uuid

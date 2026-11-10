@@ -7,8 +7,6 @@ without fetching its content. Files are removed after a week. Meeting notes are 
 is live, so it is read again every time and saved as text that says when it was read.
 """
 
-from __future__ import annotations
-
 import hashlib
 import os
 import re

@@ -6,8 +6,6 @@ stop. Entries without text are skipped; an unknown or malformed field is ignored
 transcript (docs/api-research.md, "Transcripts", live 2026-10-16). Pure: no network.
 """
 
-from __future__ import annotations
-
 import re
 from typing import Any
 
