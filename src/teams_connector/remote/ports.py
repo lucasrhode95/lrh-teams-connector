@@ -317,6 +317,10 @@ class PreparedEdit(Protocol):
     @property
     def message(self) -> Message: ...
 
+    def check(self, body: str | None, *, new_images: int, remove_names: Sequence[str]) -> None:
+        """Refuse, before any upload, an edit whose content would be too large."""
+        ...
+
     async def replace(
         self,
         body: str | None,

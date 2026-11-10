@@ -492,14 +492,20 @@ addition or reference removal. This is a third write path, and the local export 
   may place a new image by the local file's name. Other new images follow the body.
 - `files` and `images`: absolute paths of new uploads to add. Files use the same 2 GiB limit, chunked
   upload and sharing rules as sends; PNG/JPEG image input uses the same approximately 3 MB budget. Final
-  messages are limited to 10 files and 10 inline images. Other attachments remain in place; retained
-  images follow a replacement body.
+  messages are limited to 10 files (SharePoint page links included) and 10 inline images, and to about
+  28,000 bytes of content (Graph's documented message size), checked before any upload with room for each
+  new image's address. Other attachments remain in place; retained images follow a replacement body.
 - `remove_attachments`: up to 20 exact existing names from `get_messages`. Remove old references and add
   new uploads in the same call to replace attachments. Removing references never deletes source files.
+  Names are unique within a message, so one name removes one attachment. A body-preserving edit drops only
+  the removed images' tags and the removed files' `<attachment>` tags; an `amsreferences` entry stays while
+  a retained image still shows that object.
 
 `Editor` validates inputs before uploads, refreshes the target chat's name, and reads structured source
 through `MessageEditor.prepare`. It checks the source author against the active account, and refuses
-deleted messages, system events, recording cards, unknown removal names and unsupported embedded cards.
+deleted messages, system events, recording cards, unknown removal names, unsupported embedded cards and
+messages whose file or image structure cannot be matched. All of these checks, and the size check, run
+before anything is uploaded or shared.
 Body edits support self, one-on-one, group and meeting chats; attachment changes support self, one-on-one
 and group chats. Channels are unsupported. Live evidence covers the self chat; other kinds remain in the roadmap.
 
@@ -520,7 +526,8 @@ The adapter reads the message back after an accepted PUT. `EditResult` returns t
 different readback returns `status=accepted`, `verified=false` and a reason; it does not roll back assets
 or repeat the edit. A sent write without a complete answer, or HTTP 504, raises `WriteOutcomeUnknown`;
 inspect `get_messages` before deciding what to do next. Only new uploads are rolled back after a definite
-failure; uncertain uploads or edits can leave resources behind, and failed cleanup is reported.
+failure; uncertain uploads or edits can leave resources behind, and failed cleanup is reported. An upload
+or share that fails before the PUT says the message was not changed, separately from an uncertain edit.
 
 ## 9. Local export UI
 

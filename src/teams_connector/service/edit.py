@@ -8,15 +8,22 @@ uploads are rolled back after a definite failure; an uncertain edit retains them
 from __future__ import annotations
 
 from collections.abc import Sequence
-from html import escape
-from uuid import UUID
 
 from teams_connector.domain.errors import ConnectorError, InvalidRequest, Upstream, WriteOutcomeUnknown
-from teams_connector.domain.models import Chat, EditResult
+from teams_connector.domain.models import EditResult
 from teams_connector.remote.ports import FileSharer, MemberReader, MessageEditor, UploadedFile, UploadedImage
 from teams_connector.service.catalog import Catalog
 from teams_connector.service.hosted_images import ImageTag, check_hosted_images, with_hosted_images
-from teams_connector.service.send import check_files, check_images, check_text, normalized_name
+from teams_connector.service.send import (
+    chat_recipients,
+    check_files,
+    check_images,
+    check_text,
+    discard_files,
+    failure_report,
+    normalized_name,
+    paragraphs,
+)
 
 EDIT_KINDS = ("self", "one_on_one", "group", "meeting")
 FILE_KINDS = ("self", "one_on_one", "group")
@@ -63,8 +70,7 @@ class Editor:
         tags: list[ImageTag] = []
         if text is not None:
             check_text(text)
-            lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-            body = "<p>" + "<br>".join(escape(line, quote=False) for line in lines) + "</p>"
+            body = paragraphs(text)
         elif html is not None:
             check_text(html)
             tags = check_hosted_images(html, {name for name, _ in inline})
@@ -88,17 +94,18 @@ class Editor:
             raise InvalidRequest("An attachment name to remove was not found; use names from get_messages.")
         remaining = [a for a in message.attachments if a.name not in removals]
         if (
-            sum(a.kind == "file" for a in remaining) + len(local) > 10
+            sum(a.kind in ("file", "link") for a in remaining) + len(local) > 10
             or sum(a.kind == "image" for a in remaining) + len(inline) > 10
         ):
             raise InvalidRequest("The edited message may contain at most 10 files and 10 inline images.")
         if (local or inline or removals) and chat.kind not in FILE_KINDS:
             raise InvalidRequest("Attachment changes support self, one-on-one and group chats only.")
+        # Everything checkable before an upload: the final size, with room for each new image's address.
+        target.check(body, new_images=len(inline), remove_names=removals)
+        recipients = await chat_recipients(self._members, chat, self._me_id) if local else []
         uploaded: list[UploadedFile] = []
         uploaded_images: list[UploadedImage] = []
-        edit_started = False
         try:
-            recipients = await self._recipients(chat) if local else []
             for path in local:
                 file = await self._sharer.upload(path)
                 uploaded.append(file)
@@ -106,30 +113,22 @@ class Editor:
                     await self._sharer.share(file, recipients)
             for name, image in inline:
                 uploaded_images.append(await self._editor.upload_image(chat, name, image))
-            if body is not None and uploaded_images:
-                body = with_hosted_images(
-                    body, tags, {image.name: image.view_url for image in uploaded_images}
-                )
-            edit_started = True
+        except ConnectorError as exc:
+            # Nothing was edited. An upload whose outcome is unknown is not in the lists and may remain.
+            raise await self._upload_failure(exc, uploaded, uploaded_images) from exc
+        if body is not None and uploaded_images:
+            body = with_hosted_images(body, tags, {image.name: image.view_url for image in uploaded_images})
+        try:
             receipt = await target.replace(
                 body, files=uploaded, images=uploaded_images, remove_names=removals
             )
         except WriteOutcomeUnknown:
-            if not edit_started:
-                await self._rollback(uploaded, uploaded_images)
             raise WriteOutcomeUnknown(
-                "The edit or an upload was not confirmed; new uploads may remain. "
-                "Check get_messages and your uploaded files before retrying. "
-                "The edit request was not repeated."
+                "The edit was sent but not confirmed, and it was not repeated; its new uploads were kept. "
+                "Check get_messages before any further edit."
             ) from None
         except ConnectorError as exc:
-            failures = await self._rollback(uploaded, uploaded_images)
-            if failures:
-                raise Upstream(
-                    f"The edit was not applied; {failures} new upload(s) could not be removed. "
-                    "Check your files."
-                ) from exc
-            raise
+            raise await self._edit_failure(exc, uploaded, uploaded_images) from exc
         actual = receipt.message
         return EditResult(
             conversation_id=chat.id,
@@ -142,32 +141,42 @@ class Editor:
             reason=receipt.reason,
         )
 
-    async def _recipients(self, chat: Chat) -> list[str]:
-        if chat.kind == "self":
-            return []
-        recipients = []
-        for member in await self._members.members(chat):
-            identifier = (member.id or "").lower()
-            if identifier == self._me_id or identifier.startswith("28:"):
-                continue
-            try:
-                identifier = str(UUID(identifier))
-            except ValueError:
-                raise InvalidRequest(
-                    "A chat member has no directory id; a new file cannot be shared safely."
-                ) from None
-            recipients.append(identifier)
-        if not recipients:
-            raise InvalidRequest("The other chat members could not be resolved for sharing a new file.")
-        return list(dict.fromkeys(recipients))
+    async def _upload_failure(
+        self, exc: ConnectorError, files: Sequence[UploadedFile], images: Sequence[UploadedImage]
+    ) -> ConnectorError:
+        """An upload or share failed before the edit was sent: remove what this edit uploaded."""
+        if not files and not images and not isinstance(exc, WriteOutcomeUnknown):
+            return exc
+        deleted, kept = await discard_files(self._sharer, files)
+        lost = await self._discard_images(images)
+        report = failure_report(
+            exc,
+            action="An upload failed before the edit was sent; the message was not changed",
+            deleted=deleted,
+            kept=kept,
+        )
+        if isinstance(exc, WriteOutcomeUnknown):
+            report = WriteOutcomeUnknown(
+                f"{report} The upload that failed may still have been stored; check before retrying."
+            )
+        return _with_images_left(report, lost)
 
-    async def _rollback(self, files: Sequence[UploadedFile], images: Sequence[UploadedImage]) -> int:
+    async def _edit_failure(
+        self, exc: ConnectorError, files: Sequence[UploadedFile], images: Sequence[UploadedImage]
+    ) -> ConnectorError:
+        """The edit was refused: remove what this edit uploaded and report anything left."""
+        if not files and not images:
+            return exc
+        deleted, kept = await discard_files(self._sharer, files)
+        lost = await self._discard_images(images)
+        if not kept and not lost:
+            return exc
+        report = failure_report(exc, action="The edit was not applied", deleted=deleted, kept=kept)
+        return _with_images_left(report, lost)
+
+    async def _discard_images(self, images: Sequence[UploadedImage]) -> int:
+        """Delete new AMS images after a definite failure. Returns how many could not be deleted."""
         failures = 0
-        for file in files:
-            try:
-                await self._sharer.delete(file)
-            except ConnectorError:
-                failures += 1
         for image in images:
             try:
                 await self._editor.discard_image(image)
@@ -180,3 +189,10 @@ def _names(names: Sequence[str]) -> list[str]:
     if len(names) > 20 or any(not isinstance(name, str) or not name.strip() for name in names):
         raise InvalidRequest("Pass up to 20 non-empty attachment names from get_messages.")
     return list(dict.fromkeys(names))
+
+
+def _with_images_left(report: ConnectorError, lost: int) -> ConnectorError:
+    if not lost:
+        return report
+    message = f"{report} {lost} new inline image(s) could not be removed."
+    return WriteOutcomeUnknown(message) if isinstance(report, WriteOutcomeUnknown) else Upstream(message)

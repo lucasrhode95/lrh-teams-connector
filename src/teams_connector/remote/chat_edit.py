@@ -34,6 +34,11 @@ from teams_connector.remote.ports import EditReceipt, HostedImage, UploadedFile,
 from teams_connector.remote.teams_session import SkypeCredential, TeamsSession
 from teams_connector.remote.transport import Credential, Transport, operation
 
+# Graph documents a chat message limit of about 28 KB, text, images and links included.
+MAX_CONTENT_BYTES = 28_000
+# Room checked before upload for each new image tag, whose AMS address is not known yet.
+NEW_IMAGE_TAG_RESERVE = 512
+
 
 class ChatEditor:
     def __init__(self, reader: Transport, writer: Transport, session: TeamsSession) -> None:
@@ -134,6 +139,15 @@ class ChatEdit:
         self._file_models = [a for a in self.message.attachments if a.kind in ("file", "link")]
         if len(self._file_models) != len(self._files):
             raise InvalidRequest("This message's attachment structure cannot be edited safely.")
+        self._images = [a for a in self.message.attachments if a.kind == "image"]
+        if len(self._images) != len(self._media.tags):
+            raise InvalidRequest("This message's image structure cannot be edited safely.")
+
+    def check(self, body: str | None, *, new_images: int, remove_names: Sequence[str]) -> None:
+        """Refuse an edit whose content would be too large, before anything is uploaded. Each new image is
+        measured with ``NEW_IMAGE_TAG_RESERVE`` characters for its address."""
+        reserve = "x" * NEW_IMAGE_TAG_RESERVE
+        _check_size(self._content(body, [f"{reserve}{i}" for i in range(new_images)], remove_names))
 
     async def replace(
         self,
@@ -195,21 +209,8 @@ class ChatEdit:
         remove_names: Sequence[str],
     ) -> dict[str, Any]:
         removed = set(remove_names)
-        old_images = [a for a in self.message.attachments if a.kind == "image"]
-        if len(old_images) != len(self._media.tags):
-            raise InvalidRequest("This message's image structure cannot be edited safely.")
-        removed_indices = {i for i, a in enumerate(old_images) if a.name in removed}
-        retained_tags = [tag for i, (_, _, tag, _) in enumerate(self._media.tags) if i not in removed_indices]
-        if body is None:
-            content = self._media.without(removed_indices)
-        else:
-            content = body + "".join(f"<p>{tag}</p>" for tag in retained_tags)
-        present = SourceImages(content).sources
-        content += "".join(
-            f'<p><img src="{escape(i.view_url, quote=True)}"></p>'
-            for i in images
-            if i.view_url not in present
-        )
+        content = self._content(body, [image.view_url for image in images], remove_names)
+        _check_size(content)
         payload = copy.deepcopy(self._raw)
         props = mapping.properties(payload).copy()
         kept = [
@@ -224,7 +225,9 @@ class ChatEdit:
             for field in ("mentions", "cards", "links"):
                 if field in props:
                     props[field] = "[]" if isinstance(props[field], str) else []
-        removed_ids = {a.source_id for i, a in enumerate(old_images) if i in removed_indices}
+        # An AMS object stays referenced while any retained image tag still shows it.
+        retained_ids = {a.source_id for a in self._images if a.name not in removed}
+        removed_ids = {a.source_id for a in self._images if a.name in removed} - retained_ids
         refs = _array(payload.get("amsreferences", []))
         payload.update(
             content=content,
@@ -234,6 +237,26 @@ class ChatEdit:
             amsreferences=[*[r for r in refs if r not in removed_ids], *[i.object_id for i in images]],
         )
         return payload
+
+    def _content(self, body: str | None, image_urls: Sequence[str], remove_names: Sequence[str]) -> str:
+        """The edited HTML: the new body (or the old one without removed images and their files' tags),
+        retained image tags, then each new image the body does not already place."""
+        removed = set(remove_names)
+        removed_indices = {i for i, a in enumerate(self._images) if a.name in removed}
+        if body is None:
+            removed_files = {
+                str(record.get("itemid") or record.get("id") or "")
+                for record, model in zip(self._files, self._file_models, strict=True)
+                if model.name in removed
+            }
+            content = self._media.without(removed_indices, removed_files - {""})
+        else:
+            retained = [tag for i, (_, _, tag, _) in enumerate(self._media.tags) if i not in removed_indices]
+            content = body + "".join(f"<p>{tag}</p>" for tag in retained)
+        present = SourceImages(content).sources
+        return content + "".join(
+            f'<p><img src="{escape(url, quote=True)}"></p>' for url in image_urls if url not in present
+        )
 
 
 class OnceCredential:
@@ -261,10 +284,12 @@ class SourceImages(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.source = source
         self.tags: list[tuple[int, int, str, str]] = []
-        self.placeholders: list[tuple[int, int]] = []
-        self._placeholder: int | None = None
+        self.placeholders: list[tuple[int, int, str]] = []
+        self._placeholder: tuple[int, str] | None = None
         self.feed(source)
-        if self.rawdata or self._placeholder is not None:
+        # HTMLParser holds back trailing text that may end in a character reference; only a held-back
+        # tag means the markup is unfinished.
+        if "<" in self.rawdata or self._placeholder is not None:
             raise InvalidRequest("The existing message has incomplete markup and cannot be edited safely.")
 
     @property
@@ -275,7 +300,7 @@ class SourceImages(HTMLParser):
         if tag in {"uriobject", "swift"}:
             raise InvalidRequest("Edits of embedded cards are not supported.")
         if tag == "attachment":
-            self._placeholder = self._offset()
+            self._placeholder = (self._offset(), dict(attrs).get("id") or "")
             return
         if tag != "img":
             return
@@ -292,28 +317,32 @@ class SourceImages(HTMLParser):
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self.handle_starttag(tag, attrs)
         if tag == "attachment" and self._placeholder is not None:
-            start = self._placeholder
-            self.placeholders.append((start, start + len(self.get_starttag_text() or "")))
+            start, identifier = self._placeholder
+            self.placeholders.append((start, start + len(self.get_starttag_text() or ""), identifier))
             self._placeholder = None
 
     def handle_endtag(self, tag: str) -> None:
         if tag == "attachment" and self._placeholder is not None:
-            end = self.source.find(">", self._offset()) + 1
-            self.placeholders.append((self._placeholder, end))
+            start, identifier = self._placeholder
+            self.placeholders.append((start, self.source.index(">", self._offset()) + 1, identifier))
             self._placeholder = None
 
     def _offset(self) -> int:
         line, column = self.getpos()
         return sum(len(s) + 1 for s in self.source.split("\n")[: line - 1]) + column
 
-    def without(self, indices: set[int]) -> str:
+    def without(self, indices: set[int], file_ids: set[str]) -> str:
+        """The source without the image tags at ``indices`` and the ``<attachment>`` tags of the removed
+        files ``file_ids``; other tags are kept. Nested or overlapping ranges are cut once."""
         result, cursor = [], 0
         ranges = [
-            *self.placeholders,
+            *[(start, end) for start, end, identifier in self.placeholders if identifier in file_ids],
             *[(start, end) for i, (start, end, _, _) in enumerate(self.tags) if i in indices],
         ]
         for start, end in sorted(ranges):
-            result.append(self.source[cursor:start])
+            if end <= cursor:
+                continue
+            result.append(self.source[cursor : max(start, cursor)])
             cursor = end
         return "".join(result) + self.source[cursor:]
 
@@ -360,6 +389,14 @@ def _file_record(file: UploadedFile) -> dict[str, Any]:
         },
         "sharepointIds": {"driveId": file.drive_id, "listItemUniqueId": file.attachment_id},
     }
+
+
+def _check_size(content: str) -> None:
+    if len(content.encode()) > MAX_CONTENT_BYTES:
+        raise InvalidRequest(
+            f"The edited message would exceed about {MAX_CONTENT_BYTES:,} bytes; "
+            "shorten it or keep fewer images."
+        )
 
 
 def _snapshot(raw: dict[str, Any]) -> tuple[Any, ...]:
